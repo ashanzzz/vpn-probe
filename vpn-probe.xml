@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>vpn-probe</Name>
+  <Repository>ghcr.io/ashanzzz/vpn-probe:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/ashanzzz/vpn-probe/issues</Support>
+  <Project>https://github.com/ashanzzz/vpn-probe</Project>
+  <Overview>VPN Probe (自愈管理与Sub-Store同步中枢) - 线路机与家宽机分类管理、真实流媒体测速与打分、被墙换端口自愈与借道扶持、智能地域链式配对(dialer-proxy)及Sub-Store三层自动化同步系统。</Overview>
+  <Category>Tools: Network:Management Status:Stable</Category>
+  <WebUI>http://[IP]:[PORT:8080]/health</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/ashanzzz/vpn-probe/master/vpn-probe.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/ashanzzz/personal-vps-monitor/master/frontend/public/favicon.svg</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled></DateInstalled>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+
+  <Config Name="WebUI &amp; API Port" Target="8080" Default="33335" Mode="tcp" Description="vpn-probe 监听与控制端口" Type="Port" Display="always" Required="true" Mask="false">33335</Config>
+
+  <Config Name="Config File" Target="/app/config.yaml" Default="/mnt/cache/appdata/vpn-probe/config.yaml" Mode="rw" Description="vpn-probe 核心配置文件路径" Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/vpn-probe/config.yaml</Config>
+
+  <Config Name="Data Volume" Target="/app/data" Default="/mnt/cache/appdata/vpn-probe/data" Mode="rw" Description="持久化数据与日志目录" Type="Path" Display="always" Required="true" Mask="false">/mnt/cache/appdata/vpn-probe/data</Config>
+
+  <Config Name="TZ" Target="TZ" Default="Asia/Shanghai" Mode="" Description="容器时区" Type="Variable" Display="advanced" Required="false" Mask="false">Asia/Shanghai</Config>
+</Container>

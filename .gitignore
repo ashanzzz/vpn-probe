@@ -1,0 +1,33 @@
+# Production and Local Configurations containing secrets
+config.yaml
+config.bak
+secrets.yaml
+.env
+*.bak
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+vpn-probe
+vpn-probe.exe
+
+# Test artifacts and temporary files
+*.tmp
+*.out
+test-*.json
+
+# Logs and Data
+data/
+*.log
+*.db
+*.sqlite
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -127,7 +127,15 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 			diagCtx, diagCancel := context.WithTimeout(ctx, 15*time.Second)
 			defer diagCancel()
 			peers := e.GetHealthyPeers()
-			diag := DiagnoseNode(diagCtx, serverHost, serverPort, parsed.Protocol, false, e.sandboxMgr, peers, e.cfg)
+			protoDesc := parsed.Protocol
+			if parsed.RawOutbound != nil {
+				if tlsMap, ok := parsed.RawOutbound["tls"].(map[string]any); ok && tlsMap["reality"] != nil {
+					protoDesc = parsed.Protocol + "-reality"
+				} else if transMap, ok := parsed.RawOutbound["transport"].(map[string]any); ok && transMap["type"] == "ws" {
+					protoDesc = parsed.Protocol + "-ws"
+				}
+			}
+			diag := DiagnoseNode(diagCtx, serverHost, serverPort, protoDesc, false, e.sandboxMgr, peers, e.cfg)
 			result.Diagnostic = diag
 			result.StatusText = diag.StatusText
 			result.ErrorMsg = fmt.Sprintf("离线 (%s)", diag.StatusText)

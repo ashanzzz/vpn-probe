@@ -350,7 +350,11 @@ func EvaluateFault(
 			statusText = "【认证失败】SOCKS5账号密码错误或服务器设置了源IP白名单"
 			actionType = "CHECK_SOCKS_AUTH_OR_WHITELIST"
 			tip = fmt.Sprintf("【非被墙】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但SOCKS5代理握手失败。端口未被墙，通常为SOCKS5用户名密码不匹配，或服务器配置了源IP白名单限制！", host, port, abroadSource)
-		case "vless":
+		case "vless-ws", "vmess-ws":
+			statusText = "【配置错误】WebSocket路径(path)、Host反代域名或UUID不匹配"
+			actionType = "CHECK_WS_PATH_OR_UUID"
+			tip = fmt.Sprintf("【非被墙】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但WebSocket握手失败。端口未被墙，通常是WS Path路径错误、反代Host未匹配或UUID与服务端不符！", host, port, abroadSource)
+		case "vless", "vless-reality":
 			statusText = "【配置错误】Reality公钥(pbk)、ShortID校验失败或缺少flow参数"
 			actionType = "CHECK_REALITY_KEYS"
 			tip = fmt.Sprintf("【非被墙】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但sing-box代理协商失败(reality verification failed)。说明端口未被墙，机器好着，纯属客户端配置的Reality公钥(pbk)、ShortID与服务端不一致，或未匹配flow参数！", host, port, abroadSource)

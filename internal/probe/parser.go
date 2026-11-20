@@ -212,6 +212,9 @@ func parseVLESS(u *url.URL, tag string) (*ParsedNode, error) {
 	}
 	if flow != "" {
 		outbound["flow"] = flow
+	} else if security == "reality" && (q.Get("type") == "" || q.Get("type") == "tcp") {
+		// 容错：绝大部分 Reality TCP 部署强制启用 xtls-rprx-vision，若 URL 缺少 flow 参数，提升沙箱兼容性
+		outbound["flow"] = "xtls-rprx-vision"
 	}
 
 	if security == "tls" || security == "reality" {

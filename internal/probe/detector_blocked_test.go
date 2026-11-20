@@ -1,35 +1,59 @@
 package probe
 
 import (
-	"fmt"
 	"testing"
 	"vpn-probe/internal/model"
 )
 
 func TestDiagnosisLogic(t *testing.T) {
 	tests := []struct {
-		name              string
-		port              int
-		domesticTCPOK     bool
-		abroadOK          bool
-		pingOK            bool
-		wantFault         model.FaultType
-		wantStatusText    string
-		wantActionType    string
+		name           string
+		port           int
+		protocol       string
+		domesticTCPOK  bool
+		abroadOK       bool
+		pingOK         bool
+		wantFault      model.FaultType
+		wantStatusText string
+		wantActionType string
 	}{
 		{
-			name:           "协议校验失败: 境内境外TCP都通，但代理报错 (如 Reality 公钥不匹配)",
+			name:           "VLESS Reality 协议校验失败: 境内境外TCP都通，但代理报错",
 			port:           33338,
+			protocol:       "vless",
 			domesticTCPOK:  true,
 			abroadOK:       true,
 			pingOK:         true,
 			wantFault:      model.FaultProtocolMismatch,
-			wantStatusText: "【配置错误】Reality公钥(pbk)或ShortID校验失败",
+			wantStatusText: "【配置错误】Reality公钥(pbk)、ShortID校验失败或缺少flow参数",
 			wantActionType: "CHECK_REALITY_KEYS",
+		},
+		{
+			name:           "Socks5 认证/白名单失败: 境内境外TCP都通，但SOCKS握手失败",
+			port:           40981,
+			protocol:       "socks5",
+			domesticTCPOK:  true,
+			abroadOK:       true,
+			pingOK:         true,
+			wantFault:      model.FaultProtocolMismatch,
+			wantStatusText: "【认证失败】SOCKS5账号密码错误或服务器设置了源IP白名单",
+			wantActionType: "CHECK_SOCKS_AUTH_OR_WHITELIST",
+		},
+		{
+			name:           "Shadowsocks 密码失败: 境内境外TCP都通，但SS协商失败",
+			port:           24443,
+			protocol:       "shadowsocks",
+			domesticTCPOK:  true,
+			abroadOK:       true,
+			pingOK:         true,
+			wantFault:      model.FaultProtocolMismatch,
+			wantStatusText: "【配置错误】Shadowsocks密码或加密算法不匹配",
+			wantActionType: "CHECK_SS_PASSWORD",
 		},
 		{
 			name:           "端口被墙: 海外通但国内TCP不通，且国内Ping通 (如 33338端口被墙)",
 			port:           33338,
+			protocol:       "vless",
 			domesticTCPOK:  false,
 			abroadOK:       true,
 			pingOK:         true,
@@ -40,6 +64,7 @@ func TestDiagnosisLogic(t *testing.T) {
 		{
 			name:           "IP被墙: 海外通但国内TCP与Ping全黑洞丢包",
 			port:           33338,
+			protocol:       "vless",
 			domesticTCPOK:  false,
 			abroadOK:       true,
 			pingOK:         false,
@@ -50,6 +75,7 @@ func TestDiagnosisLogic(t *testing.T) {
 		{
 			name:           "真正离线: 全球海外和国内都不通 (机子关机/软件崩溃/线路中断)",
 			port:           33338,
+			protocol:       "vless",
 			domesticTCPOK:  false,
 			abroadOK:       false,
 			pingOK:         false,
@@ -61,42 +87,21 @@ func TestDiagnosisLogic(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			diag := &model.DiagnosticInfo{
-				TargetIP:          "156.231.113.91",
-				TargetPort:        tt.port,
-				AbroadReachable:   tt.abroadOK,
-				DomesticReachable: tt.domesticTCPOK,
-				DomesticPing:      tt.pingOK,
-			}
+			faultType, statusText, actionType, tip := EvaluateFault(
+				"156.231.113.91", tt.port, tt.protocol, tt.domesticTCPOK, tt.abroadOK, tt.pingOK, "peer:JP-Tokyo-Softbank",
+			)
 
-			if tt.domesticTCPOK && tt.abroadOK {
-				diag.FaultType = model.FaultProtocolMismatch
-				diag.StatusText = "【配置错误】Reality公钥(pbk)或ShortID校验失败"
-				diag.ActionType = "CHECK_REALITY_KEYS"
-			} else if tt.abroadOK && !tt.domesticTCPOK {
-				if tt.pingOK {
-					diag.FaultType = model.FaultPortBlocked
-					diag.StatusText = fmt.Sprintf("%d端口被墙", tt.port)
-					diag.ActionType = "AI_CHANGE_PORT"
-				} else {
-					diag.FaultType = model.FaultIPBlocked
-					diag.StatusText = "IP被墙"
-					diag.ActionType = "CHANGE_IP_OR_CDN"
-				}
-			} else {
-				diag.FaultType = model.FaultMachineDown
-				diag.StatusText = "【离线】机子关机/软件崩溃/线路中断"
-				diag.ActionType = "CHECK_SERVER_AND_PROCESS"
+			if faultType != tt.wantFault {
+				t.Errorf("FaultType = %v, want %v", faultType, tt.wantFault)
 			}
-
-			if diag.FaultType != tt.wantFault {
-				t.Errorf("FaultType = %v, want %v", diag.FaultType, tt.wantFault)
+			if statusText != tt.wantStatusText {
+				t.Errorf("StatusText = %v, want %v", statusText, tt.wantStatusText)
 			}
-			if diag.StatusText != tt.wantStatusText {
-				t.Errorf("StatusText = %v, want %v", diag.StatusText, tt.wantStatusText)
+			if actionType != tt.wantActionType {
+				t.Errorf("ActionType = %v, want %v", actionType, tt.wantActionType)
 			}
-			if diag.ActionType != tt.wantActionType {
-				t.Errorf("ActionType = %v, want %v", diag.ActionType, tt.wantActionType)
+			if tip == "" {
+				t.Errorf("tip should not be empty")
 			}
 		})
 	}

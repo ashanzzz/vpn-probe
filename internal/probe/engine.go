@@ -112,14 +112,22 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 		result.OfflineReason = "node_down"
 		result.Category = classifier.Classify(isSelf, false, false)
 		e.RemoveHealthyPeer(link)
-		logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v)", parsed.Tag, err)
+		sbLog := ""
+		if inst != nil {
+			sbLog = inst.GetRecentLogs(3)
+		}
+		if sbLog != "" {
+			logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v | sing-box: %s)", parsed.Tag, err, sbLog)
+		} else {
+			logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v)", parsed.Tag, err)
+		}
 
 		// 触发深度故障诊断：严格切分「离线」与「被墙」
 		if serverHost != "" && serverPort > 0 {
 			diagCtx, diagCancel := context.WithTimeout(ctx, 15*time.Second)
 			defer diagCancel()
 			peers := e.GetHealthyPeers()
-			diag := DiagnoseNode(diagCtx, serverHost, serverPort, false, e.sandboxMgr, peers, e.cfg)
+			diag := DiagnoseNode(diagCtx, serverHost, serverPort, parsed.Protocol, false, e.sandboxMgr, peers, e.cfg)
 			result.Diagnostic = diag
 			result.StatusText = diag.StatusText
 			result.ErrorMsg = fmt.Sprintf("离线 (%s)", diag.StatusText)

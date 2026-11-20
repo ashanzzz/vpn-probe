@@ -332,11 +332,70 @@ func CheckAbroadTiered(
 	return false, "none", 0, "无可用探针且已禁用公共API"
 }
 
+// EvaluateFault 根据四维探测结果与代理协议类型计算故障分类与诊断指引
+func EvaluateFault(
+	host string,
+	port int,
+	protocol string,
+	domesticTCPOK bool,
+	abroadOK bool,
+	pingOK bool,
+	abroadSource string,
+) (faultType model.FaultType, statusText string, actionType string, tip string) {
+	if domesticTCPOK && abroadOK {
+		// 端口双向畅通！但代理发起流量被拒绝，说明协议握手或认证失败
+		faultType = model.FaultProtocolMismatch
+		switch strings.ToLower(protocol) {
+		case "socks", "socks5":
+			statusText = "【认证失败】SOCKS5账号密码错误或服务器设置了源IP白名单"
+			actionType = "CHECK_SOCKS_AUTH_OR_WHITELIST"
+			tip = fmt.Sprintf("【非被墙】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但SOCKS5代理握手失败。端口未被墙，通常为SOCKS5用户名密码不匹配，或服务器配置了源IP白名单限制！", host, port, abroadSource)
+		case "vless":
+			statusText = "【配置错误】Reality公钥(pbk)、ShortID校验失败或缺少flow参数"
+			actionType = "CHECK_REALITY_KEYS"
+			tip = fmt.Sprintf("【非被墙】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但sing-box代理协商失败(reality verification failed)。说明端口未被墙，机器好着，纯属客户端配置的Reality公钥(pbk)、ShortID与服务端不一致，或未匹配flow参数！", host, port, abroadSource)
+		case "shadowsocks":
+			statusText = "【配置错误】Shadowsocks密码或加密算法不匹配"
+			actionType = "CHECK_SS_PASSWORD"
+			tip = fmt.Sprintf("【非被墙】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但Shadowsocks代理握手失败，请核对密码与加密算法！", host, port, abroadSource)
+		default:
+			protoUpper := strings.ToUpper(protocol)
+			if protoUpper == "" {
+				protoUpper = "代理"
+			}
+			statusText = fmt.Sprintf("【配置错误】%s 协议握手或认证失败", protoUpper)
+			actionType = "CHECK_PROXY_CREDENTIALS"
+			tip = fmt.Sprintf("【非被墙】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但代理握手失败，请核对凭据配置！", host, port, abroadSource)
+		}
+	} else if abroadOK && !domesticTCPOK {
+		// 海外通、国内TCP不通 -> 确认为 GFW 拦截
+		if pingOK {
+			faultType = model.FaultPortBlocked
+			statusText = fmt.Sprintf("%d端口被墙", port)
+			actionType = "AI_CHANGE_PORT"
+			tip = fmt.Sprintf("【%d端口被墙】海外探针(%s)正常连通且国内可Ping通，VPS与sing-box正常在线，仅%d端口被GFW拦截封锁。可指示AI直接登录服务器更换端口。", port, abroadSource, port)
+		} else {
+			faultType = model.FaultIPBlocked
+			statusText = "IP被墙"
+			actionType = "CHANGE_IP_OR_CDN"
+			tip = fmt.Sprintf("【IP被墙】海外探针(%s)可正常握手，但国内全黑洞丢包，机器与服务完好，需更换IP或配置CDN反代救活。", abroadSource)
+		}
+	} else {
+		// 海外也不通、国内也不通 -> 真正离线
+		faultType = model.FaultMachineDown
+		statusText = "【离线】机子关机/软件崩溃/线路中断"
+		actionType = "CHECK_SERVER_AND_PROCESS"
+		tip = fmt.Sprintf("【真正离线】全球海外探针(%s)与国内均无法连接该端口，非GFW封锁。换端口无效！请单独排查：1. VPS是否关机或欠费；2. 机房宿主断网；3. sing-box进程崩溃退出。", abroadSource)
+	}
+	return
+}
+
 // DiagnoseNode 深度故障诊断：严格切分「协议认证错误」、「端口被墙」、「IP被墙」与「真正离线」
 func DiagnoseNode(
 	ctx context.Context,
 	host string,
 	port int,
+	protocol string,
 	domesticProxyReachable bool,
 	sm *SandboxManager,
 	peers []PeerProxyCandidate,
@@ -369,32 +428,9 @@ func DiagnoseNode(
 	logger.Probe("[%s] Domestic ping result: pingable=%v", host, pingOK)
 
 	// 4. 严格四维判定矩阵
-	if domesticTCPOK && abroadOK {
-		// 端口双向畅通！但代理发起流量被拒绝，说明协议认证失败（Reality公钥/ShortID/UUID不对）
-		diag.FaultType = model.FaultProtocolMismatch
-		diag.StatusText = "【配置错误】Reality公钥(pbk)或ShortID校验失败"
-		diag.ActionType = "CHECK_REALITY_KEYS"
-		diag.TroubleshootTip = fmt.Sprintf("【非被墙】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但sing-box代理协商失败(reality verification failed)。说明端口未被墙，机器好着，纯属客户端配置的Reality公钥(pbk)或ShortID与服务端不一致！", host, port, abroadSource)
-	} else if abroadOK && !domesticTCPOK {
-		// 海外通、国内TCP不通 -> 确认为 GFW 拦截
-		if pingOK {
-			diag.FaultType = model.FaultPortBlocked
-			diag.StatusText = fmt.Sprintf("%d端口被墙", port)
-			diag.ActionType = "AI_CHANGE_PORT"
-			diag.TroubleshootTip = fmt.Sprintf("【%d端口被墙】海外探针(%s)正常连通且国内可Ping通，VPS与sing-box正常在线，仅%d端口被GFW拦截封锁。可指示AI直接登录服务器更换端口。", port, abroadSource, port)
-		} else {
-			diag.FaultType = model.FaultIPBlocked
-			diag.StatusText = "IP被墙"
-			diag.ActionType = "CHANGE_IP_OR_CDN"
-			diag.TroubleshootTip = fmt.Sprintf("【IP被墙】海外探针(%s)可正常握手，但国内全黑洞丢包，机器与服务完好，需更换IP或配置CDN反代救活。", abroadSource)
-		}
-	} else {
-		// 海外也不通、国内也不通 -> 真正离线
-		diag.FaultType = model.FaultMachineDown
-		diag.StatusText = "【离线】机子关机/软件崩溃/线路中断"
-		diag.ActionType = "CHECK_SERVER_AND_PROCESS"
-		diag.TroubleshootTip = fmt.Sprintf("【真正离线】全球海外探针(%s)与国内均无法连接该端口，非GFW封锁。换端口无效！请单独排查：1. VPS是否关机或欠费；2. 机房宿主断网；3. sing-box进程崩溃退出。", abroadSource)
-	}
+	diag.FaultType, diag.StatusText, diag.ActionType, diag.TroubleshootTip = EvaluateFault(
+		host, port, protocol, domesticTCPOK, abroadOK, pingOK, abroadSource,
+	)
 
 	logger.Probe("[%s:%d] Final diagnosis: %s (Action: %s)", host, port, diag.StatusText, diag.ActionType)
 	return diag

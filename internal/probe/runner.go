@@ -1,7 +1,6 @@
 package probe
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -17,16 +16,78 @@ import (
 	"github.com/google/uuid"
 )
 
+// TailBuffer 保留最后固定字节的线程安全日志缓冲区
+type TailBuffer struct {
+	mu      sync.Mutex
+	buf     []byte
+	maxSize int
+}
+
+func NewTailBuffer(maxSize int) *TailBuffer {
+	if maxSize <= 0 {
+		maxSize = 8192
+	}
+	return &TailBuffer{
+		buf:     make([]byte, 0, maxSize),
+		maxSize: maxSize,
+	}
+}
+
+func (b *TailBuffer) Write(p []byte) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > b.maxSize {
+		cut := len(b.buf) - b.maxSize
+		b.buf = b.buf[cut:]
+	}
+	return len(p), nil
+}
+
+func (b *TailBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
+}
+
+func (b *TailBuffer) RecentLines(n int) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	trimmed := strings.TrimSpace(string(b.buf))
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
+	var cleaned []string
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			cleaned = append(cleaned, l)
+		}
+	}
+	if len(cleaned) <= n {
+		return strings.Join(cleaned, " | ")
+	}
+	return strings.Join(cleaned[len(cleaned)-n:], " | ")
+}
+
 // SandboxInstance 运行中的临时 sing-box 代理沙箱
 type SandboxInstance struct {
 	ID         string
 	Port       int
 	ConfigFile string
 	Cmd        *exec.Cmd
-	Stderr     *bytes.Buffer
+	LogBuf     *TailBuffer
 	Cancel     context.CancelFunc
 	mu         sync.Mutex
 	closed     bool
+}
+
+func (s *SandboxInstance) GetRecentLogs(n int) string {
+	if s.LogBuf != nil {
+		return s.LogBuf.RecentLines(n)
+	}
+	return ""
 }
 
 // SandboxManager 负责分配端口、生成配置、调度临时 sing-box
@@ -122,11 +183,11 @@ func (m *SandboxManager) Launch(ctx context.Context, outbound map[string]any) (*
 		return nil, fmt.Errorf("write config file: %w", err)
 	}
 
+	logBuf := NewTailBuffer(8192)
 	runCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(runCtx, m.singboxBin, "run", "-c", confPath)
-	cmd.Stdout = nil
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
+	cmd.Stdout = logBuf
+	cmd.Stderr = logBuf
 
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -140,16 +201,16 @@ func (m *SandboxManager) Launch(ctx context.Context, outbound map[string]any) (*
 		Port:       port,
 		ConfigFile: confPath,
 		Cmd:        cmd,
-		Stderr:     &stderrBuf,
+		LogBuf:     logBuf,
 		Cancel:     cancel,
 	}
 
 	// 轮询等待入站端口处于监听状态（最多等待 3 秒）
 	if err := waitForPort(port, 3*time.Second); err != nil {
-		stderrMsg := strings.TrimSpace(stderrBuf.String())
+		outMsg := strings.TrimSpace(logBuf.String())
 		inst.Close(m)
-		if stderrMsg != "" {
-			return nil, fmt.Errorf("wait for proxy port %d ready [sing-box: %s]: %w", port, stderrMsg, err)
+		if outMsg != "" {
+			return nil, fmt.Errorf("wait for proxy port %d ready [sing-box: %s]: %w", port, outMsg, err)
 		}
 		return nil, fmt.Errorf("wait for proxy port %d ready: %w", port, err)
 	}

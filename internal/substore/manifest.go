@@ -40,6 +40,8 @@ type ShareLinkInfo struct {
 	SubURLDomain2    string               `json:"sub_url_domain2"`
 	ShareURLs        map[string]string    `json:"share_urls"`
 	SubURLs          map[string]string    `json:"sub_urls"`
+	FastSnapshotPath string               `json:"fast_snapshot_path,omitempty"` // 极速直出快照相对路径 (毫秒级响应，Issue #21)
+	FastSnapshotURLs map[string]string    `json:"fast_snapshot_urls,omitempty"` // 极速直出快照全量链接
 	TargetFormat     string               `json:"target_format"`
 	SourceCollection string               `json:"source_collection"`
 	PipelineScripts  []ScriptOperatorInfo `json:"pipeline_scripts"`
@@ -192,6 +194,13 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 			"sub.ashanzzz.com": subURL2,
 		}
 
+		fastPath := fmt.Sprintf("/api/sub/file/%s?token=%s", escapedName, token)
+		fastURLs := map[string]string{
+			"free.1992004.xyz": fmt.Sprintf("https://%s/api/sub/file/%s?token=%s", domains[0], escapedName, token),
+			"sub.ashanzzz.com": fmt.Sprintf("https://%s/api/sub/file/%s?token=%s", domains[1], escapedName, token),
+			"local_gateway":   fmt.Sprintf("http://192.168.8.11:33335/api/sub/file/%s?token=%s", escapedName, token),
+		}
+
 		manifest.ShareLinks = append(manifest.ShareLinks, ShareLinkInfo{
 			Name:             name,
 			DisplayName:      displayName,
@@ -202,6 +211,8 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 			SubURLDomain2:    subURL2,
 			ShareURLs:        shareURLs,
 			SubURLs:          subURLs,
+			FastSnapshotPath: fastPath,
+			FastSnapshotURLs: fastURLs,
 			TargetFormat:     targetType,
 			SourceCollection: sourceName,
 			PipelineScripts:  ops,

@@ -6,8 +6,10 @@ import (
 	"io/fs"
 	"net/http"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/gofiber/adaptor/v2"
 	"github.com/gofiber/fiber/v2"
@@ -38,6 +40,7 @@ type APIServer struct {
 	engine         *probe.Engine
 	store          *store.Store
 	substoreClient *substore.Client
+	snapshotMgr    *substore.SnapshotManager
 	mcpServer      *mcp.MCPServer
 	scheduler      *monitor.Scheduler
 	rulesMgr       *rules.Manager
@@ -106,12 +109,21 @@ func NewAPIServer(
 		customlog.Warnf("[SECURITY] ⚠️  未配置任何 Token！API 与 MCP 控制接口处于无保护开放模式！")
 	}
 
+	var snapshotMgr *substore.SnapshotManager
+	if sc != nil {
+		snapshotMgr = substore.NewSnapshotManager(sc, filepath.Join("data", "snapshots"))
+		if cfg.SubStore.Enabled {
+			snapshotMgr.StartAutoWarmup(15*time.Minute, []string{"ashan", "Ashan", "Q", "q"})
+		}
+	}
+
 	server := &APIServer{
 		app:            app,
 		cfg:            cfg,
 		engine:         engine,
 		store:          st,
 		substoreClient: sc,
+		snapshotMgr:    snapshotMgr,
 		mcpServer:      ms,
 		scheduler:      sched,
 		rulesMgr:       rm,
@@ -246,6 +258,11 @@ func (s *APIServer) setupRoutes() {
 
 	// 3. 动态订阅拉取接口（给 SubStore 或客户端直接订阅用）
 	s.app.Get("/api/sub/:group", s.handleGetGroupSubscription)
+
+	// 3.1 极速预烘焙订阅快照直出接口 (Issue #21 彻底终结 SubStore 300% CPU 负载风暴)
+	s.app.Get("/api/sub/file/:name", s.handleGetSnapshotFile)
+	s.app.Get("/api/sub/snapshot/status", s.handleGetSnapshotStatus)
+	s.app.Post("/api/sub/snapshot/warmup", s.handleTriggerSnapshotWarmup)
 
 	// 4. 手动触发 SubStore 远端同步
 	s.app.Post("/api/substore/sync", s.handleSyncSubStore)
@@ -478,6 +495,9 @@ func (s *APIServer) setupRoutes() {
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
+		if s.snapshotMgr != nil {
+			s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan"})
+		}
 		customlog.Audit("switch_substore_mode", c.IP(), "ashan-mode", "success", fmt.Sprintf("Switched mode to %s", req.Mode))
 		return c.JSON(state)
 	})
@@ -538,6 +558,9 @@ func (s *APIServer) setupRoutes() {
 			}
 			curr := s.substoreClient.GetCurrentMode()
 			_, _ = s.substoreClient.SetMode(c.Context(), curr)
+			if s.snapshotMgr != nil {
+				s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan"})
+			}
 			customlog.Audit("upsert_external_source", c.IP(), subName, "success", fmt.Sprintf("Upserted external sub: %s (url=%s)", subName, req.URL))
 			return c.JSON(fiber.Map{
 				"status":  "ok",
@@ -574,6 +597,9 @@ func (s *APIServer) setupRoutes() {
 
 		curr := s.substoreClient.GetCurrentMode()
 		_, _ = s.substoreClient.SetMode(c.Context(), curr)
+		if s.snapshotMgr != nil {
+			s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan"})
+		}
 
 		customlog.Audit("update_external_sources", c.IP(), "external_sources", "success", fmt.Sprintf("Updated sources: %v", sources))
 		return c.JSON(fiber.Map{
@@ -599,6 +625,9 @@ func (s *APIServer) setupRoutes() {
 
 		curr := s.substoreClient.GetCurrentMode()
 		_, _ = s.substoreClient.SetMode(c.Context(), curr)
+		if s.snapshotMgr != nil {
+			s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan"})
+		}
 
 		customlog.Audit("delete_external_source", c.IP(), target, "success", fmt.Sprintf("Removed source: %s (purge=%v)", target, purge))
 		return c.JSON(fiber.Map{
@@ -1019,14 +1048,16 @@ func (s *APIServer) setupRoutes() {
 	})
 
 	// 6. 挂载远程 AI 专用的 MCP over SSE 传输接口
-	sse := mcpserver.NewSSEServer(
-		s.mcpServer.GetServer(),
-		mcpserver.WithSSEEndpoint("/mcp/sse"),
-		mcpserver.WithMessageEndpoint("/mcp/messages"),
-	)
+	if s.mcpServer != nil {
+		sse := mcpserver.NewSSEServer(
+			s.mcpServer.GetServer(),
+			mcpserver.WithSSEEndpoint("/mcp/sse"),
+			mcpserver.WithMessageEndpoint("/mcp/messages"),
+		)
 
-	s.app.Get("/mcp/sse", adaptor.HTTPHandler(sse.SSEHandler()))
-	s.app.Post("/mcp/messages", adaptor.HTTPHandler(sse.MessageHandler()))
+		s.app.Get("/mcp/sse", adaptor.HTTPHandler(sse.SSEHandler()))
+		s.app.Post("/mcp/messages", adaptor.HTTPHandler(sse.MessageHandler()))
+	}
 
 	// 7. VPS 节点生命周期、深度墙况分析与换端口自愈 API
 	s.app.Get("/api/vps/manage", s.handleVPSManage)
@@ -1567,4 +1598,83 @@ func (s *APIServer) handleHealPort(c *fiber.Ctx) error {
 	// 触发立即重检并刷新大盘
 	go s.scheduler.RunAllChecks(context.Background(), true)
 	return c.JSON(resp)
+}
+
+// ==========================================
+// 8. 预烘焙快照与毫秒级极速分发端点 (Issue #21)
+// ==========================================
+
+// handleGetSnapshotFile 极速分发预烘焙好的订阅快照（毫秒级响应，零 Node.js 负载，彻底解决 CPU 300% 风暴）
+func (s *APIServer) handleGetSnapshotFile(c *fiber.Ctx) error {
+	if s.snapshotMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).SendString("Snapshot manager not initialized")
+	}
+
+	fileName := c.Params("name")
+	if fileName == "" {
+		return c.Status(fiber.StatusBadRequest).SendString("File name required")
+	}
+
+	data, meta, exists := s.snapshotMgr.GetSnapshot(fileName)
+	if !exists || len(data) == 0 {
+		// 冷启动无快照时，同步即时烘焙一次
+		var err error
+		meta, err = s.snapshotMgr.WarmupOne(c.Context(), fileName)
+		if err != nil {
+			return c.Status(fiber.StatusServiceUnavailable).SendString(fmt.Sprintf("Snapshot warmup failed: %v", err))
+		}
+		data, _, _ = s.snapshotMgr.GetSnapshot(fileName)
+	}
+
+	// 支持客户端 If-None-Match ETag 304 极速协商
+	if match := c.Get("If-None-Match"); match != "" && meta != nil {
+		if strings.Trim(match, "\"") == meta.SHA256 {
+			return c.SendStatus(fiber.StatusNotModified)
+		}
+	}
+
+	c.Set("Content-Type", "text/yaml; charset=utf-8")
+	c.Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s.yaml"`, fileName))
+	if meta != nil {
+		c.Set("ETag", `"`+meta.SHA256+`"`)
+		c.Set("X-Snapshot-Time", meta.UpdatedAtStr)
+		c.Set("X-Proxy-Count", fmt.Sprintf("%d", meta.ProxyCount))
+		c.Set("X-Duration-Ms", fmt.Sprintf("%d", meta.DurationMs))
+	}
+
+	return c.Send(data)
+}
+
+// handleGetSnapshotStatus 查看所有快照的实时健康度、大小、节点数和烘焙耗时
+func (s *APIServer) handleGetSnapshotStatus(c *fiber.Ctx) error {
+	if s.snapshotMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "snapshot manager not initialized"})
+	}
+	metas := s.snapshotMgr.GetMetas()
+	return c.JSON(fiber.Map{
+		"status":    "ok",
+		"count":     len(metas),
+		"snapshots": metas,
+	})
+}
+
+// handleTriggerSnapshotWarmup 手动触发一次快照批量预烘焙
+func (s *APIServer) handleTriggerSnapshotWarmup(c *fiber.Ctx) error {
+	if s.snapshotMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "snapshot manager not initialized"})
+	}
+	var req struct {
+		Files []string `json:"files"`
+	}
+	_ = c.BodyParser(&req)
+	files := req.Files
+	if len(files) == 0 {
+		files = []string{"ashan", "Ashan", "Q", "q"}
+	}
+	s.snapshotMgr.TriggerAsyncWarmup(files)
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"message": "async warmup triggered for files",
+		"files":   files,
+	})
 }

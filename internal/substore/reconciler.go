@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"vpn-probe/internal/logger"
 )
@@ -152,16 +153,31 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.setAuth(req)
+	var resp *http.Response
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("http request: %w", err)
+		resp, lastErr = c.httpClient.Do(req)
+		if lastErr == nil {
+			break
+		}
+		if attempt < 2 {
+			logger.Warnf("[SUBSTORE] UpdateCollection '%s' attempt %d failed: %v, retrying in 2s...", name, attempt, lastErr)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf("http request: %w", lastErr)
 	}
 	defer resp.Body.Close()
 
@@ -197,16 +213,31 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.setAuth(req)
+	var resp *http.Response
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("http request: %w", err)
+		resp, lastErr = c.httpClient.Do(req)
+		if lastErr == nil {
+			break
+		}
+		if attempt < 2 {
+			logger.Warnf("[SUBSTORE] UpdateFile '%s' attempt %d failed: %v, retrying in 2s...", name, attempt, lastErr)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf("http request: %w", lastErr)
 	}
 	defer resp.Body.Close()
 

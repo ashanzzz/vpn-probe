@@ -40,6 +40,13 @@ func TestAuthMiddleware(t *testing.T) {
 		return c.SendString("masked")
 	})
 
+	app.Get("/rules/custom_patch.js", func(c *fiber.Ctx) error {
+		return c.SendString("// patch js")
+	})
+	app.Post("/rules/custom_patch.js", func(c *fiber.Ctx) error {
+		return c.SendString("// post patch")
+	})
+
 	// 1. 测试白名单接口 (免密且返回安全响应头)
 	req := httptest.NewRequest("GET", "/health", nil)
 	resp, err := app.Test(req)
@@ -105,9 +112,31 @@ func TestAuthMiddleware(t *testing.T) {
 	if err != nil || resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("expected adminToken reveal=true to return 200, got %d", resp.StatusCode)
 	}
+
+	// 9. 测试 /rules/*.js 静态规则脚本免密放行 (SubStore 脚本算子直接无 Token GET 引用)
+	req = httptest.NewRequest("GET", "/rules/custom_patch.js", nil)
+	resp, err = app.Test(req)
+	if err != nil || resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("expected GET /rules/custom_patch.js without token to return 200, got %d", resp.StatusCode)
+	}
+
+	// 10. 测试 /rules/*.js 携带 query token 亦能安全放行
+	req = httptest.NewRequest("GET", "/rules/custom_patch.js?token=some_token", nil)
+	resp, err = app.Test(req)
+	if err != nil || resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("expected GET /rules/custom_patch.js?token=... to return 200, got %d", resp.StatusCode)
+	}
+
+	// 11. 测试非 GET 访问 /rules/* 无 token 仍被拦截 -> 401
+	req = httptest.NewRequest("POST", "/rules/custom_patch.js", nil)
+	resp, err = app.Test(req)
+	if err != nil || resp.StatusCode != fiber.StatusUnauthorized {
+		t.Fatalf("expected POST /rules/custom_patch.js without token to return 401, got %d", resp.StatusCode)
+	}
 }
 
 func TestIPLockout(t *testing.T) {
+	globalTracker.recordSuccess("0.0.0.0")
 	app := fiber.New()
 	app.Use(NewAuthMiddleware(AuthConfig{
 		AuthToken: "valid-secret-token",

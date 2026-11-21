@@ -26,7 +26,7 @@ func NewClient(cfg *config.SubStoreConfig) *Client {
 	return &Client{
 		cfg: cfg,
 		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout: 60 * time.Second,
 		},
 	}
 }
@@ -180,16 +180,31 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.setAuth(req)
+	var resp *http.Response
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(bodyBytes))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("http request: %w", err)
+		resp, lastErr = c.httpClient.Do(req)
+		if lastErr == nil {
+			break
+		}
+		if attempt < 2 {
+			logger.Warnf("[SUBSTORE] Update subscription '%s' attempt %d failed: %v, retrying in 2s...", subName, attempt, lastErr)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf("http request: %w", lastErr)
 	}
 	defer resp.Body.Close()
 
@@ -271,7 +286,7 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 	// 2. 同步 家宽机-直连 (ashan-resi-direct)
 	resiContent := payload.ResidentialNodes
 	if len(resiContent) == 0 {
-		resiContent = []string{"# No active residential direct nodes"}
+		resiContent = []string{""}
 	}
 	if err := c.updateSubStoreSubscription(ctx, "ashan-resi-direct", resiContent); err != nil {
 		logger.Warnf("[SUBSTORE] Update ashan-resi-direct: %v", err)
@@ -282,7 +297,7 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 	// 3. 同步 线路➔家宽链式代理 (ashan-chain)
 	chainContent := payload.ChainNodes
 	if len(chainContent) == 0 {
-		chainContent = []string{"# No active chain nodes"}
+		chainContent = []string{""}
 	}
 	if err := c.updateSubStoreSubscription(ctx, "ashan-chain", chainContent); err != nil {
 		logger.Warnf("[SUBSTORE] Update ashan-chain: %v", err)

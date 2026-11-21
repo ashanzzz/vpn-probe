@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"net/http"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"github.com/gofiber/adaptor/v2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/filesystem"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -25,6 +28,7 @@ import (
 	"vpn-probe/internal/store"
 	"vpn-probe/internal/substore"
 	"vpn-probe/internal/vpsmgr"
+	"vpn-probe/web"
 )
 
 type APIServer struct {
@@ -82,10 +86,12 @@ func NewAPIServer(
 	// 挂载安全响应头 (nosniff, frame-deny)
 	app.Use(NewSecurityHeadersMiddleware())
 
-	// 挂载安全鉴权中间件 (精确免密白名单：/health, /favicon.ico)
+	// 挂载安全鉴权中间件 (精确免密白名单：/health, /favicon.ico, 以及供 Sub-Store 算子拉取的规则脚本)
 	whitelist := map[string]bool{
-		"/health":      true,
-		"/favicon.ico": true,
+		"/health":                true,
+		"/favicon.ico":           true,
+		"/rules/custom_patch.js": true,
+		"/rules/convert.js":      true,
 	}
 	app.Use(NewAuthMiddleware(AuthConfig{
 		AuthToken:  cfg.Server.AuthToken,
@@ -895,6 +901,20 @@ func (s *APIServer) setupRoutes() {
 	s.app.Post("/api/vps/manage/update", s.handleVPSUpdate)
 	s.app.Get("/api/vps/blocked-analysis", s.handleBlockedAnalysis)
 	s.app.Post("/api/vps/heal/port", s.handleHealPort)
+
+	// 8. 挂载 React 前端单页应用静态资源 (支持 //go:embed 编译内嵌与 SPA 回退)
+	subFS, err := fs.Sub(web.DistFS, "dist")
+	if err == nil {
+		s.app.Use("/", filesystem.New(filesystem.Config{
+			Root:         http.FS(subFS),
+			Index:        "index.html",
+			NotFoundFile: "index.html",
+			Browse:       false,
+			Next: func(c *fiber.Ctx) bool {
+				return strings.HasPrefix(c.Path(), "/api/") || strings.HasPrefix(c.Path(), "/mcp/")
+			},
+		}))
+	}
 }
 
 func (s *APIServer) Start(addr string) error {

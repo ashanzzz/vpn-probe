@@ -14,6 +14,8 @@ secrets.yaml
 bin/
 vpn-probe
 vpn-probe.exe
+vpn-probe-linux
+scratch/
 
 # Test artifacts and temporary files
 *.tmp
@@ -25,6 +27,10 @@ data/
 *.log
 *.db
 *.sqlite
+
+# Web Frontend Dependencies
+web/node_modules/
+web/.tmp/
 
 # OS and IDE
 .DS_Store

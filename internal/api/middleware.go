@@ -112,6 +112,18 @@ func NewAuthMiddleware(cfg AuthConfig) fiber.Handler {
 			return c.Next()
 		}
 
+		// 规则脚本公开访问免密放行 (/rules/*.js 且只允许 GET 供 Sub-Store 算子拉取)
+		if strings.HasPrefix(path, "/rules/") && c.Method() == fiber.MethodGet {
+			return c.Next()
+		}
+
+		// 静态前端资源免密放行 (只允许 GET/HEAD 访问根路径及静态资产文件)
+		if !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/mcp/") && !strings.HasPrefix(path, "/rules/") {
+			if c.Method() == fiber.MethodGet || c.Method() == fiber.MethodHead {
+				return c.Next()
+			}
+		}
+
 		// 2. 检查 IP 是否被临时锁定
 		if locked, remaining := globalTracker.isLocked(clientIP); locked {
 			customlog.Event(customlog.LevelWarn, "auth", "ip_locked",
@@ -153,12 +165,12 @@ func NewAuthMiddleware(cfg AuthConfig) fiber.Handler {
 			queryToken = c.Query("api_key")
 		}
 
-		// 安全规则：URL Query 传参仅允许在 /api/sub/* 订阅拉取端点使用
-		if queryToken != "" && !strings.HasPrefix(path, "/api/sub/") {
-			customlog.Audit("auth_query_rejected", clientIP, path, "rejected", "Query param ?token= is only permitted for /api/sub/*")
+		// 安全规则：URL Query 传参仅允许在 /api/sub/* 订阅拉取端点及 /rules/* 脚本引用端点使用
+		if queryToken != "" && !strings.HasPrefix(path, "/api/sub/") && !strings.HasPrefix(path, "/rules/") {
+			customlog.Audit("auth_query_rejected", clientIP, path, "rejected", "Query param ?token= is only permitted for /api/sub/* and /rules/*")
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"error":   "unauthorized",
-				"message": "Query parameter authentication is only allowed for subscription endpoints (/api/sub/*). Use Authorization or X-API-Key header.",
+				"message": "Query parameter authentication is only allowed for subscription endpoints (/api/sub/*) and rules endpoints (/rules/*). Use Authorization or X-API-Key header.",
 			})
 		}
 

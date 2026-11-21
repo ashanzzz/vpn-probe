@@ -38,6 +38,8 @@ type ShareLinkInfo struct {
 	ShareURLDomain2  string               `json:"share_url_domain2"`
 	SubURLDomain1    string               `json:"sub_url_domain1"`
 	SubURLDomain2    string               `json:"sub_url_domain2"`
+	ShareURLs        map[string]string    `json:"share_urls"`
+	SubURLs          map[string]string    `json:"sub_urls"`
 	TargetFormat     string               `json:"target_format"`
 	SourceCollection string               `json:"source_collection"`
 	PipelineScripts  []ScriptOperatorInfo `json:"pipeline_scripts"`
@@ -58,6 +60,7 @@ type SubStoreManifest struct {
 	Status        string                    `json:"status"`
 	SubStoreURL   string                    `json:"substore_url"`
 	Username      string                    `json:"username"`
+	Domains       []string                  `json:"domains"`
 	ShareLinks    []ShareLinkInfo           `json:"share_links"`
 	Scripts       map[string]ScriptFileInfo `json:"scripts"`
 	ScriptList    []string                  `json:"script_list"`
@@ -105,6 +108,7 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		Status:        "ok",
 		SubStoreURL:   baseURL,
 		Username:      c.cfg.Username,
+		Domains:       []string{"free.1992004.xyz", "sub.ashanzzz.com"},
 		ShareLinks:    make([]ShareLinkInfo, 0),
 		Scripts:       make(map[string]ScriptFileInfo),
 		ScriptList:    make([]string, 0),
@@ -169,6 +173,15 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 			}
 		}
 
+		shareURLs := map[string]string{
+			"free.1992004.xyz": shareURL1,
+			"sub.ashanzzz.com": shareURL2,
+		}
+		subURLs := map[string]string{
+			"free.1992004.xyz": subURL1,
+			"sub.ashanzzz.com": subURL2,
+		}
+
 		manifest.ShareLinks = append(manifest.ShareLinks, ShareLinkInfo{
 			Name:             name,
 			DisplayName:      displayName,
@@ -177,6 +190,8 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 			ShareURLDomain2:  shareURL2,
 			SubURLDomain1:    subURL1,
 			SubURLDomain2:    subURL2,
+			ShareURLs:        shareURLs,
+			SubURLs:          subURLs,
 			TargetFormat:     targetType,
 			SourceCollection: sourceName,
 			PipelineScripts:  ops,
@@ -185,28 +200,49 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 
 	manifest.TotalShares = len(manifest.ShareLinks)
 
-	// 拉取所有唯一引用的脚本内容
+	// 并发快速拉取引用的脚本内容 (单脚本设置 3 秒超时与安全容错，防止 CDN 丢包阻塞整体 Manifest 返回)
+	type scriptRes struct {
+		name    string
+		content string
+		err     error
+	}
+
+	var validScriptNames []string
 	for sName := range scriptSet {
-		if sName == "" {
-			continue
+		if sName != "" {
+			validScriptNames = append(validScriptNames, sName)
 		}
-		content, err := c.GetScriptContent(ctx, sName)
-		if err != nil {
-			logger.Warnf("Fetch script content for %s: %v", sName, err)
-			content = fmt.Sprintf("// Failed to fetch script: %v", err)
+	}
+
+	resChan := make(chan scriptRes, len(validScriptNames))
+	for _, sName := range validScriptNames {
+		go func(name string) {
+			sCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			content, err := c.GetScriptContent(sCtx, name)
+			resChan <- scriptRes{name: name, content: content, err: err}
+		}(sName)
+	}
+
+	for range validScriptNames {
+		res := <-resChan
+		content := res.content
+		if res.err != nil {
+			logger.Warnf("Fetch script content for %s: %v", res.name, res.err)
+			content = fmt.Sprintf("// Script %s (remote fetch timeout/fallback: %v)", res.name, res.err)
 		}
 
-		desc := getScriptDescription(sName)
-		sURL := fmt.Sprintf("https://free.1992004.xyz/%s", sName)
-		manifest.Scripts[sName] = ScriptFileInfo{
-			Name:        sName,
+		desc := getScriptDescription(res.name)
+		sURL := fmt.Sprintf("https://free.1992004.xyz/%s", res.name)
+		manifest.Scripts[res.name] = ScriptFileInfo{
+			Name:        res.name,
 			URL:         sURL,
 			Description: desc,
 			Size:        len(content),
 			Content:     content,
 			UpdatedAt:   time.Now().Format("2006-01-02 15:04:05"),
 		}
-		manifest.ScriptList = append(manifest.ScriptList, sName)
+		manifest.ScriptList = append(manifest.ScriptList, res.name)
 	}
 	manifest.TotalScripts = len(manifest.ScriptList)
 

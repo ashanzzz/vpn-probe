@@ -1,3 +1,13 @@
+# 阶段 0: 构建 React 前端静态资产
+FROM node:20-alpine AS web-builder
+WORKDIR /web
+ARG NPM_REGISTRY
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi
+COPY web/package*.json ./
+RUN npm install
+COPY web/ ./
+RUN npm run build
+
 # 阶段 1: 提取官方 sing-box 静态二进制
 FROM ghcr.io/sagernet/sing-box:latest AS singbox-bin
 
@@ -7,6 +17,8 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# 注入前端构建产物至 web/dist
+COPY --from=web-builder /web/dist ./web/dist
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /app/vpn-probe ./cmd/vpn-probe
 
 # 阶段 3: 最小生产运行容器 (非 root 用户运行)

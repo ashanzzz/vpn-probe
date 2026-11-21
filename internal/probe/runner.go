@@ -135,22 +135,12 @@ func (m *SandboxManager) Launch(ctx context.Context, outbound map[string]any) (*
 	tmpDir := os.TempDir()
 	confPath := filepath.Join(tmpDir, fmt.Sprintf("vpn-probe-%s-%d.json", instanceID, port))
 
-	// 构建最小化 sing-box 配置
+	// 构建最小化 sing-box 配置 (不配置代理自身 detour 的 DNS，由系统原生直连解析 proxy host，避免域名/CDN 节点陷入死锁)
 	tagStr, _ := outbound["tag"].(string)
 	config := map[string]any{
 		"log": map[string]any{
 			"level":    "debug",
 			"disabled": false,
-		},
-		"dns": map[string]any{
-			"servers": []any{
-				map[string]any{
-					"tag":    "remote-dns",
-					"type":   "udp",
-					"server": "8.8.8.8",
-					"detour": tagStr,
-				},
-			},
 		},
 		"inbounds": []any{
 			map[string]any{

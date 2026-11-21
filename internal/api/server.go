@@ -392,6 +392,87 @@ func (s *APIServer) setupRoutes() {
 		})
 	})
 
+	// 5.1.4 清理指定订阅中的失效 socks5 节点 (带快照备份)
+	s.app.Post("/api/substore/cleanup", func(c *fiber.Ctx) error {
+		if s.substoreClient == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
+		}
+		var req struct {
+			Subscription string `json:"subscription"`
+		}
+		_ = c.BodyParser(&req)
+		subName := req.Subscription
+		if subName == "" {
+			subName = "Q"
+		}
+		res, err := s.substoreClient.CleanupDeadSocks(c.Context(), subName)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		customlog.Audit("cleanup_dead_socks", c.IP(), fmt.Sprintf("sub/%s", subName), "success", fmt.Sprintf("Removed %d dead socks nodes", res.RemovedCount))
+		return c.JSON(res)
+	})
+
+	// 5.1.5 审计指定 File 生成配置的策略组引用完整性 (检查空引用)
+	s.app.Get("/api/substore/audit", func(c *fiber.Ctx) error {
+		if s.substoreClient == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
+		}
+		fileName := c.Query("file", "Q")
+		audit, err := s.substoreClient.AuditFileGroups(c.Context(), fileName)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(audit)
+	})
+
+	// 5.1.6 查询组合订阅当前三模式状态
+	s.app.Get("/api/substore/mode", func(c *fiber.Ctx) error {
+		if s.substoreClient == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
+		}
+		curr := s.substoreClient.GetCurrentMode()
+		return c.JSON(fiber.Map{
+			"current_mode":  curr,
+			"allowed_modes": []string{"external+self", "self", "external"},
+			"subscriptions": substore.ModeSubscriptions[curr],
+		})
+	})
+
+	// 5.1.7 动态切换组合订阅三模式并原子持久化
+	s.app.Post("/api/substore/mode", func(c *fiber.Ctx) error {
+		if s.substoreClient == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
+		}
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		if err := c.BodyParser(&req); err != nil || req.Mode == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "mode is required (allowed: 'external+self', 'self', 'external')"})
+		}
+		state, err := s.substoreClient.SetMode(c.Context(), substore.SubStoreMode(req.Mode))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+		customlog.Audit("switch_substore_mode", c.IP(), "ashan-mode", "success", fmt.Sprintf("Switched mode to %s", req.Mode))
+		return c.JSON(state)
+	})
+
+	// 5.1.8 动态触发从 SubStore 重新拉取待测节点列表 (包含自建与蜂窝云)
+	s.app.Post("/api/monitor/refresh", func(c *fiber.Ctx) error {
+		if s.scheduler == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
+		}
+		if err := s.scheduler.RefreshNodesFromSubStore(c.Context()); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		customlog.Audit("refresh_monitor_nodes", c.IP(), "/api/monitor/refresh", "success", "Refreshed monitor nodes from SubStore")
+		return c.JSON(fiber.Map{
+			"status":  "ok",
+			"message": "Monitored nodes refreshed dynamically from SubStore",
+		})
+	})
+
 	// 5.2.0 SubStore 动态连接参数热重载与持久化 API (支持随时换地址/换账密并即刻生效)
 	s.app.Get("/api/substore/config", func(c *fiber.Ctx) error {
 		if s.substoreClient == nil {

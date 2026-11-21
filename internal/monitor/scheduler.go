@@ -146,12 +146,74 @@ func (s *Scheduler) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				if s.substoreClient != nil && s.cfg.SubStore.Enabled {
-					logger.Sync("[SCHEDULE] Triggering 15-min periodic SubStore topology reconcile...")
+					logger.Sync("[SCHEDULE] Triggering 15-min periodic SubStore topology reconcile & node refresh...")
 					_, _ = s.substoreClient.ReconcileTopology(runCtx)
+					_ = s.RefreshNodesFromSubStore(runCtx)
 				}
 			}
 		}
 	}()
+
+	// 启动 3 秒后尝试从 SubStore 动态扩展节点列表
+	if s.substoreClient != nil && s.cfg.SubStore.Enabled {
+		go func() {
+			time.Sleep(3 * time.Second)
+			_ = s.RefreshNodesFromSubStore(runCtx)
+		}()
+	}
+}
+
+// RefreshNodesFromSubStore 从 SubStore 动态同步待监控的节点 (包含自建 VPS 与蜂窝云/机场节点)
+func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
+	if s.substoreClient == nil || !s.cfg.SubStore.Enabled {
+		return nil
+	}
+
+	subsToPull := []string{"ashan's vps", "蜂窝云"}
+	var dynamicNodes []config.MonitoredNode
+
+	for _, subName := range subsToPull {
+		content, err := s.substoreClient.GetSubscriptionContent(ctx, subName)
+		if err != nil {
+			logger.Warnf("[MONITOR] Dynamic pull from SubStore sub '%s' failed: %v (falling back to static)", subName, err)
+			continue
+		}
+
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			parsed, parseErr := probe.ParseLink(trimmed)
+			if parseErr != nil {
+				continue
+			}
+			dynamicNodes = append(dynamicNodes, config.MonitoredNode{
+				Name: parsed.Tag,
+				URL:  trimmed,
+			})
+		}
+	}
+
+	if len(dynamicNodes) == 0 {
+		logger.Warnf("[MONITOR] Dynamic pull returned 0 nodes, preserving existing %d nodes", len(s.nodeStates))
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, n := range dynamicNodes {
+		if _, exists := s.nodeStates[n.Name]; !exists {
+			s.nodeStates[n.Name] = &NodeState{Config: n}
+		} else {
+			s.nodeStates[n.Name].Config.URL = n.URL
+		}
+	}
+
+	logger.Sync("[MONITOR] ✅ Dynamically synchronized %d monitor nodes from SubStore (total monitored: %d)", len(dynamicNodes), len(s.nodeStates))
+	return nil
 }
 
 func (s *Scheduler) Stop() {

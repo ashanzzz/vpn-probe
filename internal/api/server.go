@@ -1015,7 +1015,11 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 			case model.FaultPortBlocked:
 				aiInstruction = fmt.Sprintf("【端口被墙处置】海外节点(%s)正常连通且国内可Ping通，VPS与服务完好。请登录目标VPS(%s)，修改sing-box/x-ui配置将端口从%d修改为新的端口，并在节点URL中将端口同步更新后重新提交检测。", abroadSource, targetIP, targetPort)
 			case model.FaultProtocolMismatch:
-				aiInstruction = fmt.Sprintf("【配置错误处置】海外与国内TCP均通，说明端口未被墙，请勿更换端口！请核对客户端配置与VPS(%s)服务端的Reality公钥(pbk)、ShortID或UUID是否一致，更新链接中的 pbk/sid 参数即可恢复。", targetIP)
+				if tip != "" {
+					aiInstruction = tip
+				} else {
+					aiInstruction = fmt.Sprintf("【配置错误处置】海外与国内TCP均通，说明端口未被墙，请勿更换端口！请核对客户端配置与VPS(%s)服务端的凭据或协议参数。", targetIP)
+				}
 			case model.FaultIPBlocked:
 				aiInstruction = fmt.Sprintf("【IP被墙处置】海外可通但国内全黑洞丢包，换端口无效。请更换VPS(%s)的IP，或者将该节点配置Cloudflare CDN反代救活。", targetIP)
 			case model.FaultMachineDown:

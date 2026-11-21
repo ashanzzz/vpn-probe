@@ -201,3 +201,91 @@ func (h *Healer) BuildSmartChains(transitNodes []*model.NodeProbeResult, resiNod
 
 	return chains
 }
+
+// BuildFullMeshRegionalChains 方案B：全量区域网状池化中继 (美西4837全量挂载所有美国家宽，日本线路全量挂载日本家宽)
+func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResult, resiNodes []*model.NodeProbeResult) []string {
+	var chains []string
+	if len(resiNodes) == 0 || len(transitNodes) == 0 {
+		return chains
+	}
+
+	// 1. 分类提取健康的区域线路机
+	var usTransits []*model.NodeProbeResult
+	var jpTransits []*model.NodeProbeResult
+	var defaultTransit *model.NodeProbeResult
+
+	for _, t := range transitNodes {
+		if !t.Online {
+			continue
+		}
+		// 忽略处于静默待命的 CF WS 救活节点
+		if strings.Contains(t.Name, "CF-WS") || strings.Contains(t.Name, "救活") {
+			continue
+		}
+
+		upper := strings.ToUpper(t.Name)
+		country := strings.ToUpper(t.ExitCountry)
+		if country == "US" || strings.Contains(upper, "4837") || strings.Contains(upper, "LAX") || strings.Contains(upper, "ACCK") {
+			usTransits = append(usTransits, t)
+		} else if country == "JP" || strings.Contains(upper, "JPSB") || strings.Contains(upper, "SOFTBANK") || strings.Contains(upper, "IIJ") || strings.Contains(t.Name, "软银") {
+			jpTransits = append(jpTransits, t)
+		}
+
+		if defaultTransit == nil {
+			defaultTransit = t
+		}
+	}
+
+	// 兜底保护
+	if defaultTransit == nil && len(transitNodes) > 0 {
+		defaultTransit = transitNodes[0]
+	}
+
+	// 2. 遍历家宽，进行全量区域池化配对
+	seen := make(map[string]bool)
+	for _, r := range resiNodes {
+		if !r.Online && r.Diagnostic != nil && r.Diagnostic.FaultType == model.FaultMachineDown {
+			continue
+		}
+
+		upperName := strings.ToUpper(r.Name)
+		country := strings.ToUpper(r.ExitCountry)
+		var targetTransits []*model.NodeProbeResult
+
+		if country == "US" || strings.Contains(upperName, "-US-") || strings.Contains(upperName, "美国") {
+			targetTransits = usTransits
+		} else if country == "JP" || strings.Contains(upperName, "-JP-") || strings.Contains(upperName, "日本") {
+			targetTransits = jpTransits
+		}
+
+		if len(targetTransits) == 0 && defaultTransit != nil {
+			targetTransits = []*model.NodeProbeResult{defaultTransit}
+		}
+
+		origURL := r.OriginalURL
+		hashIdx := strings.Index(origURL, "#")
+		base := origURL
+		resiLabel := r.Name
+		if hashIdx != -1 {
+			base = origURL[:hashIdx]
+			resiLabel = origURL[hashIdx+1:]
+		}
+
+		separator := "?"
+		if strings.Contains(base, "?") {
+			separator = "&"
+		}
+
+		// 为该家宽与每一个所属区域的线路机生成一条专属链式中继
+		for _, transit := range targetTransits {
+			chainName := fmt.Sprintf("链式|%s ➔ %s", transit.Name, resiLabel)
+			chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(transit.Name), url.QueryEscape(chainName))
+			if !seen[chainURL] {
+				seen[chainURL] = true
+				chains = append(chains, chainURL)
+			}
+		}
+	}
+
+	return chains
+}

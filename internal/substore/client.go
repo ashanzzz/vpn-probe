@@ -323,6 +323,66 @@ func (c *Client) TriggerDownload(ctx context.Context, subName string) error {
 	return nil
 }
 
+// SyncFiveGroups 方案B：原子同步自建五维策略组（线路机、美区全家桶、日区全家桶、其他、送中）与总集合
+func (c *Client) SyncFiveGroups(ctx context.Context, payload model.FiveGroupPayload) error {
+	if !c.cfg.Enabled || c.cfg.URL == "" {
+		return fmt.Errorf("substore is not enabled")
+	}
+
+	logger.Sync("[SUBSTORE] 🚀 Starting 5-group subscription sync (Plan B)...")
+
+	groups := []struct {
+		SubName     string
+		DisplayName string
+		Nodes       []string
+	}{
+		{"ashan-transit", "自建-线路机", payload.TransitNodes},
+		{"ashan-us-resi", "自建-美国和美国家宽", payload.USResiNodes},
+		{"ashan-jp-resi", "自建-日本和日本家宽", payload.JPResiNodes},
+		{"ashan-other", "自建-其他", payload.OtherNodes},
+		{"ashan-china-leak", "自建-送中", payload.ChinaLeakNodes},
+	}
+
+	for _, g := range groups {
+		content := g.Nodes
+		if len(content) == 0 {
+			content = []string{fmt.Sprintf("# No active nodes for %s", g.DisplayName)}
+		}
+		if err := c.updateSubStoreSubscription(ctx, g.SubName, content); err != nil {
+			logger.Warnf("[SUBSTORE] Update %s (%s): %v", g.SubName, g.DisplayName, err)
+		} else {
+			logger.Sync("[SUBSTORE] ✅ '%s' (%s) updated with %d nodes", g.SubName, g.DisplayName, len(g.Nodes))
+		}
+	}
+
+	fiveSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
+
+	// 1. 同步更新 ashan-master 总合集
+	masterPayload := map[string]any{
+		"name":                  "ashan-master",
+		"displayName":           "Ashan 总合集 (自建五维策略全景)",
+		"subscriptions":         fiveSubs,
+		"ignoreFailedRemoteSub": "quiet",
+	}
+	if err := c.UpdateCollection(ctx, "ashan-master", masterPayload); err != nil {
+		logger.Warnf("[SUBSTORE] Reconcile ashan-master collection: %v", err)
+	}
+
+	// 2. 同步更新 ashan-纯净 集合 (排除送中，仅包含前 4 个干净组)
+	cleanFourSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other"}
+	purePayload := map[string]any{
+		"name":                  "ashan-纯净",
+		"displayName":           "Ashan 纯自建专线 (全量干净组)",
+		"subscriptions":         cleanFourSubs,
+		"ignoreFailedRemoteSub": "quiet",
+	}
+	if err := c.UpdateCollection(ctx, "ashan-纯净", purePayload); err != nil {
+		logger.Warnf("[SUBSTORE] Reconcile ashan-纯净 collection: %v", err)
+	}
+
+	return nil
+}
+
 // ThreeTierPayload 三层同步负载
 type ThreeTierPayload struct {
 	TransitDirectNodes []string // 线路机直连 (已按测速与评分置顶排序)
@@ -459,5 +519,37 @@ func (c *Client) CreateOrUpdateRemoteSub(ctx context.Context, subName, displayNa
 	}
 
 	logger.Sync("[SUBSTORE] ✅ Remote subscription '%s' created successfully in SubStore", subName)
+	return nil
+}
+
+// DeleteSubscription 从 SubStore 彻底删除一个订阅
+func (c *Client) DeleteSubscription(ctx context.Context, subName string) error {
+	if !c.cfg.Enabled || c.cfg.URL == "" {
+		return fmt.Errorf("substore integration is not enabled or URL is empty")
+	}
+
+	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	endpoint := fmt.Sprintf("%s/api/sub/%s", baseURL, url.PathEscape(subName))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	if c.cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("delete subscription http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 && resp.StatusCode != 404 {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete subscription failed with status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	logger.Sync("[SUBSTORE] 🗑️ Subscription '%s' deleted from SubStore", subName)
 	return nil
 }

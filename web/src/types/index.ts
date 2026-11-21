@@ -228,3 +228,56 @@ export interface PortHealResponse {
   config_synced: boolean;
   message: string;
 }
+
+export interface AtomNode {
+  id: string;
+  name: string;
+  url: string;
+  protocol: string;
+  country: string;
+  kind: 'transit' | 'residential' | 'chain';
+  china_exit: boolean;
+  latency_ms: number;
+  online: boolean;
+  tested_at: string;
+}
+
+export interface GroupFilter {
+  countries?: string[];
+  include_transit: boolean;
+  include_residential: boolean;
+  include_chain: boolean;
+  exclude_china_leak: boolean;
+  protocols?: string[];
+  custom_match_regex?: string;
+}
+
+export interface CustomGroupDef {
+  name: string;
+  display_name: string;
+  enabled: boolean;
+  filter: GroupFilter;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CategoryStat {
+  country: string;
+  display_name: string;
+  transit_count: number;
+  residential_count: number;
+  chain_count: number;
+  total_clean_count: number;
+  nodes: AtomNode[];
+}
+
+export interface CategoriesSummary {
+  status: string;
+  total_atoms: number;
+  categories: {
+    us: CategoryStat;
+    jp: CategoryStat;
+    other: CategoryStat;
+    china_leaks: AtomNode[];
+  };
+}

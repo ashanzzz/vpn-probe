@@ -119,7 +119,11 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		sourceName, _ := item["sourceName"].(string)
 		targetType, _ := item["type"].(string)
 
-		shareURL := fmt.Sprintf("%s/api/file/%s", baseURL, url.PathEscape(name))
+		origin := baseURL
+		if parsedU, err := url.Parse(baseURL); err == nil {
+			origin = fmt.Sprintf("%s://%s", parsedU.Scheme, parsedU.Host)
+		}
+		shareURL := fmt.Sprintf("%s/share/file/%s?token=13602004317", origin, url.PathEscape(name))
 
 		var ops []ScriptOperatorInfo
 		if procList, ok := item["process"].([]any); ok {

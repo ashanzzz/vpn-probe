@@ -1939,10 +1939,14 @@ func (s *APIServer) handleBindCustomChain(c *fiber.Ctx) error {
 	}
 
 	if s.scheduler != nil {
-		_ = s.scheduler.SyncFiveGroupsNow(c.Context())
-	}
-	if s.snapshotMgr != nil {
-		s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q"})
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			_ = s.scheduler.SyncFiveGroupsNow(ctx)
+			if s.snapshotMgr != nil {
+				s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q"})
+			}
+		}()
 	}
 
 	return c.JSON(fiber.Map{
@@ -1974,7 +1978,14 @@ func (s *APIServer) handleUnbindCustomChain(c *fiber.Ctx) error {
 	}
 
 	if s.scheduler != nil {
-		_ = s.scheduler.SyncFiveGroupsNow(c.Context())
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			_ = s.scheduler.SyncFiveGroupsNow(ctx)
+			if s.snapshotMgr != nil {
+				s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q"})
+			}
+		}()
 	}
 
 	return c.JSON(fiber.Map{

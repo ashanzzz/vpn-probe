@@ -31,8 +31,16 @@ var ModeSubscriptions = map[SubStoreMode][]string{
 	ModeExternalOnly:    {"蜂窝云"},
 }
 
+type ExternalSourceItem struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Enabled     bool   `json:"enabled"`
+}
+
 type ExternalSourcesConfig struct {
-	Sources []string `json:"sources"`
+	Sources []string             `json:"sources"`
+	Items   []ExternalSourceItem `json:"items,omitempty"`
 }
 
 var (
@@ -48,8 +56,20 @@ func (c *Client) GetExternalSources() []string {
 	data, err := os.ReadFile(extSourcesFile)
 	if err == nil {
 		var cfg ExternalSourcesConfig
-		if err := json.Unmarshal(data, &cfg); err == nil && len(cfg.Sources) > 0 {
-			return cfg.Sources
+		if err := json.Unmarshal(data, &cfg); err == nil {
+			var active []string
+			if len(cfg.Items) > 0 {
+				for _, it := range cfg.Items {
+					if it.Enabled && it.Name != "" {
+						active = append(active, it.Name)
+					}
+				}
+				// 明确配置了 Items 时，返回实际启用的列表 (哪怕全部禁用返回空列表)
+				return active
+			}
+			if len(cfg.Sources) > 0 {
+				return cfg.Sources
+			}
 		}
 	}
 	if c.cfg != nil && len(c.cfg.ExternalSources) > 0 {
@@ -58,13 +78,196 @@ func (c *Client) GetExternalSources() []string {
 	return []string{"蜂窝云"}
 }
 
+// GetExternalSourceItems 获取外部订阅详情列表 (Issue #19)
+func (c *Client) GetExternalSourceItems() []ExternalSourceItem {
+	extMutex.RLock()
+	defer extMutex.RUnlock()
+
+	data, err := os.ReadFile(extSourcesFile)
+	if err == nil {
+		var cfg ExternalSourcesConfig
+		if err := json.Unmarshal(data, &cfg); err == nil {
+			if cfg.Items != nil {
+				return cfg.Items
+			}
+			// 若只有 Sources 数组，自动升级构造成 Items
+			if len(cfg.Sources) > 0 {
+				var items []ExternalSourceItem
+				for _, s := range cfg.Sources {
+					items = append(items, ExternalSourceItem{
+						Name:        s,
+						DisplayName: s,
+						Enabled:     true,
+					})
+				}
+				return items
+			}
+			return []ExternalSourceItem{}
+		}
+	}
+
+	// 仅当文件完全不存在时默认保底
+	return []ExternalSourceItem{
+		{
+			Name:        "蜂窝云",
+			DisplayName: "蜂窝云",
+			URL:         "https://api.fwcloud.xyz/link/Iq3NLWozJmSbeuiy?clash=1",
+			Enabled:     true,
+		},
+	}
+}
+
 // SetExternalSources 设置外部订阅列表并持久化
 func (c *Client) SetExternalSources(sources []string) error {
 	extMutex.Lock()
 	defer extMutex.Unlock()
 
 	_ = os.MkdirAll("data", 0755)
-	cfg := ExternalSourcesConfig{Sources: sources}
+
+	// 保留现有 Items 中的 URL 元数据
+	var existingItems []ExternalSourceItem
+	if data, err := os.ReadFile(extSourcesFile); err == nil {
+		var cfg ExternalSourcesConfig
+		_ = json.Unmarshal(data, &cfg)
+		existingItems = cfg.Items
+	}
+
+	var newItems []ExternalSourceItem
+	for _, s := range sources {
+		var item ExternalSourceItem
+		found := false
+		for _, ex := range existingItems {
+			if ex.Name == s {
+				item = ex
+				item.Enabled = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			item = ExternalSourceItem{
+				Name:        s,
+				DisplayName: s,
+				Enabled:     true,
+			}
+		}
+		newItems = append(newItems, item)
+	}
+
+	cfg := ExternalSourcesConfig{
+		Sources: sources,
+		Items:   newItems,
+	}
+	bytesData, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(extSourcesFile, bytesData, 0644)
+}
+
+// UpsertExternalSource 动态添加或更新一个外部订阅，并自动联动 SubStore 创建/更新 (Issue #19)
+func (c *Client) UpsertExternalSource(ctx context.Context, item ExternalSourceItem) error {
+	if item.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+
+	// 1. 若提供了 remoteURL，联动 SubStore 自动创建或更新远端订阅
+	if item.URL != "" && c.cfg != nil && c.cfg.Enabled && c.cfg.URL != "" {
+		if err := c.CreateOrUpdateRemoteSub(ctx, item.Name, item.DisplayName, item.URL); err != nil {
+			logger.Warnf("[SUBSTORE] Auto create/update remote sub in SubStore: %v", err)
+			return fmt.Errorf("create/update in SubStore failed: %w", err)
+		}
+	}
+
+	extMutex.Lock()
+	defer extMutex.Unlock()
+
+	_ = os.MkdirAll("data", 0755)
+	var cfg ExternalSourcesConfig
+	if data, err := os.ReadFile(extSourcesFile); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+
+	// 2. 更新或追加到 Items
+	itemFound := false
+	for i, ex := range cfg.Items {
+		if ex.Name == item.Name {
+			cfg.Items[i].DisplayName = item.DisplayName
+			if item.URL != "" {
+				cfg.Items[i].URL = item.URL
+			}
+			cfg.Items[i].Enabled = item.Enabled
+			itemFound = true
+			break
+		}
+	}
+	if !itemFound {
+		if item.DisplayName == "" {
+			item.DisplayName = item.Name
+		}
+		cfg.Items = append(cfg.Items, item)
+	}
+
+	// 3. 重算 Sources 活跃列表
+	var activeSources []string
+	for _, it := range cfg.Items {
+		if it.Enabled {
+			activeSources = append(activeSources, it.Name)
+		}
+	}
+	cfg.Sources = activeSources
+
+	bytesData, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(extSourcesFile, bytesData, 0644); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// DeleteExternalSource 从外部源池中删除订阅，支持 purge 联动 SubStore 物理删除 (Issue #19)
+func (c *Client) DeleteExternalSource(ctx context.Context, name string, purgeRemote bool) error {
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+
+	// 1. 若开启 purgeRemote，调用 SubStore 物理删除
+	if purgeRemote && c.cfg != nil && c.cfg.Enabled && c.cfg.URL != "" {
+		if err := c.DeleteItem(ctx, "subs", name); err != nil {
+			logger.Warnf("[SUBSTORE] Purge remote sub '%s' from SubStore failed: %v", name, err)
+		} else {
+			logger.Sync("[SUBSTORE] ✅ Purged remote sub '%s' from SubStore successfully", name)
+		}
+	}
+
+	extMutex.Lock()
+	defer extMutex.Unlock()
+
+	_ = os.MkdirAll("data", 0755)
+	var cfg ExternalSourcesConfig
+	if data, err := os.ReadFile(extSourcesFile); err == nil {
+		_ = json.Unmarshal(data, &cfg)
+	}
+
+	var newItems []ExternalSourceItem
+	for _, it := range cfg.Items {
+		if it.Name != name {
+			newItems = append(newItems, it)
+		}
+	}
+	cfg.Items = newItems
+
+	var newSources []string
+	for _, s := range cfg.Sources {
+		if s != name {
+			newSources = append(newSources, s)
+		}
+	}
+	cfg.Sources = newSources
+
 	bytesData, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err

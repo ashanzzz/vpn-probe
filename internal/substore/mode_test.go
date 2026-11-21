@@ -150,3 +150,55 @@ func TestDynamicExternalSourcesAndModes(t *testing.T) {
 		}
 	}
 }
+
+func TestUpsertAndDeleteExternalSource(t *testing.T) {
+	tmpDir := t.TempDir()
+	origExtFile := extSourcesFile
+	extSourcesFile = filepath.Join(tmpDir, "external_sources.json")
+	defer func() { extSourcesFile = origExtFile }()
+
+	client := NewClient(&config.SubStoreConfig{
+		Enabled: false,
+	})
+
+	// 1. 动态新增外部源 (URL 级纳管，Issue #19)
+	item := ExternalSourceItem{
+		Name:        "TestAirport",
+		DisplayName: "测试主力机场",
+		URL:         "https://test.airport.com/clash",
+		Enabled:     true,
+	}
+
+	if err := client.UpsertExternalSource(context.Background(), item); err != nil {
+		t.Fatalf("UpsertExternalSource failed: %v", err)
+	}
+
+	sources := client.GetExternalSources()
+	if len(sources) != 1 || sources[0] != "TestAirport" {
+		t.Fatalf("expected ['TestAirport'], got %v", sources)
+	}
+
+	items := client.GetExternalSourceItems()
+	if len(items) != 1 || items[0].URL != "https://test.airport.com/clash" {
+		t.Fatalf("expected URL 'https://test.airport.com/clash', got %+v", items)
+	}
+
+	// 2. 测试禁用
+	item.Enabled = false
+	if err := client.UpsertExternalSource(context.Background(), item); err != nil {
+		t.Fatalf("UpsertExternalSource disable failed: %v", err)
+	}
+	sources = client.GetExternalSources()
+	if len(sources) != 0 {
+		t.Fatalf("expected 0 active sources when disabled, got %v", sources)
+	}
+
+	// 3. 测试删除
+	if err := client.DeleteExternalSource(context.Background(), "TestAirport", false); err != nil {
+		t.Fatalf("DeleteExternalSource failed: %v", err)
+	}
+	items = client.GetExternalSourceItems()
+	if len(items) != 0 {
+		t.Fatalf("expected 0 items after deletion, got %v", items)
+	}
+}

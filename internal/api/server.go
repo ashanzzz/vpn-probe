@@ -482,53 +482,22 @@ func (s *APIServer) setupRoutes() {
 		return c.JSON(state)
 	})
 
-	// 5.1.7.1 获取当前配置的外部订阅列表与元数据详情 (Issue #18 & #19)
+	// 5.1.7.1 获取当前配置的外部订阅列表与元数据详情 (Issue #18 & #19 全动态外部源)
 	s.app.Get("/api/external/subs", func(c *fiber.Ctx) error {
 		if s.substoreClient == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
 		}
 		sources := s.substoreClient.GetExternalSources()
-
-		type SubDetail struct {
-			Name        string `json:"name"`
-			DisplayName string `json:"display_name"`
-			URL         string `json:"url,omitempty"`
-			SourceType  string `json:"source_type"`
-		}
-
-		details := make([]SubDetail, 0)
-		subItems, _ := s.substoreClient.GetSubscriptions(c.Context())
-		itemMap := make(map[string]substore.SubscriptionItem)
-		for _, item := range subItems {
-			itemMap[item.Name] = item
-		}
-
-		for _, src := range sources {
-			if item, exists := itemMap[src]; exists {
-				details = append(details, SubDetail{
-					Name:        item.Name,
-					DisplayName: item.DisplayName,
-					URL:         item.URL,
-					SourceType:  item.Source,
-				})
-			} else {
-				details = append(details, SubDetail{
-					Name:        src,
-					DisplayName: src,
-					SourceType:  "remote",
-				})
-			}
-		}
-
+		items := s.substoreClient.GetExternalSourceItems()
 		return c.JSON(fiber.Map{
 			"status":  "ok",
 			"count":   len(sources),
 			"sources": sources,
-			"details": details,
+			"details": items,
 		})
 	})
 
-	// 5.1.7.2 动态更新或添加外部订阅列表 (支持直接传入 URL 级外部订阅自动创建, Issue #19)
+	// 5.1.7.2 动态更新或添加外部订阅 (支持直接传入 URL 联动 SubStore 自动创建，Issue #19)
 	s.app.Post("/api/external/subs", func(c *fiber.Ctx) error {
 		if s.substoreClient == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
@@ -545,56 +514,49 @@ func (s *APIServer) setupRoutes() {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 
-		// 格式 A: 传入 URL 级外部订阅，自动在 SubStore 中创建/更新并挂载
-		if req.URL != "" {
-			name := req.Name
-			if name == "" {
-				name = req.DisplayName
+		// 格式 A: 传入 URL 或 Name 进行对象级一键创建/更新 (Issue #19)
+		if req.URL != "" || req.Name != "" {
+			subName := req.Name
+			if subName == "" {
+				subName = req.DisplayName
 			}
-			if name == "" {
-				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "name or display_name is required when url is provided"})
+			if subName == "" {
+				subName = req.Source
+			}
+			if subName == "" {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "name or source is required when url is provided"})
 			}
 			disp := req.DisplayName
 			if disp == "" {
-				disp = name
+				disp = subName
 			}
-
-			if err := s.substoreClient.UpsertRemoteSubscription(c.Context(), name, disp, req.URL); err != nil {
-				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-					"error":   "failed_to_create_substore_remote_sub",
-					"message": err.Error(),
-				})
+			enabled := true
+			if req.Enabled != nil {
+				enabled = *req.Enabled
 			}
-
-			existing := s.substoreClient.GetExternalSources()
-			found := false
-			for _, ex := range existing {
-				if ex == name {
-					found = true
-					break
-				}
+			item := substore.ExternalSourceItem{
+				Name:        subName,
+				DisplayName: disp,
+				URL:         req.URL,
+				Enabled:     enabled,
 			}
-			if !found {
-				existing = append(existing, name)
-				_ = s.substoreClient.SetExternalSources(existing)
+			if err := s.substoreClient.UpsertExternalSource(c.Context(), item); err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 			}
-
 			curr := s.substoreClient.GetCurrentMode()
 			_, _ = s.substoreClient.SetMode(c.Context(), curr)
-
-			customlog.Audit("create_external_remote_sub", c.IP(), name, "success",
-				fmt.Sprintf("Created/Updated remote sub in SubStore and mounted into %s: url=%s", curr, req.URL))
-
+			customlog.Audit("upsert_external_source", c.IP(), subName, "success", fmt.Sprintf("Upserted external sub: %s (url=%s)", subName, req.URL))
 			return c.JSON(fiber.Map{
 				"status":  "ok",
-				"message": fmt.Sprintf("Remote subscription '%s' created in SubStore and mounted to active mode", name),
-				"name":    name,
+				"message": fmt.Sprintf("Remote subscription '%s' created in SubStore and mounted to active mode", subName),
+				"name":    subName,
 				"url":     req.URL,
-				"sources": existing,
+				"item":    item,
+				"sources": s.substoreClient.GetExternalSources(),
 			})
 		}
 
-		// 格式 B: 批量设置或单名追加
+		// 格式 B: 批量设置订阅名字列表 (Issue #18)
 		sources := req.Sources
 		if len(sources) == 0 && req.Source != "" {
 			existing := s.substoreClient.GetExternalSources()
@@ -613,7 +575,7 @@ func (s *APIServer) setupRoutes() {
 		}
 
 		if len(sources) == 0 {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "sources, source, or (name + url) is required"})
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "sources, source, or name+url is required"})
 		}
 
 		if err := s.substoreClient.SetExternalSources(sources); err != nil {
@@ -631,7 +593,7 @@ func (s *APIServer) setupRoutes() {
 		})
 	})
 
-	// 5.1.7.3 删除某个外部订阅 (支持 ?purge=true 物理从 SubStore 清理)
+	// 5.1.7.3 删除某个外部订阅 (支持 purge=true 联动物理删除，Issue #19)
 	s.app.Delete("/api/external/subs/:name", func(c *fiber.Ctx) error {
 		if s.substoreClient == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
@@ -642,33 +604,20 @@ func (s *APIServer) setupRoutes() {
 		}
 
 		purge := c.Query("purge") == "true"
-
-		existing := s.substoreClient.GetExternalSources()
-		var updated []string
-		for _, ex := range existing {
-			if ex != target {
-				updated = append(updated, ex)
-			}
-		}
-
-		if err := s.substoreClient.SetExternalSources(updated); err != nil {
+		if err := s.substoreClient.DeleteExternalSource(c.Context(), target, purge); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
-		}
-
-		// 若指定 purge=true，同时在 SubStore 中物理删除该废弃订阅
-		if purge {
-			_ = s.substoreClient.DeleteItem(c.Context(), "subs", target)
 		}
 
 		curr := s.substoreClient.GetCurrentMode()
 		_, _ = s.substoreClient.SetMode(c.Context(), curr)
 
-		customlog.Audit("delete_external_source", c.IP(), target, "success",
-			fmt.Sprintf("Removed source: %s (purged_from_substore: %v)", target, purge))
+		customlog.Audit("delete_external_source", c.IP(), target, "success", fmt.Sprintf("Removed source: %s (purge=%v)", target, purge))
 		return c.JSON(fiber.Map{
 			"status":                "ok",
-			"sources":               updated,
+			"deleted":               target,
+			"purge":                 purge,
 			"purged_from_substore": purge,
+			"sources":               s.substoreClient.GetExternalSources(),
 		})
 	})
 

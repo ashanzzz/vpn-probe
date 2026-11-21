@@ -8,6 +8,10 @@ import {
   SoftwareInfo,
   BlockedAnalysisResult,
   PortHealResponse,
+  ExternalSubsResponse,
+  ExternalSubDetail,
+  SnapshotStatusResponse,
+  CustomRulesData,
 } from '../types';
 
 const TOKEN_KEY = 'vpn_probe_admin_token';
@@ -253,6 +257,61 @@ export const api = {
   async reloadConfig(): Promise<any> {
     return request('/api/config/reload', {
       method: 'POST',
+    });
+  },
+
+  // 9. 外部商业机场订阅动态纳管 API (PR #20 / Issue #19)
+  async getExternalSubs(): Promise<ExternalSubsResponse> {
+    return request<ExternalSubsResponse>('/api/external/subs');
+  },
+
+  async upsertExternalSub(sub: {
+    name: string;
+    url: string;
+    display_name?: string;
+    enabled?: boolean;
+    auto_mount?: boolean;
+  }): Promise<any> {
+    return request('/api/external/subs', {
+      method: 'POST',
+      body: JSON.stringify(sub),
+    });
+  },
+
+  async deleteExternalSub(name: string, purge: boolean = false): Promise<any> {
+    return request(`/api/external/subs/${encodeURIComponent(name)}?purge=${purge}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // 10. 预烘焙快照极速直出大盘 API (PR #22 / Issue #21)
+  async getSnapshotStatus(): Promise<SnapshotStatusResponse> {
+    return request<SnapshotStatusResponse>('/api/sub/snapshot/status');
+  },
+
+  async warmupSnapshot(fileNames: string[] = ['Q', 'ashan']): Promise<any> {
+    return request('/api/sub/snapshot/warmup', {
+      method: 'POST',
+      body: JSON.stringify({ file_names: fileNames }),
+    });
+  },
+
+  // 11. 自定义分流规则与直连域名 API
+  async getCustomRules(): Promise<CustomRulesData> {
+    return request<CustomRulesData>('/api/rules/custom');
+  },
+
+  async updateCustomRules(rules: CustomRulesData): Promise<any> {
+    return request('/api/rules/custom', {
+      method: 'POST',
+      body: JSON.stringify(rules),
+    });
+  },
+
+  async addDirectDomain(domain: string): Promise<any> {
+    return request('/api/rules/direct-domain', {
+      method: 'POST',
+      body: JSON.stringify({ domain }),
     });
   },
 };

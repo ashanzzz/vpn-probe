@@ -78,7 +78,6 @@ export const SubStoreHub: React.FC = () => {
         api.getCategoriesSummary().catch(() => null),
         api.getCustomGroups().catch(() => null),
       ]);
-      ]);
       if (mInfo) setModeInfo(mInfo);
       if (catData) setCategories(catData);
       if (grpData && grpData.groups) setCustomGroups(grpData.groups);

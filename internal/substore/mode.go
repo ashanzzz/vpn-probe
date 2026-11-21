@@ -26,8 +26,8 @@ const (
 )
 
 var ModeSubscriptions = map[SubStoreMode][]string{
-	ModeExternalAndSelf: {"蜂窝云", "ashan-transit-direct", "ashan-resi-direct", "ashan-chain"},
-	ModeSelfOnly:        {"ashan-transit-direct", "ashan-resi-direct", "ashan-chain"},
+	ModeExternalAndSelf: {"蜂窝云", "ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other"},
+	ModeSelfOnly:        {"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other"},
 	ModeExternalOnly:    {"蜂窝云"},
 }
 
@@ -291,7 +291,7 @@ func (c *Client) DeleteExternalSource(ctx context.Context, name string, purgeRem
 // GetModeSubscriptions 动态根据外部机场列表计算当前模式下的订阅成员
 func (c *Client) GetModeSubscriptions(mode SubStoreMode) []string {
 	extSources := c.GetExternalSources()
-	selfSubs := []string{"ashan-transit-direct", "ashan-resi-direct", "ashan-chain"}
+	selfSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other"}
 
 	switch mode {
 	case ModeSelfOnly:

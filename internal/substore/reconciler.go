@@ -318,7 +318,7 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 			audit.Healthy = false
 			msg := "集合 'ashan-纯净' (标称纯自建VPS) 混入了外部机场订阅 '蜂窝云'，破坏了纯净性"
 			audit.Discrepancies = append(audit.Discrepancies, msg)
-			audit.RecommendedFixes = append(audit.RecommendedFixes, "将 'ashan-纯净' 净化为仅引用自建三层订阅 [\"ashan-transit-direct\", \"ashan-resi-direct\", \"ashan-chain\"]")
+			audit.RecommendedFixes = append(audit.RecommendedFixes, "将 'ashan-纯净' 净化为仅引用自建纯净分组 [\"ashan-transit\", \"ashan-us-resi\", \"ashan-jp-resi\", \"ashan-other\"]")
 		}
 	}
 
@@ -387,13 +387,13 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 		if hasAirport {
 			payload := map[string]any{
 				"name":          "ashan-纯净",
-				"displayName":   "Ashan 纯自建VPS",
-				"subscriptions": []string{"ashan-transit-direct", "ashan-resi-direct", "ashan-chain"},
+				"displayName":   "Ashan 纯自建专线 (全量干净组)",
+				"subscriptions": []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other"},
 			}
 			if err := c.UpdateCollection(ctx, "ashan-纯净", payload); err != nil {
 				return nil, fmt.Errorf("reconcile ashan-纯净: %w", err)
 			}
-			actions = append(actions, "已将集合 'ashan-纯净' 净化为自建三层订阅 [\"ashan-transit-direct\", \"ashan-resi-direct\", \"ashan-chain\"]，彻底剔除机场节点混入")
+			actions = append(actions, "已将集合 'ashan-纯净' 净化为自建纯净分组 [\"ashan-transit\", \"ashan-us-resi\", \"ashan-jp-resi\", \"ashan-other\"]，彻底剔除机场节点混入")
 			logger.Sync("Reconciled collection 'ashan-纯净'")
 		}
 	}

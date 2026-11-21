@@ -431,26 +431,16 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 		logger.Sync("[SUBSTORE] ✅ 'ashan-chain' updated with %d chain nodes", len(payload.ChainNodes))
 	}
 
-	// 4. 确保总集合 ashan-master 存在并包含 3 个订阅
+	// 4. 确保总集合 ashan-master 存在并包含自建分组 (若未设置，默认包含自建五维分组)
+	fiveSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
 	masterPayload := map[string]any{
 		"name":                  "ashan-master",
-		"displayName":           "Ashan 总合集 (线路直连+家宽直连+链式代理)",
-		"subscriptions":         []string{"ashan-transit-direct", "ashan-resi-direct", "ashan-chain"},
+		"displayName":           "Ashan 总合集 (自建五维策略全景)",
+		"subscriptions":         fiveSubs,
 		"ignoreFailedRemoteSub": "quiet",
 	}
 	if err := c.UpdateCollection(ctx, "ashan-master", masterPayload); err != nil {
 		logger.Warnf("[SUBSTORE] Ensure ashan-master collection: %v", err)
-	}
-
-	// 6. 同步更新 ashan-纯净 集合，使其亦涵盖 3 个自建三层订阅
-	purePayload := map[string]any{
-		"name":                  "ashan-纯净",
-		"displayName":           "Ashan 纯自建VPS (全量三层融合)",
-		"subscriptions":         []string{"ashan-transit-direct", "ashan-resi-direct", "ashan-chain"},
-		"ignoreFailedRemoteSub": "quiet",
-	}
-	if err := c.UpdateCollection(ctx, "ashan-纯净", purePayload); err != nil {
-		logger.Warnf("[SUBSTORE] Reconcile ashan-纯净 collection: %v", err)
 	}
 
 	return nil

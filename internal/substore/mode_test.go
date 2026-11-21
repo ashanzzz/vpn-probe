@@ -120,9 +120,9 @@ func TestDynamicExternalSourcesAndModes(t *testing.T) {
 		t.Fatalf("expected ['AirportA', 'AirportB'], got %v", sources)
 	}
 
-	// 3. 测试 ModeSelfOnly: 仅自建 3 层订阅，零外部机场，零 Q
+	// 3. 测试 ModeSelfOnly: 仅自建纯净 4 组订阅，零外部机场，零送中
 	selfSubs := client.GetModeSubscriptions(ModeSelfOnly)
-	expectedSelf := []string{"ashan-transit-direct", "ashan-resi-direct", "ashan-chain"}
+	expectedSelf := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other"}
 	if len(selfSubs) != len(expectedSelf) {
 		t.Fatalf("expected %v, got %v", expectedSelf, selfSubs)
 	}
@@ -138,10 +138,10 @@ func TestDynamicExternalSourcesAndModes(t *testing.T) {
 		t.Fatalf("expected ['AirportA', 'AirportB'], got %v", extSubs)
 	}
 
-	// 5. 测试 ModeExternalAndSelf: 外部机场 + 自建 3 层
+	// 5. 测试 ModeExternalAndSelf: 外部机场 + 自建 4 组
 	allSubs := client.GetModeSubscriptions(ModeExternalAndSelf)
-	if len(allSubs) != 5 {
-		t.Fatalf("expected 5 subs in external+self, got %d: %v", len(allSubs), allSubs)
+	if len(allSubs) != 6 {
+		t.Fatalf("expected 6 subs in external+self, got %d: %v", len(allSubs), allSubs)
 	}
 	// 验证绝对不能含有废弃的 ashan's vps 或递归的 Q
 	for _, s := range allSubs {

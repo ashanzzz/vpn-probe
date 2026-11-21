@@ -219,11 +219,14 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 	}
 
 	base := strings.TrimRight(c.cfg.URL, "/")
-	req, _ := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/api/file/%s", base, fileName), nil)
+	auditCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(auditCtx, "GET", fmt.Sprintf("%s/api/file/%s", base, fileName), nil)
 	c.setAuth(req)
 
 	auditClient := &http.Client{
-		Timeout: 60 * time.Second,
+		Timeout: 120 * time.Second,
 	}
 	resp, err := auditClient.Do(req)
 	if err != nil {

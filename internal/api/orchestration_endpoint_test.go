@@ -194,4 +194,44 @@ func TestOrchestrationEndpoints(t *testing.T) {
 			t.Fatalf("expected 200, got %d", resp.StatusCode)
 		}
 	})
+
+	// 7. 测试显式动态拉线路与解绑 API (满足用户任意线路机拉指定家宽需求)
+	t.Run("BindAndUnbindCustomChainAPI", func(t *testing.T) {
+		bindBody := map[string]string{
+			"transit":     "美西 ACCK 洛杉矶 4837 — VLESS Reality",
+			"residential": "LZ-US-Pavlov-家宽01",
+		}
+		bBytes, _ := json.Marshal(bindBody)
+		req := httptest.NewRequest(http.MethodPost, "/api/orchestration/chains/bind", bytes.NewReader(bBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer admin-token-123")
+		resp, err := server.app.Test(req)
+		if err != nil {
+			t.Fatalf("bind request failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+
+		// 获取列表
+		getReq := httptest.NewRequest(http.MethodGet, "/api/orchestration/chains", nil)
+		getReq.Header.Set("Authorization", "Bearer admin-token-123")
+		getResp, _ := server.app.Test(getReq)
+		if getResp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", getResp.StatusCode)
+		}
+
+		// 解绑
+		unbindBody := map[string]string{
+			"target": "LZ-US-Pavlov-家宽01",
+		}
+		uBytes, _ := json.Marshal(unbindBody)
+		delReq := httptest.NewRequest(http.MethodPost, "/api/orchestration/chains/unbind", bytes.NewReader(uBytes))
+		delReq.Header.Set("Content-Type", "application/json")
+		delReq.Header.Set("Authorization", "Bearer admin-token-123")
+		delResp, _ := server.app.Test(delReq)
+		if delResp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", delResp.StatusCode)
+		}
+	})
 }

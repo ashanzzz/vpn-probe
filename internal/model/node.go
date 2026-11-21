@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 )
 
@@ -112,4 +113,35 @@ type BatchProbeResponse struct {
 	GroupCounts map[Category]int  `json:"group_counts"`
 	SubStoreSynced bool           `json:"substore_synced"`
 	SubStoreMessage string        `json:"substore_message,omitempty"`
+}
+
+// ResolveCountry 通用解析节点的所属国家/地区 ISO 二位大写代码 (如 US, JP, HK, SG, DE)
+// 严禁绑定具体机房名或运营商名 (4837 仅为美区线路机举例，非硬编码标识)，严格依据真实探测出口或规范国别标签
+func ResolveCountry(exitCountry, nodeName string) string {
+	c := strings.ToUpper(strings.TrimSpace(exitCountry))
+	if c != "" && len(c) == 2 {
+		return c
+	}
+
+	upper := strings.ToUpper(nodeName)
+	switch {
+	case strings.Contains(upper, "-US-") || strings.Contains(upper, "美国") || strings.Contains(upper, "美西") || strings.Contains(upper, "美东") || strings.Contains(upper, "USA") || strings.Contains(upper, "UNITED STATES"):
+		return "US"
+	case strings.Contains(upper, "-JP-") || strings.Contains(upper, "日本") || strings.Contains(upper, "东京") || strings.Contains(upper, "大阪") || strings.Contains(upper, "JAPAN"):
+		return "JP"
+	case strings.Contains(upper, "-HK-") || strings.Contains(upper, "香港") || strings.Contains(upper, "HONG KONG"):
+		return "HK"
+	case strings.Contains(upper, "-SG-") || strings.Contains(upper, "新加坡") || strings.Contains(upper, "SINGAPORE"):
+		return "SG"
+	case strings.Contains(upper, "-TW-") || strings.Contains(upper, "台湾") || strings.Contains(upper, "TAIWAN"):
+		return "TW"
+	case strings.Contains(upper, "-KR-") || strings.Contains(upper, "韩国") || strings.Contains(upper, "首尔") || strings.Contains(upper, "KOREA"):
+		return "KR"
+	case strings.Contains(upper, "-DE-") || strings.Contains(upper, "德国") || strings.Contains(upper, "GERMANY") || strings.Contains(upper, "法兰克福"):
+		return "DE"
+	case strings.Contains(upper, "-GB-") || strings.Contains(upper, "-UK-") || strings.Contains(upper, "英国") || strings.Contains(upper, "伦敦"):
+		return "GB"
+	default:
+		return "OTHER"
+	}
 }

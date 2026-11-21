@@ -22,12 +22,12 @@ func TestOrchestratorEvaluationAndQuery(t *testing.T) {
 	}
 
 	// 注入节点状态：
-	// 1. 美西4837 (US, Transit, Clean)
-	sch.nodeStates["美西4837"] = &NodeState{
+	// 1. 美西线路机 (US, Transit, Clean) - 任何线路机，不限4837
+	sch.nodeStates["美西线路机"] = &NodeState{
 		LastResult: &model.NodeProbeResult{
 			ID:          "1",
-			Name:        "美西 ACCK 洛杉矶 4837 — VLESS Reality",
-			OriginalURL: "vless://u1@38.175.222.44:36564#US-LAX-ACCK-4837",
+			Name:        "美西洛杉矶专线线路机 — VLESS Reality",
+			OriginalURL: "vless://u1@38.175.222.44:36564#US-LAX-Relay",
 			ExitCountry: "US",
 			Online:      true,
 			NodeType:    "transit",
@@ -40,7 +40,7 @@ func TestOrchestratorEvaluationAndQuery(t *testing.T) {
 		LastResult: &model.NodeProbeResult{
 			ID:          "2",
 			Name:        "LZ-US-Pavlov-家宽01",
-			OriginalURL: "socks5://u:p@1.2.3.4:1001#LZ-US-家宽01",
+			OriginalURL: "socks5://u:***@1.2.3.4:1001#LZ-US-家宽01",
 			ExitCountry: "US",
 			Online:      true,
 			NodeType:    "residential",
@@ -79,7 +79,7 @@ func TestOrchestratorEvaluationAndQuery(t *testing.T) {
 
 	// 1. 测试原子查询：查询美区线路机
 	usTransits := orc.QueryAtoms(AtomQueryFilter{Country: "US", Kind: "transit", CleanOnly: true})
-	if len(usTransits) != 1 || !strings.Contains(usTransits[0].Name, "4837") {
+	if len(usTransits) != 1 || !strings.Contains(usTransits[0].Name, "美西洛杉矶专线") {
 		t.Fatalf("expected 1 clean US transit, got %v", usTransits)
 	}
 
@@ -139,5 +139,25 @@ func TestOrchestratorEvaluationAndQuery(t *testing.T) {
 	afterDel, _ := LoadCustomGroups()
 	if len(afterDel) != 0 {
 		t.Fatalf("expected 0 groups after delete, got %d", len(afterDel))
+	}
+
+	// 6. 测试显式动态拉线路：指定某台线路机拉某台家宽
+	bind, err := orc.BindExplicitChain("美西洛杉矶专线线路机 — VLESS Reality", "LZ-US-Pavlov-家宽01")
+	if err != nil {
+		t.Fatalf("BindExplicitChain failed: %v", err)
+	}
+	if !strings.Contains(bind.ChainName, "美西洛杉矶专线") || !strings.Contains(bind.ChainName, "LZ-US") {
+		t.Errorf("unexpected chain name: %s", bind.ChainName)
+	}
+
+	// 检查读取显式定制中继列表
+	customChains, err := LoadCustomChains()
+	if err != nil || len(customChains) == 0 {
+		t.Fatalf("expected custom chains loaded, got: %v, err: %v", customChains, err)
+	}
+
+	// 测试解绑
+	if err := orc.UnbindExplicitChain(bind.ID); err != nil {
+		t.Fatalf("UnbindExplicitChain failed: %v", err)
 	}
 }

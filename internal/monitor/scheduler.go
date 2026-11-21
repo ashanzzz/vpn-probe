@@ -776,18 +776,18 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 	}
 
 	// 4. 地域划分：美区 (US) 与 日区 (JP) 以及 其他 (Other)
-	// 4.1 线路机归类
+	// 4.1 线路机归类 (基于通用国别判定，绝不绑定具体运营商/机房)
 	for _, t := range transits {
 		if !t.Online || leakURLs[t.OriginalURL] || !activeTransitSet[t.OriginalURL] {
 			continue
 		}
-		country := strings.ToUpper(t.ExitCountry)
-		upperName := strings.ToUpper(t.Name)
-		if country == "US" || strings.Contains(upperName, "4837") || strings.Contains(upperName, "LAX") || strings.Contains(upperName, "ACCK") || strings.Contains(upperName, "美国") {
+		country := model.ResolveCountry(t.ExitCountry, t.Name)
+		switch country {
+		case "US":
 			payload.USResiNodes = append(payload.USResiNodes, t.OriginalURL)
-		} else if country == "JP" || strings.Contains(upperName, "JPSB") || strings.Contains(upperName, "SOFTBANK") || strings.Contains(upperName, "IIJ") || strings.Contains(upperName, "东京") || strings.Contains(upperName, "日本") || strings.Contains(t.Name, "软银") {
+		case "JP":
 			payload.JPResiNodes = append(payload.JPResiNodes, t.OriginalURL)
-		} else {
+		default:
 			payload.OtherNodes = append(payload.OtherNodes, t.OriginalURL)
 		}
 	}
@@ -798,25 +798,26 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 		if !r.Online || leakURLs[r.OriginalURL] {
 			continue
 		}
-		country := strings.ToUpper(r.ExitCountry)
-		upperName := strings.ToUpper(r.Name)
-		if country == "US" || strings.Contains(upperName, "-US-") || strings.Contains(upperName, "美国") {
+		country := model.ResolveCountry(r.ExitCountry, r.Name)
+		switch country {
+		case "US":
 			payload.USResiNodes = append(payload.USResiNodes, r.OriginalURL)
-		} else if country == "JP" || strings.Contains(upperName, "-JP-") || strings.Contains(upperName, "日本") {
+		case "JP":
 			payload.JPResiNodes = append(payload.JPResiNodes, r.OriginalURL)
-		} else {
+		default:
 			payload.OtherNodes = append(payload.OtherNodes, r.OriginalURL)
 		}
 	}
 
 	// 4.3 链式中继归类
 	for _, ch := range chains {
-		upper := strings.ToUpper(ch)
-		if strings.Contains(upper, "US") || strings.Contains(ch, "美西") || strings.Contains(ch, "美国") {
+		country := model.ResolveCountry("", ch)
+		switch country {
+		case "US":
 			payload.USResiNodes = append(payload.USResiNodes, ch)
-		} else if strings.Contains(upper, "JP") || strings.Contains(ch, "东京") || strings.Contains(ch, "软银") || strings.Contains(ch, "IIJ") || strings.Contains(ch, "日本") {
+		case "JP":
 			payload.JPResiNodes = append(payload.JPResiNodes, ch)
-		} else {
+		default:
 			payload.OtherNodes = append(payload.OtherNodes, ch)
 		}
 	}

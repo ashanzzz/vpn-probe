@@ -1081,6 +1081,9 @@ func (s *APIServer) setupRoutes() {
 	s.app.Post("/api/orchestration/groups/sync", s.handleSyncCustomGroups)
 	s.app.Post("/api/orchestration/chains/rebuild", s.handleRebuildChains)
 	s.app.Post("/api/substore/sync-fivegroups", s.handleSyncFiveGroups)
+	s.app.Get("/api/orchestration/chains", s.handleGetCustomChains)
+	s.app.Post("/api/orchestration/chains/bind", s.handleBindCustomChain)
+	s.app.Post("/api/orchestration/chains/unbind", s.handleUnbindCustomChain)
 
 	// 6. 挂载远程 AI 专用的 MCP over SSE 传输接口
 	if s.mcpServer != nil && s.mcpServer.GetServer() != nil {
@@ -1898,5 +1901,85 @@ func (s *APIServer) handleSyncFiveGroups(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"status":  "ok",
 		"message": "five-group subscriptions synced successfully",
+	})
+}
+
+// handleGetCustomChains 获取当前所有显式自定义的线路拉家宽绑定
+func (s *APIServer) handleGetCustomChains(c *fiber.Ctx) error {
+	chains, err := monitor.LoadCustomChains()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{
+		"status": "ok",
+		"count":  len(chains),
+		"chains": chains,
+	})
+}
+
+// handleBindCustomChain 显式指定让某台线路机拉某台家宽 (满足用户“API让线路机拉家宽”需求)
+func (s *APIServer) handleBindCustomChain(c *fiber.Ctx) error {
+	if s.orchestrator == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "orchestrator not initialized"})
+	}
+	var req struct {
+		TransitNode     string `json:"transit"`
+		ResidentialNode string `json:"residential"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+	if req.TransitNode == "" || req.ResidentialNode == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "both 'transit' and 'residential' node names are required"})
+	}
+
+	bind, err := s.orchestrator.BindExplicitChain(req.TransitNode, req.ResidentialNode)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	if s.scheduler != nil {
+		_ = s.scheduler.SyncFiveGroupsNow(c.Context())
+	}
+	if s.snapshotMgr != nil {
+		s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q"})
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"message": fmt.Sprintf("chain bound successfully: %s ➔ %s", bind.TransitName, bind.ResidentialName),
+		"bind":    bind,
+	})
+}
+
+// handleUnbindCustomChain 移除显式中继绑定 (满足“成功后删除旧家宽/旧中继”需求)
+func (s *APIServer) handleUnbindCustomChain(c *fiber.Ctx) error {
+	if s.orchestrator == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "orchestrator not initialized"})
+	}
+	var req struct {
+		Target string `json:"target"`
+	}
+	_ = c.BodyParser(&req)
+	target := req.Target
+	if target == "" {
+		target = c.Query("target")
+	}
+	if target == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "'target' (chain id, chain name or residential name) is required"})
+	}
+
+	if err := s.orchestrator.UnbindExplicitChain(target); err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	if s.scheduler != nil {
+		_ = s.scheduler.SyncFiveGroupsNow(c.Context())
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"message": fmt.Sprintf("custom chain unbind succeeded for target: %s", target),
+		"target":  target,
 	})
 }

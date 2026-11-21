@@ -159,7 +159,7 @@ export const SubStoreHub: React.FC = () => {
     setActionLoading('rebuild-chains');
     try {
       const res = await api.rebuildFullMeshChains();
-      setStatusMsg({ type: 'success', text: `方案B：${res.message || '4837全量网状池化中继重建并同步完成'}` });
+      setStatusMsg({ type: 'success', text: `方案B：${res.message || '线路机全量区域网状池化中继重建并同步完成'}` });
       fetchHubData();
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err.message || '重建中继失败' });
@@ -746,10 +746,10 @@ export const SubStoreHub: React.FC = () => {
               <div className="space-y-1">
                 <div className="text-xs font-bold text-slate-800 flex items-center space-x-2">
                   <Zap className="w-4 h-4 text-amber-500" />
-                  <span>方案B：美西4837全量预热池化中继 & 自建五维策略</span>
+                  <span>方案B：线路机全网状池化中继 & 自建五维策略</span>
                 </div>
                 <div className="text-2xs text-slate-500">
-                  4837常驻预热中继至所有美国家宽，毫秒秒切；出口送中强隔离；原子 API 灵活组合与动态规则持久化。
+                  各区域线路专线常驻预热中继至对应家宽，毫秒秒切；出口送中强隔离；原子 API 灵活组合与动态规则持久化。
                 </div>
               </div>
               <div className="flex items-center space-x-2">
@@ -759,7 +759,7 @@ export const SubStoreHub: React.FC = () => {
                   className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-bold flex items-center space-x-1.5 shadow-2xs transition disabled:opacity-50"
                 >
                   {actionLoading === 'rebuild-chains' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />}
-                  <span>重建4837全网状池</span>
+                  <span>重建线路机全网状池</span>
                 </button>
                 <button
                   onClick={handleSyncFiveGroups}
@@ -887,7 +887,7 @@ export const SubStoreHub: React.FC = () => {
                       onChange={(e) => setEvalFilter({ ...evalFilter, include_chain: e.target.checked })}
                       className="rounded border-slate-300 text-blue-600"
                     />
-                    <span>包含链式中继 (4837拉家宽)</span>
+                    <span>包含链式中继 (线路机拉家宽)</span>
                   </label>
                   <label className="flex items-center space-x-1.5 text-xs text-slate-700 cursor-pointer">
                     <input

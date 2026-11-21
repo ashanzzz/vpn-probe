@@ -375,4 +375,22 @@ export const api = {
       method: 'POST',
     });
   },
+
+  async getCustomChains(): Promise<{ status: string; count: number; chains: any[] }> {
+    return request('/api/orchestration/chains');
+  },
+
+  async bindCustomChain(transit: string, residential: string): Promise<any> {
+    return request('/api/orchestration/chains/bind', {
+      method: 'POST',
+      body: JSON.stringify({ transit, residential }),
+    });
+  },
+
+  async unbindCustomChain(target: string): Promise<any> {
+    return request('/api/orchestration/chains/unbind', {
+      method: 'POST',
+      body: JSON.stringify({ target }),
+    });
+  },
 };

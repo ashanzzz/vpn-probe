@@ -19,6 +19,8 @@ import (
 var (
 	customGroupsFile = filepath.Join("data", "custom_groups.json")
 	customGroupsMu   sync.RWMutex
+	customChainsFile = filepath.Join("data", "custom_chains.json")
+	customChainsMu   sync.RWMutex
 )
 
 // SetCustomGroupsFileForTest 测试文件重定向钩子
@@ -89,15 +91,7 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 		if !activeSet[t.OriginalURL] {
 			continue
 		}
-		country := strings.ToUpper(t.ExitCountry)
-		if country == "" {
-			upperName := strings.ToUpper(t.Name)
-			if strings.Contains(upperName, "4837") || strings.Contains(upperName, "LAX") || strings.Contains(upperName, "ACCK") {
-				country = "US"
-			} else if strings.Contains(upperName, "JPSB") || strings.Contains(upperName, "SOFTBANK") || strings.Contains(upperName, "IIJ") || strings.Contains(t.Name, "软银") {
-				country = "JP"
-			}
-		}
+		country := model.ResolveCountry(t.ExitCountry, t.Name)
 		atoms = append(atoms, model.AtomNode{
 			ID:        t.ID,
 			Name:      t.Name,
@@ -115,15 +109,7 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 	// 2. 家宽机原子 (直连)
 	uniqueResis := deduplicateNodeResults(resis)
 	for _, r := range uniqueResis {
-		country := strings.ToUpper(r.ExitCountry)
-		if country == "" {
-			upperName := strings.ToUpper(r.Name)
-			if strings.Contains(upperName, "-US-") || strings.Contains(upperName, "美国") {
-				country = "US"
-			} else if strings.Contains(upperName, "-JP-") || strings.Contains(upperName, "日本") {
-				country = "JP"
-			}
-		}
+		country := model.ResolveCountry(r.ExitCountry, r.Name)
 		atoms = append(atoms, model.AtomNode{
 			ID:        r.ID,
 			Name:      r.Name,
@@ -138,18 +124,18 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 		})
 	}
 
-	// 3. 线路拉家宽链式中继原子 (方案B)
+	// 3. 线路拉家宽链式中继原子 (方案B通用区域池化 + 显式定制绑定)
 	if o.scheduler.healer != nil {
 		chains := o.scheduler.healer.BuildFullMeshRegionalChains(transits, uniqueResis)
-		for _, ch := range chains {
-			country := "OTHER"
-			upper := strings.ToUpper(ch)
-			if strings.Contains(upper, "US") || strings.Contains(ch, "美西") || strings.Contains(ch, "美国") {
-				country = "US"
-			} else if strings.Contains(upper, "JP") || strings.Contains(ch, "东京") || strings.Contains(ch, "软银") || strings.Contains(ch, "IIJ") || strings.Contains(ch, "日本") {
-				country = "JP"
-			}
 
+		// 合并用户显式定制的动态链式绑定
+		customChains, _ := LoadCustomChains()
+		for _, cc := range customChains {
+			chains = append(chains, cc.ChainURL)
+		}
+
+		for _, ch := range chains {
+			country := model.ResolveCountry("", ch)
 			chainName := ch
 			if hashIdx := strings.Index(ch, "#"); hashIdx != -1 {
 				chainName = ch[hashIdx+1:]
@@ -428,5 +414,161 @@ func (o *Orchestrator) SyncAllCustomGroups(ctx context.Context) error {
 		logger.Sync("[CUSTOM-GROUP] ✅ Synced dynamic custom group '%s' (%s) with %d nodes", g.Name, g.DisplayName, len(nodes))
 	}
 
+	return nil
+}
+
+// CustomChainBind 显式自定义的中继绑定 (用户通过 API 指定某台线路机拉某台家宽)
+type CustomChainBind struct {
+	ID              string `json:"id"`
+	TransitName     string `json:"transit_name"`
+	ResidentialName string `json:"residential_name"`
+	ChainName       string `json:"chain_name"`
+	ChainURL        string `json:"chain_url"`
+	CreatedAt       string `json:"created_at"`
+}
+
+// LoadCustomChains 读取所有自定义显式链式绑定
+func LoadCustomChains() ([]CustomChainBind, error) {
+	customChainsMu.RLock()
+	defer customChainsMu.RUnlock()
+
+	if _, err := os.Stat(customChainsFile); os.IsNotExist(err) {
+		return []CustomChainBind{}, nil
+	}
+
+	data, err := os.ReadFile(customChainsFile)
+	if err != nil {
+		return nil, err
+	}
+
+	var chains []CustomChainBind
+	if err := json.Unmarshal(data, &chains); err != nil {
+		return []CustomChainBind{}, nil
+	}
+
+	return chains, nil
+}
+
+// BindExplicitChain 显式创建一条“指定线路机拉指定家宽机”的定制连接 (满足用户 API 灵活拉线路需求)
+func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomChainBind, error) {
+	if o.scheduler == nil {
+		return CustomChainBind{}, fmt.Errorf("scheduler not available")
+	}
+
+	o.scheduler.mu.RLock()
+	var transitNode *model.NodeProbeResult
+	var resiNode *model.NodeProbeResult
+
+	for _, s := range o.scheduler.nodeStates {
+		if s.LastResult == nil {
+			continue
+		}
+		res := s.LastResult
+		if strings.EqualFold(res.Name, transitName) || strings.EqualFold(res.ID, transitName) {
+			transitNode = res
+		}
+		if strings.EqualFold(res.Name, resiName) || strings.EqualFold(res.ID, resiName) {
+			resiNode = res
+		}
+	}
+	o.scheduler.mu.RUnlock()
+
+	if transitNode == nil {
+		return CustomChainBind{}, fmt.Errorf("transit node '%s' not found or offline", transitName)
+	}
+	if resiNode == nil {
+		return CustomChainBind{}, fmt.Errorf("residential node '%s' not found", resiName)
+	}
+
+	origURL := resiNode.OriginalURL
+	hashIdx := strings.Index(origURL, "#")
+	base := origURL
+	resiLabel := resiNode.Name
+	if hashIdx != -1 {
+		base = origURL[:hashIdx]
+		resiLabel = origURL[hashIdx+1:]
+	}
+
+	separator := "?"
+	if strings.Contains(base, "?") {
+		separator = "&"
+	}
+
+	chainName := fmt.Sprintf("链式|%s ➔ %s", transitNode.Name, resiLabel)
+	chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(transitNode.Name), url.QueryEscape(chainName))
+
+	bind := CustomChainBind{
+		ID:              fmt.Sprintf("bind-%d", time.Now().UnixNano()),
+		TransitName:     transitNode.Name,
+		ResidentialName: resiNode.Name,
+		ChainName:       chainName,
+		ChainURL:        chainURL,
+		CreatedAt:       time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	customChainsMu.Lock()
+	defer customChainsMu.Unlock()
+
+	chains := []CustomChainBind{}
+	if data, err := os.ReadFile(customChainsFile); err == nil {
+		_ = json.Unmarshal(data, &chains)
+	}
+
+	// 存在相同绑定则替换，否则追加
+	updated := false
+	for i, c := range chains {
+		if c.TransitName == bind.TransitName && c.ResidentialName == bind.ResidentialName {
+			chains[i] = bind
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		chains = append(chains, bind)
+	}
+
+	_ = os.MkdirAll(filepath.Dir(customChainsFile), 0755)
+	bytes, err := json.MarshalIndent(chains, "", "  ")
+	if err != nil {
+		return bind, err
+	}
+	_ = os.WriteFile(customChainsFile, bytes, 0644)
+
+	logger.Sync("[CHAIN-BIND] 🔗 Custom chain bound: %s ➔ %s (URL: %s)", transitNode.Name, resiNode.Name, chainName)
+	return bind, nil
+}
+
+// UnbindExplicitChain 移除某条指定的显式中继或指定家宽的旧连接
+func (o *Orchestrator) UnbindExplicitChain(target string) error {
+	customChainsMu.Lock()
+	defer customChainsMu.Unlock()
+
+	chains := []CustomChainBind{}
+	if data, err := os.ReadFile(customChainsFile); err == nil {
+		_ = json.Unmarshal(data, &chains)
+	}
+
+	var newChains []CustomChainBind
+	found := false
+	for _, c := range chains {
+		if c.ID == target || c.ChainName == target || c.ResidentialName == target || strings.Contains(c.ChainName, target) {
+			found = true
+			continue
+		}
+		newChains = append(newChains, c)
+	}
+
+	if !found {
+		return fmt.Errorf("custom chain target '%s' not found", target)
+	}
+
+	_ = os.MkdirAll(filepath.Dir(customChainsFile), 0755)
+	bytes, err := json.MarshalIndent(newChains, "", "  ")
+	if err != nil {
+		return err
+	}
+	_ = os.WriteFile(customChainsFile, bytes, 0644)
+
+	logger.Sync("[CHAIN-UNBIND] ✂️ Custom chain removed for target: %s", target)
 	return nil
 }

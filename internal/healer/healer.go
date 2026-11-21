@@ -108,70 +108,41 @@ func (h *Healer) HealIPBlocked(res *model.NodeProbeResult, healthyRelays []*mode
 	return newURL
 }
 
-// BuildSmartChains 根据地理亲和性将自建线路机与懒猫云家宽组装为智能链式代理
+// BuildSmartChains 根据地理亲和性将自建线路机与懒猫云家宽组装为智能链式代理 (通用国别亲和，无任何机房/运营商硬编码)
 func (h *Healer) BuildSmartChains(transitNodes []*model.NodeProbeResult, resiNodes []*model.NodeProbeResult) []string {
 	var chains []string
 	if len(resiNodes) == 0 || len(transitNodes) == 0 {
 		return chains
 	}
 
-	// 定位可用健康线路机
-	var jpsbRelay, iijRelay, laxRelay *model.NodeProbeResult
+	// 1. 按国别汇聚所有活跃线路机
+	regionalTransits := make(map[string][]*model.NodeProbeResult)
+	var activeTransits []*model.NodeProbeResult
+
 	for _, t := range transitNodes {
 		if !t.Online {
 			continue
 		}
-		upper := strings.ToUpper(t.Name)
-		if strings.Contains(upper, "JPSB") || strings.Contains(upper, "SOFTBANK") || strings.Contains(t.Name, "软银") {
-			jpsbRelay = t
-		} else if strings.Contains(upper, "IIJ") {
-			iijRelay = t
-		} else if strings.Contains(upper, "4837") || strings.Contains(upper, "LAX") || strings.Contains(upper, "ACCK") {
-			laxRelay = t
+		if strings.Contains(t.Name, "CF-WS") || strings.Contains(t.Name, "救活") || strings.Contains(t.Name, "Standby") {
+			continue
 		}
+		c := model.ResolveCountry(t.ExitCountry, t.Name)
+		regionalTransits[c] = append(regionalTransits[c], t)
+		activeTransits = append(activeTransits, t)
 	}
 
-	// 兜底中继
-	var defaultRelay *model.NodeProbeResult
-	if jpsbRelay != nil {
-		defaultRelay = jpsbRelay
-	} else if laxRelay != nil {
-		defaultRelay = laxRelay
-	} else if iijRelay != nil {
-		defaultRelay = iijRelay
-	} else if len(transitNodes) > 0 {
-		defaultRelay = transitNodes[0]
-	}
-
-	if defaultRelay == nil {
+	if len(activeTransits) == 0 {
 		return chains
 	}
+
+	defaultRelay := activeTransits[0]
 
 	for _, r := range resiNodes {
 		var pairedRelay *model.NodeProbeResult
 
-		// 判断家宽地域
-		upperName := strings.ToUpper(r.Name)
-		if strings.Contains(upperName, "-JP-") || strings.Contains(upperName, "-KR-") ||
-			strings.Contains(upperName, "-TW-") || strings.Contains(upperName, "-SG-") ||
-			strings.Contains(upperName, "-HK-") {
-			// 亚太/日本 -> 首选 JPSB4 (次选 IIJ, 兜底 LAX)
-			if jpsbRelay != nil {
-				pairedRelay = jpsbRelay
-			} else if iijRelay != nil {
-				pairedRelay = iijRelay
-			} else {
-				pairedRelay = laxRelay
-			}
-		} else {
-			// 美洲/其他 -> 首选 4837 (次选 JPSB)
-			if laxRelay != nil {
-				pairedRelay = laxRelay
-			} else if jpsbRelay != nil {
-				pairedRelay = jpsbRelay
-			} else {
-				pairedRelay = iijRelay
-			}
+		resiCountry := model.ResolveCountry(r.ExitCountry, r.Name)
+		if candidates := regionalTransits[resiCountry]; len(candidates) > 0 {
+			pairedRelay = candidates[0]
 		}
 
 		if pairedRelay == nil {
@@ -202,43 +173,33 @@ func (h *Healer) BuildSmartChains(transitNodes []*model.NodeProbeResult, resiNod
 	return chains
 }
 
-// BuildFullMeshRegionalChains 方案B：全量区域网状池化中继 (美西4837全量挂载所有美国家宽，日本线路全量挂载日本家宽)
+// BuildFullMeshRegionalChains 方案B：通用区域全网状池化中继 (所有区域线路机全量挂载对应区域家宽机，无机房硬编码)
 func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResult, resiNodes []*model.NodeProbeResult) []string {
 	var chains []string
 	if len(resiNodes) == 0 || len(transitNodes) == 0 {
 		return chains
 	}
 
-	// 1. 分类提取健康的区域线路机
-	var usTransits []*model.NodeProbeResult
-	var jpTransits []*model.NodeProbeResult
-	var defaultTransit *model.NodeProbeResult
+	// 1. 按国别提取所有健康的线路机 (忽略静默待命的救活节点)
+	regionalTransits := make(map[string][]*model.NodeProbeResult)
+	var activeTransits []*model.NodeProbeResult
 
 	for _, t := range transitNodes {
 		if !t.Online {
 			continue
 		}
-		// 忽略处于静默待命的 CF WS 救活节点
-		if strings.Contains(t.Name, "CF-WS") || strings.Contains(t.Name, "救活") {
+		// 忽略处于静默待命的救活节点
+		if strings.Contains(t.Name, "CF-WS") || strings.Contains(t.Name, "救活") || strings.Contains(t.Name, "Standby") {
 			continue
 		}
 
-		upper := strings.ToUpper(t.Name)
-		country := strings.ToUpper(t.ExitCountry)
-		if country == "US" || strings.Contains(upper, "4837") || strings.Contains(upper, "LAX") || strings.Contains(upper, "ACCK") {
-			usTransits = append(usTransits, t)
-		} else if country == "JP" || strings.Contains(upper, "JPSB") || strings.Contains(upper, "SOFTBANK") || strings.Contains(upper, "IIJ") || strings.Contains(t.Name, "软银") {
-			jpTransits = append(jpTransits, t)
-		}
-
-		if defaultTransit == nil {
-			defaultTransit = t
-		}
+		c := model.ResolveCountry(t.ExitCountry, t.Name)
+		regionalTransits[c] = append(regionalTransits[c], t)
+		activeTransits = append(activeTransits, t)
 	}
 
-	// 兜底保护
-	if defaultTransit == nil && len(transitNodes) > 0 {
-		defaultTransit = transitNodes[0]
+	if len(activeTransits) == 0 {
+		return chains
 	}
 
 	// 2. 遍历家宽，进行全量区域池化配对
@@ -248,18 +209,11 @@ func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResu
 			continue
 		}
 
-		upperName := strings.ToUpper(r.Name)
-		country := strings.ToUpper(r.ExitCountry)
-		var targetTransits []*model.NodeProbeResult
+		resiCountry := model.ResolveCountry(r.ExitCountry, r.Name)
+		targetTransits := regionalTransits[resiCountry]
 
-		if country == "US" || strings.Contains(upperName, "-US-") || strings.Contains(upperName, "美国") {
-			targetTransits = usTransits
-		} else if country == "JP" || strings.Contains(upperName, "-JP-") || strings.Contains(upperName, "日本") {
-			targetTransits = jpTransits
-		}
-
-		if len(targetTransits) == 0 && defaultTransit != nil {
-			targetTransits = []*model.NodeProbeResult{defaultTransit}
+		if len(targetTransits) == 0 {
+			targetTransits = []*model.NodeProbeResult{activeTransits[0]}
 		}
 
 		origURL := r.OriginalURL

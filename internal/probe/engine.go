@@ -295,5 +295,5 @@ func (e *Engine) SpeedTestOne(ctx context.Context, link string, isStream bool, d
 	if isStream {
 		return speedtest.TestStream30S(sandboxCtx, inst.Port, "", durationSec, latency)
 	}
-	return speedtest.TestVPS30M(sandboxCtx, inst.Port, "", latency)
+	return speedtest.TestVPS10M(sandboxCtx, inst.Port, "", latency)
 }

@@ -120,16 +120,16 @@ export const App: React.FC = () => {
     }
   };
 
-  // Trigger Manual Custom 30MB Speedtest
+  // Trigger Manual Custom 10MB Speedtest Queue
   const handleTriggerSpeedTest = async () => {
     setIsSpeedTesting(true);
     try {
       setSpeedTestCount((prev) => prev + 1);
       setLastSpeedTestTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-      await api.runSpeedTest(false, 30);
+      await api.runSpeedTest(false, 15);
       await fetchStatus();
     } catch (err: any) {
-      alert(`30MB 吞吐量测速失败: ${err.message}`);
+      alert(`10MB 吞吐量平滑测速失败: ${err.message}`);
     } finally {
       setIsSpeedTesting(false);
     }
@@ -156,13 +156,13 @@ export const App: React.FC = () => {
     }
   };
 
-  // Speedtest Single Node (Custom 30M)
+  // Speedtest Single Node (Custom 10M)
   const handleSpeedTestSingleNode = async (node: NodeProbeResult) => {
     try {
-      await api.runSpeedTest(false, 20);
+      await api.runSpeedTest(false, 15);
       await fetchStatus();
     } catch (err: any) {
-      alert(`单节点测速失败: ${err.message}`);
+      alert(`单节点 10M 测速失败: ${err.message}`);
     }
   };
 

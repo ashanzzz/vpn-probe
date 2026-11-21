@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	DefaultVPS10MURL    = "http://45.192.242.72:28745/s/default/speedtest-10m.bin"
+	DefaultFallback10M  = "https://speed.cloudflare.com/__down?bytes=10485760"
 	DefaultVPS30MURL    = "http://45.192.242.72:28745/s/default/speedtest-30m.bin"
 	DefaultFallback30M  = "https://speed.cloudflare.com/__down?bytes=31457280"
 	DefaultStreamURL    = "https://speed.cloudflare.com/__down?bytes=104857600"
@@ -46,6 +48,90 @@ func MakeProxyHTTPClient(port int, timeout time.Duration) (*http.Client, error) 
 		Transport: transport,
 		Timeout:   timeout,
 	}, nil
+}
+
+// TestVPS10M 针对 VPS 自建 10MB 真实测试文件进行平滑低风控吞吐量测速
+func TestVPS10M(ctx context.Context, port int, targetURL string, latencyMs int) (*model.SpeedResult, error) {
+	if targetURL == "" {
+		targetURL = DefaultVPS10MURL
+	}
+
+	client, err := MakeProxyHTTPClient(port, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		if targetURL == DefaultVPS10MURL {
+			logger.Warnf("[SPEED] VPS 10M endpoint failed (%v), falling back to Cloudflare 10M stream...", err)
+			return TestVPS10M(ctx, port, DefaultFallback10M, latencyMs)
+		}
+		return nil, fmt.Errorf("http get failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
+
+	ttfb := int(time.Since(start).Milliseconds())
+
+	buf := make([]byte, 64*1024)
+	var totalBytes int64
+	firstByteTime := time.Now()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			totalBytes += int64(n)
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("read body: %w", rerr)
+		}
+	}
+
+	downloadDur := time.Since(firstByteTime).Seconds()
+	if downloadDur < 0.05 {
+		downloadDur = 0.05
+	}
+
+	speedMBps := (float64(totalBytes) / (1024 * 1024)) / downloadDur
+	speedMbps := speedMBps * 8.0
+
+	res := &model.SpeedResult{
+		Method:      "vps_10m",
+		TestedAt:    time.Now(),
+		DurationSec: math.Round(downloadDur*100) / 100,
+		TotalBytes:  totalBytes,
+		SpeedMBps:   math.Round(speedMBps*100) / 100,
+		SpeedMbps:   math.Round(speedMbps*100) / 100,
+		AvgMbps:     math.Round(speedMbps*100) / 100,
+		PeakMbps:    math.Round(speedMbps*100) / 100,
+		TTFBMs:      ttfb,
+	}
+
+	res.Score = CalculateScore(res, latencyMs, true)
+	logger.Infof("[SPEED] VPS 10MB Test finished: %.2f MB in %.2fs -> %.2f MB/s (%.2f Mbps), TTFB=%dms, Score=%.1f",
+		float64(totalBytes)/(1024*1024), downloadDur, res.SpeedMBps, res.SpeedMbps, ttfb, res.Score)
+
+	return res, nil
 }
 
 // TestVPS30M 针对 VPS 自建 30MB 真实测试文件进行无风控吞吐量测速

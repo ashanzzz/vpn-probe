@@ -1,5 +1,7 @@
 export type FaultType = 'PORT_BLOCKED' | 'SERVER_BLOCKED' | 'MACHINE_DOWN' | 'HEALTHY' | 'PROTOCOL_MISMATCH' | 'UNKNOWN';
 
+export type NodeType = 'transit' | 'residential' | 'cf_ws' | 'chain';
+
 export interface SplitResult {
   chatgpt?: string;
   claude?: string;
@@ -23,6 +25,18 @@ export interface NodeDiagnostic {
   cf_loc?: string;
 }
 
+export interface SpeedTestHistoryItem {
+  id: string;
+  tested_at: string;
+  type: 'peak' | 'idle' | 'manual'; // 高峰期 | 闲时 | 手工单测
+  speed_mb_s: number;
+  speed_mbps: number;
+  ttfb_ms: number;
+  latency_ms: number;
+  relay_name?: string;
+  file_size_mb: number; // 10MB
+}
+
 export interface SpeedResult {
   bandwidth_mbps: number;
   bandwidth_mb_s: number;
@@ -31,6 +45,23 @@ export interface SpeedResult {
   bytes_transferred: number;
   speed_rank?: number;
   tested_at?: string;
+  method?: string; // 'vps_10m' | 'vps_30m'
+}
+
+export interface ChainInfo {
+  relay_node_name: string;
+  relay_protocol: string;
+  relay_region: string;
+  target_resi_name: string;
+  target_resi_ip: string;
+  target_region: string;
+  is_failover_relay: boolean;
+  failover_reason?: string;
+  direct_latency_ms: number;
+  optimized_latency_ms: number;
+  latency_gain_pct: number;
+  direct_speed_mb_s?: number;
+  optimized_speed_mb_s?: number;
 }
 
 export interface NodeProbeResult {
@@ -44,11 +75,17 @@ export interface NodeProbeResult {
   category: string;
   original_url: string;
   is_self?: boolean;
+  node_type?: NodeType;
+  host_id?: string; // e.g. "US-LAX-ACCK-4837", "JP-Tokyo-IIJ", "JP-Tokyo-Softbank"
+  is_rescue?: boolean;
+  rescue_status?: 'standby' | 'active'; // CF救活待命热备 vs 阻断激活接管
+  chain_info?: ChainInfo;
   split?: SplitResult;
   diagnostic?: NodeDiagnostic;
   speed_result?: SpeedResult;
   tested_at?: string;
   sandbox_logs?: string[];
+  speed_history?: SpeedTestHistoryItem[];
 }
 
 export interface MonitoredNodeState {
@@ -56,6 +93,7 @@ export interface MonitoredNodeState {
     name: string;
     url: string;
     is_self: boolean;
+    node_type?: NodeType;
   };
   last_result: NodeProbeResult | null;
   last_checked: string;
@@ -64,12 +102,42 @@ export interface MonitoredNodeState {
 
 export type MonitorStatusMap = Record<string, MonitoredNodeState>;
 
+// 线路机主机聚合组模型 (美西4837 / 东京IIJ / 东京软银)
+export interface TransitHostGroup {
+  host_id: string;
+  host_name: string;
+  region: string;
+  region_flag: string;
+  ip: string;
+  status: 'healthy' | 'china' | 'port_blocked' | 'all_blocked';
+  status_label: string;
+  primary_reality: NodeProbeResult; // 仅采用 VLESS Reality (淘汰 SS2022)
+  rescue_cf_ws?: NodeProbeResult;   // CF-WS 443 应急救活节点
+  is_rescue_active: boolean;        // 直连阻断时自动点亮为 true
+}
+
+// 家宽机直连与链式优化对比模型
+export interface ResidentialPairItem {
+  id: string;
+  name: string;
+  region: string;
+  region_flag: string;
+  target_ip: string;
+  direct_node: NodeProbeResult;
+  chain_node?: NodeProbeResult;
+  assigned_relay_name: string;      // 挂载的线路机 (美拉美, 日拉日, 富余匀配)
+  is_failover_relay: boolean;       // 是否因线路机故障触发容灾接力
+  failover_notice?: string;
+  speed_history?: SpeedTestHistoryItem[];
+}
+
 export interface DailyScheduleQuota {
   speedtest_count: number;
-  speedtest_max: number;
+  speedtest_max: number; // 2 次
   speedtest_last: string | null;
+  speedtest_next_slot?: 'peak' | 'idle'; // 当前处于高峰期还是闲时
   split_count: number;
-  split_max: number;
+  split_max: number;     // 1 次
   split_last: string | null;
 }
 
@@ -118,16 +186,6 @@ export interface SubStoreManifest {
   scripts: SubStoreScriptInfo[];
 }
 
-export interface VPSInstance {
-  id: string;
-  name: string;
-  ip: string;
-  ssh_port: number;
-  ssh_user: string;
-  status: string;
-  region: string;
-}
-
 export interface SoftwareInfo {
   instance_id: string;
   instance_name: string;
@@ -169,14 +227,4 @@ export interface PortHealResponse {
   substore_synced: boolean;
   config_synced: boolean;
   message: string;
-}
-
-export interface AuditLogItem {
-  timestamp: string;
-  level: string;
-  action: string;
-  ip: string;
-  target: string;
-  status: string;
-  detail: string;
 }

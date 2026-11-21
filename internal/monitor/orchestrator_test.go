@@ -89,25 +89,25 @@ func TestOrchestratorEvaluationAndQuery(t *testing.T) {
 		t.Fatalf("expected 1 US residential, got %v", usResis)
 	}
 
-	// 3. 测试原子查询：查询线路拉家宽链式中继 (方案B网状挂载)
+	// 3. 测试原子查询：查询线路拉家宽链式中继 (全量网状挂载: 美西专线 + 东京软银 均拉取美国家宽，送中节点物理隔离排除)
 	usChains := orc.QueryAtoms(AtomQueryFilter{Country: "US", Kind: "chain"})
-	if len(usChains) != 1 || !strings.Contains(usChains[0].Name, "链式") {
-		t.Fatalf("expected 1 US chain, got %v", usChains)
+	if len(usChains) != 2 || !strings.Contains(usChains[0].Name, "链式") {
+		t.Fatalf("expected 2 clean US chains, got %v", usChains)
 	}
 
 	// 4. 测试动态公式编排求值：连接 = 美国家宽 + 美国线路机 + 线路家宽机
 	bundleFilter := model.GroupFilter{
 		Countries:          []string{"US"},
-		IncludeTransit:     true, // 美国线路机
-		IncludeResidential: true, // 美国家宽
-		IncludeChain:       true, // 线路家宽机
-		ExcludeChinaLeak:   true, // 排除送中
+		IncludeTransit:     true, // 美国线路机 (1)
+		IncludeResidential: true, // 美国家宽 (1)
+		IncludeChain:       true, // 线路家宽机 (2: 美西拉美国家宽 + 东京软银拉美国家宽)
+		ExcludeChinaLeak:   true, // 排除送中 (排除送中机房)
 	}
 
 	bundleURLs := orc.EvaluateGroup(bundleFilter)
-	// 应当恰好返回 3 条连接 (1 线路 + 1 家宽直连 + 1 链式中继)
-	if len(bundleURLs) != 3 {
-		t.Fatalf("expected 3 nodes for US bundle formula, got %d: %v", len(bundleURLs), bundleURLs)
+	// 应当恰好返回 4 条连接 (1 线路 + 1 家宽直连 + 2 链式中继)
+	if len(bundleURLs) != 4 {
+		t.Fatalf("expected 4 nodes for US bundle formula, got %d: %v", len(bundleURLs), bundleURLs)
 	}
 	for _, u := range bundleURLs {
 		if strings.Contains(u, "Leaked-CN") {

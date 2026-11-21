@@ -173,28 +173,23 @@ func (h *Healer) BuildSmartChains(transitNodes []*model.NodeProbeResult, resiNod
 	return chains
 }
 
-// BuildFullMeshRegionalChains 方案B：通用区域全网状池化中继 (所有区域线路机全量挂载对应区域家宽机，无机房硬编码)
+// BuildFullMeshRegionalChains 方案B：通用全网状池化中继 (所有自建骨干线路机全量挂载全部家宽机，实现全量链式中继)
 func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResult, resiNodes []*model.NodeProbeResult) []string {
 	var chains []string
 	if len(resiNodes) == 0 || len(transitNodes) == 0 {
 		return chains
 	}
 
-	// 1. 按国别提取所有健康的线路机 (忽略静默待命的救活节点)
-	regionalTransits := make(map[string][]*model.NodeProbeResult)
+	// 1. 提取所有健康的活跃线路机 (忽略静默待命的救活节点与送中污染节点)
 	var activeTransits []*model.NodeProbeResult
-
 	for _, t := range transitNodes {
-		if !t.Online {
+		if !t.Online || t.ChinaExit {
 			continue
 		}
 		// 忽略处于静默待命的救活节点
 		if strings.Contains(t.Name, "CF-WS") || strings.Contains(t.Name, "救活") || strings.Contains(t.Name, "Standby") {
 			continue
 		}
-
-		c := model.ResolveCountry(t.ExitCountry, t.Name)
-		regionalTransits[c] = append(regionalTransits[c], t)
 		activeTransits = append(activeTransits, t)
 	}
 
@@ -202,18 +197,11 @@ func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResu
 		return chains
 	}
 
-	// 2. 遍历家宽，进行全量区域池化配对
+	// 2. 遍历家宽，进行全量网状池化配对 (所有自有中转机拉取全部家宽)
 	seen := make(map[string]bool)
 	for _, r := range resiNodes {
 		if !r.Online && r.Diagnostic != nil && r.Diagnostic.FaultType == model.FaultMachineDown {
 			continue
-		}
-
-		resiCountry := model.ResolveCountry(r.ExitCountry, r.Name)
-		targetTransits := regionalTransits[resiCountry]
-
-		if len(targetTransits) == 0 {
-			targetTransits = []*model.NodeProbeResult{activeTransits[0]}
 		}
 
 		origURL := r.OriginalURL
@@ -230,8 +218,8 @@ func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResu
 			separator = "&"
 		}
 
-		// 为该家宽与每一个所属区域的线路机生成一条专属链式中继
-		for _, transit := range targetTransits {
+		// 为该家宽与每一个存活的线路机生成一条专属链式中继
+		for _, transit := range activeTransits {
 			chainName := fmt.Sprintf("链式|%s ➔ %s", transit.Name, resiLabel)
 			chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(transit.Name), url.QueryEscape(chainName))
 			if !seen[chainURL] {

@@ -123,6 +123,13 @@ func ResolveCountry(exitCountry, nodeName string) string {
 		return c
 	}
 
+	// 若为链式中继 (如 "链式|线路机 ➔ 家宽机")，其出口国家必须以落地的目标家宽机为准
+	if idx := strings.LastIndex(nodeName, "➔"); idx != -1 {
+		nodeName = nodeName[idx+len("➔"):]
+	} else if idx := strings.LastIndex(nodeName, "%E2%9E%94"); idx != -1 {
+		nodeName = nodeName[idx+len("%E2%9E%94"):]
+	}
+
 	upper := strings.ToUpper(nodeName)
 	switch {
 	case strings.Contains(upper, "-US-") || strings.Contains(upper, "美国") || strings.Contains(upper, "美西") || strings.Contains(upper, "美东") || strings.Contains(upper, "USA") || strings.Contains(upper, "UNITED STATES"):

@@ -410,7 +410,7 @@ func (o *Orchestrator) SyncAllCustomGroups(ctx context.Context) error {
 		if len(nodes) == 0 {
 			nodes = []string{fmt.Sprintf("# No active nodes matched for %s", g.DisplayName)}
 		}
-		_ = o.scheduler.substoreClient.CreateOrUpdateRemoteSub(ctx, g.Name, g.DisplayName, "")
+		_ = o.scheduler.substoreClient.UpdateSubscriptionNodes(ctx, g.Name, nodes)
 		logger.Sync("[CUSTOM-GROUP] ✅ Synced dynamic custom group '%s' (%s) with %d nodes", g.Name, g.DisplayName, len(nodes))
 	}
 

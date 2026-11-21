@@ -45,6 +45,7 @@ type APIServer struct {
 	scheduler      *monitor.Scheduler
 	rulesMgr       *rules.Manager
 	vpsMgr         *vpsmgr.Manager
+	orchestrator   *monitor.Orchestrator
 }
 
 // SetConfigPath 设置配置文件路径以支持运行时热改写保存
@@ -60,6 +61,11 @@ func (s *APIServer) SetVPSManager(m *vpsmgr.Manager) {
 // SetSnapshotManager 注入快照管理器 (支持测试隔离与自定义存储路径)
 func (s *APIServer) SetSnapshotManager(sm *substore.SnapshotManager) {
 	s.snapshotMgr = sm
+}
+
+// SetOrchestrator 注入动态编排器 (支持测试隔离与自定义实例)
+func (s *APIServer) SetOrchestrator(orc *monitor.Orchestrator) {
+	s.orchestrator = orc
 }
 
 func NewAPIServer(
@@ -132,6 +138,7 @@ func NewAPIServer(
 		mcpServer:      ms,
 		scheduler:      sched,
 		rulesMgr:       rm,
+		orchestrator:   monitor.NewOrchestrator(sched),
 	}
 
 	server.setupRoutes()
@@ -1064,6 +1071,17 @@ func (s *APIServer) setupRoutes() {
 		return c.JSON(fiber.Map{"status": "success", "message": "Three-tier subscriptions & collection synced successfully"})
 	})
 
+	// 5.5 方案B与动态规则编排 API (Issue #24: 五维策略、全量网状中继池、原子库与动态公式)
+	s.app.Get("/api/orchestration/atoms", s.handleGetAtoms)
+	s.app.Get("/api/orchestration/categories", s.handleGetCategories)
+	s.app.Post("/api/orchestration/evaluate", s.handleEvaluateGroup)
+	s.app.Get("/api/orchestration/groups", s.handleGetCustomGroups)
+	s.app.Post("/api/orchestration/groups", s.handleSaveCustomGroup)
+	s.app.Delete("/api/orchestration/groups/:name", s.handleDeleteCustomGroup)
+	s.app.Post("/api/orchestration/groups/sync", s.handleSyncCustomGroups)
+	s.app.Post("/api/orchestration/chains/rebuild", s.handleRebuildChains)
+	s.app.Post("/api/substore/sync-fivegroups", s.handleSyncFiveGroups)
+
 	// 6. 挂载远程 AI 专用的 MCP over SSE 传输接口
 	if s.mcpServer != nil && s.mcpServer.GetServer() != nil {
 		sse := mcpserver.NewSSEServer(
@@ -1700,5 +1718,185 @@ func (s *APIServer) handleTriggerSnapshotWarmup(c *fiber.Ctx) error {
 		"status":  "ok",
 		"message": "async warmup triggered for files",
 		"files":   files,
+	})
+}
+
+// handleGetAtoms 灵活查询系统所有原子节点
+func (s *APIServer) handleGetAtoms(c *fiber.Ctx) error {
+	if s.orchestrator == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "orchestrator not initialized"})
+	}
+	filter := monitor.AtomQueryFilter{
+		Country:   c.Query("country"),
+		Kind:      c.Query("kind"),
+		CleanOnly: c.QueryBool("clean_only", false),
+	}
+	atoms := s.orchestrator.QueryAtoms(filter)
+	reveal := c.QueryBool("reveal", false)
+	if !reveal {
+		masked := make([]model.AtomNode, len(atoms))
+		for i, a := range atoms {
+			masked[i] = a
+			masked[i].URL = MaskNodeURL(a.URL)
+		}
+		return c.JSON(fiber.Map{
+			"status": "ok",
+			"count":  len(masked),
+			"atoms":  masked,
+		})
+	}
+	role, _ := c.Locals("role").(Role)
+	if role != RoleAdmin {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "admin privilege required to reveal unmasked urls"})
+	}
+	return c.JSON(fiber.Map{
+		"status": "ok",
+		"count":  len(atoms),
+		"atoms":  atoms,
+	})
+}
+
+// handleGetCategories 获取全局分类统计大盘 (五维分组结构化概览)
+func (s *APIServer) handleGetCategories(c *fiber.Ctx) error {
+	if s.orchestrator == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "orchestrator not initialized"})
+	}
+	summary := s.orchestrator.GetCategoriesSummary()
+	return c.JSON(summary)
+}
+
+// handleEvaluateGroup 实时试算动态公式
+func (s *APIServer) handleEvaluateGroup(c *fiber.Ctx) error {
+	if s.orchestrator == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "orchestrator not initialized"})
+	}
+	var filter model.GroupFilter
+	if err := c.BodyParser(&filter); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+	matched := s.orchestrator.EvaluateGroup(filter)
+	reveal := c.QueryBool("reveal", false)
+	nodes := matched
+	if !reveal {
+		nodes = make([]string, len(matched))
+		for i, m := range matched {
+			nodes[i] = MaskNodeURL(m)
+		}
+	}
+	return c.JSON(fiber.Map{
+		"status": "ok",
+		"count":  len(matched),
+		"nodes":  nodes,
+	})
+}
+
+// handleGetCustomGroups 获取所有动态自定义分组定义
+func (s *APIServer) handleGetCustomGroups(c *fiber.Ctx) error {
+	groups, err := monitor.LoadCustomGroups()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{
+		"status": "ok",
+		"count":  len(groups),
+		"groups": groups,
+	})
+}
+
+// handleSaveCustomGroup 创建或更新自定义分组定义
+func (s *APIServer) handleSaveCustomGroup(c *fiber.Ctx) error {
+	var def model.CustomGroupDef
+	if err := c.BodyParser(&def); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+	if def.Name == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "group name is required"})
+	}
+	if def.DisplayName == "" {
+		def.DisplayName = def.Name
+	}
+	if err := monitor.SaveCustomGroup(def); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	syncNow := c.QueryBool("sync", true)
+	if syncNow && s.orchestrator != nil {
+		_ = s.orchestrator.SyncAllCustomGroups(c.Context())
+		if s.snapshotMgr != nil {
+			s.snapshotMgr.TriggerAsyncWarmup([]string{def.Name, "ashan", "Ashan", "Q", "q"})
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"message": "custom group saved successfully",
+		"group":   def,
+	})
+}
+
+// handleDeleteCustomGroup 删除自定义分组
+func (s *APIServer) handleDeleteCustomGroup(c *fiber.Ctx) error {
+	name := c.Params("name")
+	if name == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "name parameter is required"})
+	}
+	if err := monitor.DeleteCustomGroup(name); err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	purge := c.QueryBool("purge", false)
+	if purge && s.substoreClient != nil {
+		_ = s.substoreClient.DeleteSubscription(c.Context(), name)
+	}
+
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"deleted": name,
+		"purge":   purge,
+	})
+}
+
+// handleSyncCustomGroups 手动触发全部自定义分组同步至 Sub-Store
+func (s *APIServer) handleSyncCustomGroups(c *fiber.Ctx) error {
+	if s.orchestrator == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "orchestrator not initialized"})
+	}
+	if err := s.orchestrator.SyncAllCustomGroups(c.Context()); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"message": "all custom groups synced to substore",
+	})
+}
+
+// handleRebuildChains 手动触发全量链式中继池重建与快照同步
+func (s *APIServer) handleRebuildChains(c *fiber.Ctx) error {
+	if s.scheduler == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
+	}
+	if err := s.scheduler.SyncFiveGroupsNow(c.Context()); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+	if s.snapshotMgr != nil {
+		s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q"})
+	}
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"message": "full-mesh chains rebuilt and five groups synced",
+	})
+}
+
+// handleSyncFiveGroups 立即触发五维策略组同步至 Sub-Store
+func (s *APIServer) handleSyncFiveGroups(c *fiber.Ctx) error {
+	if s.scheduler == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
+	}
+	if err := s.scheduler.SyncFiveGroupsNow(c.Context()); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{
+		"status":  "ok",
+		"message": "five-group subscriptions synced successfully",
 	})
 }

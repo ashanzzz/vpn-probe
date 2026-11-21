@@ -424,6 +424,17 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 				}
 			}
 
+			// 方案B：全量区域网状池化中继 (美西4837全量挂载美国家宽)
+			fullMeshChains := s.healer.BuildFullMeshRegionalChains(rankedTransits, uniqueResis)
+			if len(fullMeshChains) > 0 {
+				chainLinks = fullMeshChains
+			}
+
+			// 方案B：五维智能策略组分类 (线路机、美区全家桶、日区全家桶、其他、送中隔离)
+			fiveGroups := ClassifyIntoFiveGroups(rankedTransits, uniqueResis, chainLinks)
+			_ = s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
+
+			// 兼容已有三层同步
 			err := s.substoreClient.SyncThreeTier(ctx, substore.ThreeTierPayload{
 				TransitDirectNodes: transitLinks,
 				ResidentialNodes:   resiLinks,
@@ -433,7 +444,7 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 				logger.Event(logger.LevelWarn, "substore", "sync_failed", fmt.Sprintf("error=%v", err))
 			} else {
 				logger.Event(logger.LevelInfo, "substore", "sync_done",
-					fmt.Sprintf("transit=%d resi=%d chains=%d", len(transitLinks), len(resiLinks), len(chainLinks)))
+					fmt.Sprintf("transit=%d resi=%d chains=%d five_groups=synced", len(transitLinks), len(resiLinks), len(chainLinks)))
 			}
 		}
 	}
@@ -545,6 +556,34 @@ func (s *Scheduler) SyncThreeTierNow(ctx context.Context) error {
 		ResidentialNodes:   resiLinks,
 		ChainNodes:         chains,
 	})
+}
+
+// SyncFiveGroupsNow 立即执行一次自建五维策略组全量同步 (方案B全网状中继池)
+func (s *Scheduler) SyncFiveGroupsNow(ctx context.Context) error {
+	if s.substoreClient == nil || !s.cfg.SubStore.Enabled {
+		return fmt.Errorf("substore integration is not enabled")
+	}
+
+	var allTransits []*model.NodeProbeResult
+	var allResis []*model.NodeProbeResult
+	s.mu.RLock()
+	for _, state := range s.nodeStates {
+		if state.LastResult != nil {
+			if state.LastResult.NodeType == "transit" {
+				allTransits = append(allTransits, state.LastResult)
+			} else {
+				allResis = append(allResis, state.LastResult)
+			}
+		}
+	}
+	s.mu.RUnlock()
+
+	ranked := speedtest.RankNodes(allTransits)
+	uniqueResis := deduplicateNodeResults(allResis)
+	fullMeshChains := s.healer.BuildFullMeshRegionalChains(ranked, uniqueResis)
+
+	fiveGroups := ClassifyIntoFiveGroups(ranked, uniqueResis, fullMeshChains)
+	return s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
 }
 
 // filterActiveTransitNodes 对线路机节点进行去重、主机分组与灾备热备联动过滤 (CF救活原则: 直连健康时热备隐藏，直连全军覆没时自动提升)
@@ -701,4 +740,100 @@ func (s *Scheduler) GetStatus() map[string]*NodeState {
 		copyMap[k] = v
 	}
 	return copyMap
+}
+
+// ClassifyIntoFiveGroups 将自建线路机、家宽机与链式代理编排为五维自建策略组 (方案B)
+func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.NodeProbeResult, chains []string) model.FiveGroupPayload {
+	var payload model.FiveGroupPayload
+
+	// 1. 过滤线路机（去重并按 CF 救活原则隐藏待命节点）
+	activeTransitLinks := filterActiveTransitNodes(transits)
+	activeTransitSet := make(map[string]bool)
+	for _, l := range activeTransitLinks {
+		activeTransitSet[l] = true
+	}
+
+	// 2. 遍历所有自建节点，严格做送中隔离
+	leakURLs := make(map[string]bool)
+	for _, t := range transits {
+		if t.Online && t.ChinaExit {
+			leakURLs[t.OriginalURL] = true
+			payload.ChinaLeakNodes = append(payload.ChinaLeakNodes, t.OriginalURL)
+		}
+	}
+	for _, r := range resis {
+		if r.Online && r.ChinaExit {
+			leakURLs[r.OriginalURL] = true
+			payload.ChinaLeakNodes = append(payload.ChinaLeakNodes, r.OriginalURL)
+		}
+	}
+
+	// 3. 自建-线路机 (ashan-transit)：所有活跃、未送中的线路机直连
+	for _, l := range activeTransitLinks {
+		if !leakURLs[l] {
+			payload.TransitNodes = append(payload.TransitNodes, l)
+		}
+	}
+
+	// 4. 地域划分：美区 (US) 与 日区 (JP) 以及 其他 (Other)
+	// 4.1 线路机归类
+	for _, t := range transits {
+		if !t.Online || leakURLs[t.OriginalURL] || !activeTransitSet[t.OriginalURL] {
+			continue
+		}
+		country := strings.ToUpper(t.ExitCountry)
+		upperName := strings.ToUpper(t.Name)
+		if country == "US" || strings.Contains(upperName, "4837") || strings.Contains(upperName, "LAX") || strings.Contains(upperName, "ACCK") || strings.Contains(upperName, "美国") {
+			payload.USResiNodes = append(payload.USResiNodes, t.OriginalURL)
+		} else if country == "JP" || strings.Contains(upperName, "JPSB") || strings.Contains(upperName, "SOFTBANK") || strings.Contains(upperName, "IIJ") || strings.Contains(upperName, "东京") || strings.Contains(upperName, "日本") || strings.Contains(t.Name, "软银") {
+			payload.JPResiNodes = append(payload.JPResiNodes, t.OriginalURL)
+		} else {
+			payload.OtherNodes = append(payload.OtherNodes, t.OriginalURL)
+		}
+	}
+
+	// 4.2 家宽直连归类
+	uniqueResis := deduplicateNodeResults(resis)
+	for _, r := range uniqueResis {
+		if !r.Online || leakURLs[r.OriginalURL] {
+			continue
+		}
+		country := strings.ToUpper(r.ExitCountry)
+		upperName := strings.ToUpper(r.Name)
+		if country == "US" || strings.Contains(upperName, "-US-") || strings.Contains(upperName, "美国") {
+			payload.USResiNodes = append(payload.USResiNodes, r.OriginalURL)
+		} else if country == "JP" || strings.Contains(upperName, "-JP-") || strings.Contains(upperName, "日本") {
+			payload.JPResiNodes = append(payload.JPResiNodes, r.OriginalURL)
+		} else {
+			payload.OtherNodes = append(payload.OtherNodes, r.OriginalURL)
+		}
+	}
+
+	// 4.3 链式中继归类
+	for _, ch := range chains {
+		upper := strings.ToUpper(ch)
+		if strings.Contains(upper, "US") || strings.Contains(ch, "美西") || strings.Contains(ch, "美国") {
+			payload.USResiNodes = append(payload.USResiNodes, ch)
+		} else if strings.Contains(upper, "JP") || strings.Contains(ch, "东京") || strings.Contains(ch, "软银") || strings.Contains(ch, "IIJ") || strings.Contains(ch, "日本") {
+			payload.JPResiNodes = append(payload.JPResiNodes, ch)
+		} else {
+			payload.OtherNodes = append(payload.OtherNodes, ch)
+		}
+	}
+
+	return payload
+}
+
+// SetHealerForTest 测试钩子
+func (s *Scheduler) SetHealerForTest(h *healer.Healer) {
+	s.healer = h
+}
+
+// InjectNodeStateForTest 测试注入节点状态钩子
+func (s *Scheduler) InjectNodeStateForTest(key string, res *model.NodeProbeResult) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodeStates[key] = &NodeState{
+		LastResult: res,
+	}
 }

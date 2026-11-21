@@ -12,6 +12,10 @@ import {
   ExternalSubDetail,
   SnapshotStatusResponse,
   CustomRulesData,
+  AtomNode,
+  GroupFilter,
+  CustomGroupDef,
+  CategoriesSummary,
 } from '../types';
 
 const TOKEN_KEY = 'vpn_probe_admin_token';
@@ -312,6 +316,63 @@ export const api = {
     return request('/api/rules/direct-domain', {
       method: 'POST',
       body: JSON.stringify({ domain }),
+    });
+  },
+
+  // 12. 编排与原子库 API (Issue #24: 方案B网状池化、五维策略、动态公式与自建全家桶)
+  async getAtoms(params?: { country?: string; kind?: string; clean_only?: boolean; reveal?: boolean }): Promise<{ status: string; count: number; atoms: AtomNode[] }> {
+    const q = new URLSearchParams();
+    if (params?.country) q.set('country', params.country);
+    if (params?.kind) q.set('kind', params.kind);
+    if (params?.clean_only) q.set('clean_only', 'true');
+    if (params?.reveal) q.set('reveal', 'true');
+    const qs = q.toString();
+    return request(`/api/orchestration/atoms${qs ? '?' + qs : ''}`);
+  },
+
+  async getCategoriesSummary(): Promise<CategoriesSummary> {
+    return request('/api/orchestration/categories');
+  },
+
+  async evaluateGroup(filter: GroupFilter, reveal = false): Promise<{ status: string; count: number; nodes: string[] }> {
+    return request(`/api/orchestration/evaluate${reveal ? '?reveal=true' : ''}`, {
+      method: 'POST',
+      body: JSON.stringify(filter),
+    });
+  },
+
+  async getCustomGroups(): Promise<{ status: string; count: number; groups: CustomGroupDef[] }> {
+    return request('/api/orchestration/groups');
+  },
+
+  async saveCustomGroup(def: CustomGroupDef, sync = true): Promise<{ status: string; message: string; group: CustomGroupDef }> {
+    return request(`/api/orchestration/groups${sync ? '?sync=true' : '?sync=false'}`, {
+      method: 'POST',
+      body: JSON.stringify(def),
+    });
+  },
+
+  async deleteCustomGroup(name: string, purge = false): Promise<{ status: string; deleted: string; purge: boolean }> {
+    return request(`/api/orchestration/groups/${encodeURIComponent(name)}${purge ? '?purge=true' : ''}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async syncAllCustomGroups(): Promise<{ status: string; message: string }> {
+    return request('/api/orchestration/groups/sync', {
+      method: 'POST',
+    });
+  },
+
+  async rebuildFullMeshChains(): Promise<{ status: string; message: string }> {
+    return request('/api/orchestration/chains/rebuild', {
+      method: 'POST',
+    });
+  },
+
+  async syncFiveGroups(): Promise<{ status: string; message: string }> {
+    return request('/api/substore/sync-fivegroups', {
+      method: 'POST',
     });
   },
 };

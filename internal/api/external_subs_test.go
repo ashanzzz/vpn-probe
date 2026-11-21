@@ -17,6 +17,8 @@ func TestExternalSubsAPI(t *testing.T) {
 	tmpDir := t.TempDir()
 	extFile := filepath.Join(tmpDir, "external_sources.json")
 	_ = os.WriteFile(extFile, []byte(`{"sources": ["蜂窝云"]}`), 0644)
+	cleanup := substore.SetExternalSourcesFileForTest(extFile)
+	defer cleanup()
 
 	// Mock SubStore HTTP Server
 	mockSubStore := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -44,6 +44,13 @@ var globalTracker = &ipFailTracker{
 	failures: make(map[string]*failureRecord),
 }
 
+// ResetAuthTracker 重置防爆破追踪器 (主要用于测试隔离)
+func ResetAuthTracker() {
+	globalTracker.mu.Lock()
+	defer globalTracker.mu.Unlock()
+	globalTracker.failures = make(map[string]*failureRecord)
+}
+
 func (t *ipFailTracker) isLocked(ip string) (bool, time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

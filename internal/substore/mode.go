@@ -48,6 +48,19 @@ var (
 	extMutex       sync.RWMutex
 )
 
+// SetExternalSourcesFileForTest 设置外部订阅配置文件路径 (仅供跨包测试隔离)
+func SetExternalSourcesFileForTest(p string) func() {
+	extMutex.Lock()
+	defer extMutex.Unlock()
+	orig := extSourcesFile
+	extSourcesFile = p
+	return func() {
+		extMutex.Lock()
+		defer extMutex.Unlock()
+		extSourcesFile = orig
+	}
+}
+
 // GetExternalSources 获取当前配置的外部订阅列表 (Issue #18 全动态解耦)
 func (c *Client) GetExternalSources() []string {
 	extMutex.RLock()
@@ -106,7 +119,7 @@ func (c *Client) GetExternalSourceItems() []ExternalSourceItem {
 		}
 	}
 
-	// 仅当文件完全不存在时默认保底
+	// 仅当文件完全不存在且未持久化时默认保底
 	return []ExternalSourceItem{
 		{
 			Name:        "蜂窝云",

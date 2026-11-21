@@ -180,3 +180,47 @@ export interface AuditLogItem {
   status: string;
   detail: string;
 }
+
+// 外部机场订阅管理类型 (PR #20 / Issue #19)
+export interface ExternalSubDetail {
+  name: string;
+  display_name: string;
+  enabled: boolean;
+  url?: string;
+  auto_mount?: boolean;
+}
+
+export interface ExternalSubsResponse {
+  status: string;
+  count: number;
+  sources: string[];
+  details: ExternalSubDetail[];
+}
+
+// 预烘焙快照极速直出大盘类型 (PR #22 / Issue #21)
+export interface SnapshotMetaInfo {
+  file_name: string;
+  size: number;
+  size_human: string;
+  updated_at_str: string;
+  duration_ms: number;
+  proxy_count: number;
+  sha256: string;
+  status: string;
+}
+
+export interface SnapshotStatusResponse {
+  status: string;
+  count: number;
+  storage_dir: string;
+  snapshots: Record<string, SnapshotMetaInfo>;
+}
+
+// 自定义分流规则类型
+export interface CustomRulesData {
+  direct_domains?: string[];
+  proxy_domains?: string[];
+  reject_domains?: string[];
+  version?: string;
+}
+

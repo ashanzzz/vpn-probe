@@ -34,11 +34,15 @@ type SnapshotMeta struct {
 type SnapshotManager struct {
 	mu         sync.RWMutex
 	client     *Client
+	httpClient *http.Client
 	storageDir string
 	cache      map[string][]byte
 	metas      map[string]*SnapshotMeta
 	isWarming  map[string]bool
+	asyncMu    sync.Mutex
+	asyncQueue map[string]bool
 	stopChan   chan struct{}
+	stopOnce   sync.Once
 }
 
 // NewSnapshotManager 创建快照管理器
@@ -49,11 +53,20 @@ func NewSnapshotManager(client *Client, storageDir string) *SnapshotManager {
 	_ = os.MkdirAll(storageDir, 0755)
 
 	sm := &SnapshotManager{
-		client:     client,
+		client: client,
+		httpClient: &http.Client{
+			Timeout: 75 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        100,
+				MaxIdleConnsPerHost: 20,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
 		storageDir: storageDir,
 		cache:      make(map[string][]byte),
 		metas:      make(map[string]*SnapshotMeta),
 		isWarming:  make(map[string]bool),
+		asyncQueue: make(map[string]bool),
 		stopChan:   make(chan struct{}),
 	}
 
@@ -215,13 +228,35 @@ func (sm *SnapshotManager) Warmup(ctx context.Context, fileNames []string) map[s
 	return results
 }
 
-// TriggerAsyncWarmup 异步触发一次预烘焙（非阻塞）
+// TriggerAsyncWarmup 异步触发一次预烘焙（带去重防抖与防协程堆积控制）
 func (sm *SnapshotManager) TriggerAsyncWarmup(fileNames []string) {
-	go func() {
+	sm.asyncMu.Lock()
+	var newTargets []string
+	for _, fn := range fileNames {
+		if !sm.asyncQueue[fn] {
+			sm.asyncQueue[fn] = true
+			newTargets = append(newTargets, fn)
+		}
+	}
+	sm.asyncMu.Unlock()
+
+	if len(newTargets) == 0 {
+		return
+	}
+
+	go func(targets []string) {
+		defer func() {
+			sm.asyncMu.Lock()
+			for _, t := range targets {
+				delete(sm.asyncQueue, t)
+			}
+			sm.asyncMu.Unlock()
+		}()
+
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		sm.Warmup(ctx, fileNames)
-	}()
+		sm.Warmup(ctx, targets)
+	}(newTargets)
 }
 
 // StartAutoWarmup 启动后台常驻定时烘焙 Worker
@@ -258,9 +293,11 @@ func (sm *SnapshotManager) StartAutoWarmup(interval time.Duration, fileNames []s
 	}()
 }
 
-// Stop 停止后台任务
+// Stop 停止后台任务 (并发幂等安全，可多次调用绝不 panic)
 func (sm *SnapshotManager) Stop() {
-	close(sm.stopChan)
+	sm.stopOnce.Do(func() {
+		close(sm.stopChan)
+	})
 }
 
 // fetchRenderedYAML 向 Sub-Store 源站拉取渲染后的真实 YAML 文本 (带直连与多域名自动重试)
@@ -269,9 +306,26 @@ func (sm *SnapshotManager) fetchRenderedYAML(ctx context.Context, fileName strin
 		return nil, fmt.Errorf("substore client is not configured or disabled")
 	}
 
-	urlsToTry := []string{
-		strings.TrimRight(sm.client.cfg.URL, "/"),
-		"http://156.231.113.91:3001/Woo@@@204317", // 源站直连，绕过 Cloudflare 30s 握手超时限制
+	var urlsToTry []string
+	if sm.client.cfg.URL != "" {
+		urlsToTry = append(urlsToTry, strings.TrimRight(sm.client.cfg.URL, "/"))
+	}
+	// 直连兜底端点
+	directEndpoint := "http://156.231.113.91:3001/Woo@@@204317"
+	hasDirect := false
+	for _, u := range urlsToTry {
+		if strings.Contains(u, "156.231.113.91") {
+			hasDirect = true
+			break
+		}
+	}
+	if !hasDirect {
+		urlsToTry = append(urlsToTry, directEndpoint)
+	}
+
+	httpClient := sm.httpClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 75 * time.Second}
 	}
 
 	var lastErr error
@@ -285,8 +339,7 @@ func (sm *SnapshotManager) fetchRenderedYAML(ctx context.Context, fileName strin
 		sm.client.setAuth(req)
 		req.Header.Set("User-Agent", "ClashX/1.90.0")
 
-		client := &http.Client{Timeout: 75 * time.Second}
-		resp, err := client.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			lastErr = err
 			continue

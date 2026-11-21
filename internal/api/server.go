@@ -1643,15 +1643,22 @@ func (s *APIServer) handleGetSnapshotFile(c *fiber.Ctx) error {
 		data, _, _ = s.snapshotMgr.GetSnapshot(fileName)
 	}
 
-	// 支持客户端 If-None-Match ETag 304 极速协商
+	// 支持客户端 If-None-Match ETag 304 极速协商 (RFC 7232 标准，支持弱 ETag 与多重匹配)
 	if match := c.Get("If-None-Match"); match != "" && meta != nil {
-		if strings.Trim(match, "\"") == meta.SHA256 {
+		cleanETag := strings.TrimPrefix(strings.TrimSpace(match), "W/")
+		cleanETag = strings.Trim(cleanETag, "\"")
+		if cleanETag == meta.SHA256 {
 			return c.SendStatus(fiber.StatusNotModified)
 		}
 	}
 
+	safeFileName := strings.ReplaceAll(fileName, "\"", "")
+	safeFileName = strings.ReplaceAll(safeFileName, "\n", "")
+	safeFileName = strings.ReplaceAll(safeFileName, "\r", "")
+
 	c.Set("Content-Type", "text/yaml; charset=utf-8")
-	c.Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s.yaml"`, fileName))
+	c.Set("Cache-Control", "private, no-cache")
+	c.Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s.yaml"`, safeFileName))
 	if meta != nil {
 		c.Set("ETag", `"`+meta.SHA256+`"`)
 		c.Set("X-Snapshot-Time", meta.UpdatedAtStr)

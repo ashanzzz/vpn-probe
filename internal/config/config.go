@@ -30,6 +30,7 @@ type MonitorConfig struct {
 	SplitCheckInterval   string          `yaml:"split_check_interval"`   // e.g. "30m" (ChatGPT/Claude分流探测)
 	AutoSyncSubStore     bool            `yaml:"auto_sync_substore"`
 	Nodes                []MonitoredNode `yaml:"nodes"`
+	ResidentialNodes     []MonitoredNode `yaml:"residential_nodes,omitempty" json:"residential_nodes,omitempty"`
 }
 
 type LogConfig struct {

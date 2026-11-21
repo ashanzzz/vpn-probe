@@ -105,7 +105,7 @@ func TestOrchestratorEvaluationAndQuery(t *testing.T) {
 	}
 
 	bundleURLs := orc.EvaluateGroup(bundleFilter)
-	// 应当恰好返回 4 条连接 (1 线路 + 1 家宽直连 + 2 链式中继)
+	// 应当恰好返回 4 条连接 (1 线路 + 1 家宽直连 + 2 链式中继：美西与软银分别挂载美国家宽)
 	if len(bundleURLs) != 4 {
 		t.Fatalf("expected 4 nodes for US bundle formula, got %d: %v", len(bundleURLs), bundleURLs)
 	}

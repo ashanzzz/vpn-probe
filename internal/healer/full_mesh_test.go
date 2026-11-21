@@ -80,25 +80,33 @@ func TestBuildFullMeshRegionalChains(t *testing.T) {
 
 	chains := h.BuildFullMeshRegionalChains(transits, resis)
 
-	// 全网状矩阵: 3 线路 (4837, 软银, IIJ) × 5 家宽 (3美 + 2日) = 15 条链式中继
+	// 验收标准：咱们所有自有中转服务器，全部把所有家宽链式代理
+	// 3 活跃中转 (4837, 软银, IIJ) × 5 家宽 (3 US + 2 JP) = 15 条链式中继
 	expectedTotal := 15
 	if len(chains) != expectedTotal {
 		t.Fatalf("expected %d full mesh chains, got %d:\n%v", expectedTotal, len(chains), strings.Join(chains, "\n"))
 	}
 
-	// 检查 4837 是否挂载了所有 5 个家宽
+	// 检查 4837 是否挂载了所有 3 个美国家宽与 2 个日本家宽
+	lax4837Chains := 0
 	usChains := 0
 	for _, c := range chains {
 		unescaped, _ := url.QueryUnescape(c)
 		if strings.Contains(unescaped, "美西 ACCK 洛杉矶 4837") {
-			usChains++
+			lax4837Chains++
+			if strings.Contains(unescaped, "LZ-US") {
+				usChains++
+			}
 		}
 		// 救活待命节点绝不应出现在链式中继中
 		if strings.Contains(unescaped, "CF-WS") {
 			t.Errorf("standby CF-WS node should not be in chains: %s", c)
 		}
 	}
-	if usChains != 5 {
-		t.Errorf("expected 5 chains with 4837 (all 5 resi nodes), got %d", usChains)
+	if lax4837Chains != 5 {
+		t.Errorf("expected 5 chains with 4837 (all 5 resis), got %d", lax4837Chains)
+	}
+	if usChains != 3 {
+		t.Errorf("expected 3 US chains with 4837, got %d", usChains)
 	}
 }

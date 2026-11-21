@@ -69,13 +69,20 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 	var resis []*model.NodeProbeResult
 
 	for _, state := range o.scheduler.nodeStates {
-		if state.LastResult == nil || !state.LastResult.Online {
+		if state.LastResult == nil {
 			continue
 		}
 		res := state.LastResult
 		if res.NodeType == "residential" {
+			// 家宽机：只要不是机器彻底关机(FaultMachineDown)，均纳入原子池与中继中转
+			if res.Diagnostic != nil && res.Diagnostic.FaultType == model.FaultMachineDown {
+				continue
+			}
 			resis = append(resis, res)
 		} else {
+			if !res.Online {
+				continue
+			}
 			transits = append(transits, res)
 		}
 	}
@@ -135,7 +142,17 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 		}
 
 		for _, ch := range chains {
-			country := model.ResolveCountry("", ch)
+			decodedCh, err := url.QueryUnescape(ch)
+			if err != nil {
+				decodedCh = ch
+			}
+			targetPart := decodedCh
+			if idx := strings.Index(decodedCh, "➔"); idx != -1 {
+				targetPart = decodedCh[idx+len("➔"):]
+			} else if hashIdx := strings.Index(decodedCh, "#"); hashIdx != -1 {
+				targetPart = decodedCh[hashIdx+1:]
+			}
+			country := model.ResolveCountry("", targetPart)
 			chainName := ch
 			if hashIdx := strings.Index(ch, "#"); hashIdx != -1 {
 				chainName = ch[hashIdx+1:]
@@ -254,15 +271,22 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 		Nodes            []model.AtomNode `json:"nodes"`
 	}
 
-	usStat := &CategoryStat{Country: "US", DisplayName: "美国"}
-	jpStat := &CategoryStat{Country: "JP", DisplayName: "日本"}
-	otherStat := &CategoryStat{Country: "OTHER", DisplayName: "其他地区"}
+	transitStat := &CategoryStat{DisplayName: "自建-线路机 (纯骨干)"}
+	usStat := &CategoryStat{Country: "US", DisplayName: "自建-美国和美国家宽 (美区全家桶)"}
+	jpStat := &CategoryStat{Country: "JP", DisplayName: "自建-日本和日本家宽 (日区全家桶)"}
+	otherStat := &CategoryStat{Country: "OTHER", DisplayName: "自建-其他 (其他全家桶)"}
 	var chinaLeaks []model.AtomNode
 
 	for _, a := range atoms {
 		if a.ChinaExit {
 			chinaLeaks = append(chinaLeaks, a)
 			continue
+		}
+
+		if a.Kind == "transit" {
+			transitStat.TotalCleanCount++
+			transitStat.TransitCount++
+			transitStat.Nodes = append(transitStat.Nodes, a)
 		}
 
 		var target *CategoryStat
@@ -291,6 +315,7 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 		"status": "ok",
 		"total_atoms": len(atoms),
 		"categories": map[string]any{
+			"transit":     transitStat,
 			"us":          usStat,
 			"jp":          jpStat,
 			"other":       otherStat,

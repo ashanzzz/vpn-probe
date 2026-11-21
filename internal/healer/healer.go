@@ -173,14 +173,15 @@ func (h *Healer) BuildSmartChains(transitNodes []*model.NodeProbeResult, resiNod
 	return chains
 }
 
-// BuildFullMeshRegionalChains 方案B：通用全网状池化中继 (所有自建骨干线路机全量挂载全部家宽机，实现全量链式中继)
+// BuildFullMeshRegionalChains 方案B：全量全网状池化中继 (所有自建中转服务器全量挂载全部家宽机)
+// 验收标准：4837 ➔ 家宽，IIJ ➔ 家宽，软银 ➔ 家宽... 咱们所有自有中转服务器全部把 10 个家宽链式代理
 func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResult, resiNodes []*model.NodeProbeResult) []string {
 	var chains []string
 	if len(resiNodes) == 0 || len(transitNodes) == 0 {
 		return chains
 	}
 
-	// 1. 提取所有健康的活跃线路机 (忽略静默待命的救活节点与送中污染节点)
+	// 1. 提取所有健康的线路机 (忽略静默待命的救活节点，排除送中节点)
 	var activeTransits []*model.NodeProbeResult
 	for _, t := range transitNodes {
 		if !t.Online || t.ChinaExit {
@@ -197,7 +198,7 @@ func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResu
 		return chains
 	}
 
-	// 2. 遍历家宽，进行全量网状池化配对 (所有自有中转机拉取全部家宽)
+	// 2. 遍历家宽，每一个自有中转机全量把所有家宽链式代理
 	seen := make(map[string]bool)
 	for _, r := range resiNodes {
 		if !r.Online && r.Diagnostic != nil && r.Diagnostic.FaultType == model.FaultMachineDown {
@@ -218,7 +219,7 @@ func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResu
 			separator = "&"
 		}
 
-		// 为该家宽与每一个存活的线路机生成一条专属链式中继
+		// 咱们所有自有中转服务器，全部把所有家宽链式代理
 		for _, transit := range activeTransits {
 			chainName := fmt.Sprintf("链式|%s ➔ %s", transit.Name, resiLabel)
 			chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(transit.Name), url.QueryEscape(chainName))

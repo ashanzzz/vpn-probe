@@ -2,8 +2,10 @@ package monitor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +65,41 @@ func NewScheduler(
 		if n.IsSelf {
 			s.nodeStates[n.Name] = &NodeState{
 				Config: n,
+				LastResult: &model.NodeProbeResult{
+					Name:        n.Name,
+					OriginalURL: n.URL,
+					NodeType:    "transit",
+					Online:      true,
+					ExitCountry: model.ResolveCountry("", n.Name),
+				},
+			}
+		}
+	}
+
+	// 载入家宽节点 (优先从 config.yaml 的 residential_nodes，其次从 data/residential_nodes.json)
+	var resiNodes []config.MonitoredNode
+	resiNodes = append(resiNodes, cfg.Monitor.ResidentialNodes...)
+	if len(resiNodes) == 0 {
+		if data, err := os.ReadFile("./data/residential_nodes.json"); err == nil {
+			var loaded []config.MonitoredNode
+			if err := json.Unmarshal(data, &loaded); err == nil {
+				resiNodes = append(resiNodes, loaded...)
+			}
+		}
+	}
+
+	for _, r := range resiNodes {
+		if r.IsSelf || r.Name != "" {
+			r.IsSelf = true
+			s.nodeStates[r.Name] = &NodeState{
+				Config: r,
+				LastResult: &model.NodeProbeResult{
+					Name:        r.Name,
+					OriginalURL: r.URL,
+					NodeType:    "residential",
+					Online:      true,
+					ExitCountry: model.ResolveCountry("", r.Name),
+				},
 			}
 		}
 	}
@@ -205,8 +242,8 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 		return nil
 	}
 
-	// 核心逻辑限制：只针对自建 VPS 订阅 (ashan-transit-direct)，外部机场连接 (蜂窝云等) 绝不纳入探测
-	subsToPull := []string{"ashan-transit-direct"}
+	// 核心逻辑限制：只针对自建 VPS 线路机 (ashan-transit-direct) 与 家宽机 (ashan-resi-direct)，外部机场连接绝不纳入探测
+	subsToPull := []string{"ashan-transit-direct", "ashan-resi-direct"}
 	var dynamicNodes []config.MonitoredNode
 
 	for _, subName := range subsToPull {
@@ -217,6 +254,7 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 		}
 
 		lines := strings.Split(content, "\n")
+		subNodesCount := 0
 		for _, line := range lines {
 			trimmed := strings.TrimSpace(line)
 			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
@@ -226,11 +264,28 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 			if parseErr != nil {
 				continue
 			}
+			subNodesCount++
 			dynamicNodes = append(dynamicNodes, config.MonitoredNode{
 				Name:   parsed.Tag,
 				URL:    trimmed,
 				IsSelf: true,
 			})
+		}
+
+		// 若 SubStore 中 ashan-resi-direct 为空，自动以本地家宽池补充同步
+		if subName == "ashan-resi-direct" && subNodesCount == 0 {
+			var localResi []string
+			for _, st := range s.nodeStates {
+				if st.LastResult != nil && st.LastResult.NodeType == "residential" {
+					localResi = append(localResi, st.Config.URL)
+				}
+			}
+			if len(localResi) > 0 {
+				logger.Infof("[MONITOR] SubStore ashan-resi-direct is empty, seeding with %d local residential nodes...", len(localResi))
+				_ = s.substoreClient.SyncThreeTier(ctx, substore.ThreeTierPayload{
+					ResidentialNodes: localResi,
+				})
+			}
 		}
 	}
 
@@ -261,20 +316,48 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 			}
 		}
 
+		isResi := strings.Contains(n.Name, "家宽") || strings.Contains(n.URL, "socks")
+		nodeType := "transit"
+		if isResi {
+			nodeType = "residential"
+		}
+
 		if matchedKey != "" {
 			validSelfSet[matchedKey] = true
 			s.nodeStates[matchedKey].Config.URL = n.URL
 			s.nodeStates[matchedKey].Config.IsSelf = true
+			if s.nodeStates[matchedKey].LastResult != nil {
+				s.nodeStates[matchedKey].LastResult.NodeType = nodeType
+			}
 		} else {
 			validSelfSet[n.Name] = true
-			s.nodeStates[n.Name] = &NodeState{Config: n}
+			s.nodeStates[n.Name] = &NodeState{
+				Config: n,
+				LastResult: &model.NodeProbeResult{
+					Name:        n.Name,
+					OriginalURL: n.URL,
+					NodeType:    nodeType,
+					Online:      true,
+					ExitCountry: model.ResolveCountry("", n.Name),
+				},
+			}
 		}
 	}
 
-	// 静态配置文件中显式标记为 is_self 的也保留
+	// 静态配置文件中显式标记为 is_self 的也保留 (含线路机与家宽机)
 	for _, n := range s.cfg.Monitor.Nodes {
 		if n.IsSelf {
 			validSelfSet[n.Name] = true
+		}
+	}
+	for _, n := range s.cfg.Monitor.ResidentialNodes {
+		if n.IsSelf {
+			validSelfSet[n.Name] = true
+		}
+	}
+	for name, state := range s.nodeStates {
+		if state.LastResult != nil && state.LastResult.NodeType == "residential" {
+			validSelfSet[name] = true
 		}
 	}
 
@@ -419,7 +502,7 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 			var resiLinks []string
 			uniqueResis := deduplicateNodeResults(resiNodes)
 			for _, r := range uniqueResis {
-				if r.Online {
+				if r.Diagnostic == nil || r.Diagnostic.FaultType != model.FaultMachineDown {
 					resiLinks = append(resiLinks, r.OriginalURL)
 				}
 			}
@@ -546,7 +629,7 @@ func (s *Scheduler) SyncThreeTierNow(ctx context.Context) error {
 	var resiLinks []string
 	uniqueResis := deduplicateNodeResults(allResis)
 	for _, r := range uniqueResis {
-		if r.Online {
+		if r.Diagnostic == nil || r.Diagnostic.FaultType != model.FaultMachineDown {
 			resiLinks = append(resiLinks, r.OriginalURL)
 		}
 	}
@@ -792,10 +875,13 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 		}
 	}
 
-	// 4.2 家宽直连归类
+	// 4.2 家宽直连归类 (自建-美国和美国家宽 / 自建-日本和日本家宽)
 	uniqueResis := deduplicateNodeResults(resis)
 	for _, r := range uniqueResis {
-		if !r.Online || leakURLs[r.OriginalURL] {
+		if leakURLs[r.OriginalURL] {
+			continue
+		}
+		if !r.Online && r.Diagnostic != nil && r.Diagnostic.FaultType == model.FaultMachineDown {
 			continue
 		}
 		country := model.ResolveCountry(r.ExitCountry, r.Name)
@@ -809,9 +895,19 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 		}
 	}
 
-	// 4.3 链式中继归类
+	// 4.3 链式中继归类 (依落地家宽端国别分类到对应的美区/日区/其他全家桶)
 	for _, ch := range chains {
-		country := model.ResolveCountry("", ch)
+		decodedCh, err := url.QueryUnescape(ch)
+		if err != nil {
+			decodedCh = ch
+		}
+		targetPart := decodedCh
+		if idx := strings.Index(decodedCh, "➔"); idx != -1 {
+			targetPart = decodedCh[idx+len("➔"):]
+		} else if hashIdx := strings.Index(decodedCh, "#"); hashIdx != -1 {
+			targetPart = decodedCh[hashIdx+1:]
+		}
+		country := model.ResolveCountry("", targetPart)
 		switch country {
 		case "US":
 			payload.USResiNodes = append(payload.USResiNodes, ch)

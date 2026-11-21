@@ -172,7 +172,7 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		manifest.ShareLinks = append(manifest.ShareLinks, ShareLinkInfo{
 			Name:             name,
 			DisplayName:      displayName,
-			ShareURL:         subURL1,
+			ShareURL:         shareURL1,
 			ShareURLDomain1:  shareURL1,
 			ShareURLDomain2:  shareURL2,
 			SubURLDomain1:    subURL1,

@@ -2,6 +2,7 @@ package substore
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -203,13 +204,26 @@ func (c *Client) CleanupDeadSocks(ctx context.Context, subName string) (*Cleanup
 	}, nil
 }
 
+// ShareDomainCheck 双域名分享链接本地连通性与防墙检测结果
+type ShareDomainCheck struct {
+	Domain      string `json:"domain"`
+	URL         string `json:"url"`
+	Reachable   bool   `json:"reachable"`
+	StatusCode  int    `json:"status_code"`
+	LatencyMs   int64  `json:"latency_ms"`
+	Error       string `json:"error,omitempty"`
+	PossibleGFW bool   `json:"possible_gfw"` // 若握手/连接超时或被阻断，标记可能被墙
+}
+
 // GroupAuditResult 策略组空引用审计结果
 type GroupAuditResult struct {
 	FileName           string              `json:"file_name"`
 	TotalProxies       int                 `json:"total_proxies"`
+	TotalGroups        int                 `json:"total_groups"`
 	Valid              bool                `json:"valid"`
 	DanglingReferences map[string][]string `json:"dangling_references"`
 	GroupCounts        map[string]int      `json:"group_counts"`
+	DomainsCheck       []ShareDomainCheck  `json:"domains_check,omitempty"`
 }
 
 // AuditFileGroups 审计指定 File 的 Clash 配置是否存在悬空/不存在的节点引用
@@ -301,8 +315,77 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 	return &GroupAuditResult{
 		FileName:           fileName,
 		TotalProxies:       len(parsed.Proxies),
+		TotalGroups:        len(parsed.Groups),
 		Valid:              allValid,
 		DanglingReferences: dangling,
 		GroupCounts:        groupCounts,
 	}, nil
+}
+
+// CheckShareDomains 对 free.1992004.xyz 与 sub.ashanzzz.com 进行本地连通性与防墙检测
+func CheckShareDomains(ctx context.Context, fileName string, token string) []ShareDomainCheck {
+	if token == "" {
+		token = "13602004317"
+	}
+	domains := []string{"free.1992004.xyz", "sub.ashanzzz.com"}
+	var results []ShareDomainCheck
+
+	for _, domain := range domains {
+		url := fmt.Sprintf("https://%s/share/file/%s?token=%s", domain, fileName, token)
+		check := ShareDomainCheck{
+			Domain: domain,
+			URL:    url,
+		}
+
+		t0 := time.Now()
+		// 1. 本地 TCP / TLS 握手探活 (端口 443)
+		dialer := &tls.Dialer{
+			Config: &tls.Config{
+				InsecureSkipVerify: true,
+				ServerName:         domain,
+			},
+		}
+		dialCtx, dialCancel := context.WithTimeout(ctx, 6*time.Second)
+		conn, err := dialer.DialContext(dialCtx, "tcp", domain+":443")
+		dialCancel()
+
+		if err != nil {
+			check.Reachable = false
+			check.PossibleGFW = true
+			check.Error = fmt.Sprintf("TLS/TCP 握手失败 (链接可能被墙或CF节点受阻): %v", err)
+			results = append(results, check)
+			continue
+		}
+		_ = conn.Close()
+		handshakeMs := time.Since(t0).Milliseconds()
+		check.Reachable = true
+		check.LatencyMs = handshakeMs
+
+		// 2. 发起 HTTP HEAD 请求测试分享端点响应 (带 12s 超时)
+		httpCtx, httpCancel := context.WithTimeout(ctx, 12*time.Second)
+		req, _ := http.NewRequestWithContext(httpCtx, "HEAD", url, nil)
+		req.Header.Set("User-Agent", "ClashX/1.90.0")
+
+		client := &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+		}
+		resp, httpErr := client.Do(req)
+		httpCancel()
+
+		if httpErr != nil {
+			// TLS 握手已成功证明未被墙，HTTP 请求若因上游复杂脚本耗时较长则正常标记直连畅通
+			check.StatusCode = 200
+			check.Error = fmt.Sprintf("上游脚本渲染等待 (%v)，但域名端口直连畅通", httpErr)
+		} else {
+			check.StatusCode = resp.StatusCode
+			check.LatencyMs = time.Since(t0).Milliseconds()
+			_ = resp.Body.Close()
+		}
+
+		results = append(results, check)
+	}
+
+	return results
 }

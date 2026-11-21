@@ -50,8 +50,10 @@ func NewScheduler(
 	}
 
 	for _, n := range cfg.Monitor.Nodes {
-		s.nodeStates[n.Name] = &NodeState{
-			Config: n,
+		if n.IsSelf {
+			s.nodeStates[n.Name] = &NodeState{
+				Config: n,
+			}
 		}
 	}
 
@@ -163,13 +165,14 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}
 }
 
-// RefreshNodesFromSubStore 从 SubStore 动态同步待监控的节点 (包含自建 VPS 与蜂窝云/机场节点)
+// RefreshNodesFromSubStore 从 SubStore 动态同步待监控的自建节点 (核心原则：外部连接绝不检测，仅检测自有服务)
 func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 	if s.substoreClient == nil || !s.cfg.SubStore.Enabled {
 		return nil
 	}
 
-	subsToPull := []string{"ashan's vps", "蜂窝云"}
+	// 核心逻辑限制：只针对自建 VPS 订阅 (ashan's vps)，外部机场连接 (蜂窝云等) 绝不纳入探测
+	subsToPull := []string{"ashan's vps"}
 	var dynamicNodes []config.MonitoredNode
 
 	for _, subName := range subsToPull {
@@ -190,8 +193,9 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 				continue
 			}
 			dynamicNodes = append(dynamicNodes, config.MonitoredNode{
-				Name: parsed.Tag,
-				URL:  trimmed,
+				Name:   parsed.Tag,
+				URL:    trimmed,
+				IsSelf: true,
 			})
 		}
 	}
@@ -204,15 +208,38 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	validSelfSet := make(map[string]bool)
 	for _, n := range dynamicNodes {
+		validSelfSet[n.Name] = true
 		if _, exists := s.nodeStates[n.Name]; !exists {
 			s.nodeStates[n.Name] = &NodeState{Config: n}
 		} else {
 			s.nodeStates[n.Name].Config.URL = n.URL
+			s.nodeStates[n.Name].Config.IsSelf = true
 		}
 	}
 
-	logger.Sync("[MONITOR] ✅ Dynamically synchronized %d monitor nodes from SubStore (total monitored: %d)", len(dynamicNodes), len(s.nodeStates))
+	// 静态配置文件中显式标记为 is_self 的也保留
+	for _, n := range s.cfg.Monitor.Nodes {
+		if n.IsSelf {
+			validSelfSet[n.Name] = true
+		}
+	}
+
+	// 彻底清理掉非自建的外部节点 (外部连接不检测)
+	removedCount := 0
+	for name, state := range s.nodeStates {
+		if !validSelfSet[name] || !state.Config.IsSelf {
+			delete(s.nodeStates, name)
+			removedCount++
+		}
+	}
+
+	if removedCount > 0 {
+		logger.Infof("[MONITOR] Pruned %d external/non-self nodes from monitor. Only self-hosted nodes remain.", removedCount)
+	}
+
+	logger.Sync("[MONITOR] ✅ Dynamically synchronized %d self-hosted monitor nodes (total monitored: %d)", len(dynamicNodes), len(s.nodeStates))
 	return nil
 }
 
@@ -222,11 +249,14 @@ func (s *Scheduler) Stop() {
 	}
 }
 
-// RunAllChecks 对已配置的监控节点全量执行检测并分类落盘
+// RunAllChecks 对已配置的监控节点全量执行检测并分类落盘 (仅探测自建节点)
 func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.BatchProbeResponse {
 	s.mu.RLock()
 	var links []string
 	for _, state := range s.nodeStates {
+		if !state.Config.IsSelf {
+			continue
+		}
 		links = append(links, state.Config.URL)
 		// 预热上一次已知健康的海外节点作为候选探针
 		if state.LastResult != nil && state.LastResult.Online && !state.LastResult.ChinaExit {

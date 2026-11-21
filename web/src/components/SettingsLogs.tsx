@@ -9,27 +9,34 @@ import {
   CheckCircle2, 
   AlertCircle,
   Loader2,
-  HardDrive
+  HardDrive,
+  Globe,
+  Plus
 } from 'lucide-react';
 import { api } from '../api/client';
-import { SubStoreConfig } from '../types';
+import { SubStoreConfig, CustomRulesData } from '../types';
 
 export const SettingsLogs: React.FC = () => {
   const [subCfg, setSubCfg] = useState<SubStoreConfig | null>(null);
   const [sysEnv, setSysEnv] = useState<any>(null);
+  const [rules, setRules] = useState<CustomRulesData | null>(null);
+  const [newDomain, setNewDomain] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [addingDomain, setAddingDomain] = useState(false);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [cfg, env] = await Promise.all([
+      const [cfg, env, rData] = await Promise.all([
         api.getSubStoreConfig().catch(() => null),
         api.getSystemEnv().catch(() => null),
+        api.getCustomRules().catch(() => null),
       ]);
       if (cfg) setSubCfg(cfg);
       if (env) setSysEnv(env);
+      if (rData) setRules(rData);
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err.message || '加载系统设置失败' });
     } finally {
@@ -40,6 +47,25 @@ export const SettingsLogs: React.FC = () => {
   useEffect(() => {
     fetchData();
   }, []);
+
+  const handleAddDirectDomain = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const d = newDomain.trim();
+    if (!d) return;
+    setAddingDomain(true);
+    setStatusMsg(null);
+    try {
+      await api.addDirectDomain(d);
+      setStatusMsg({ type: 'success', text: `域名【${d}】已成功加入国内直连白名单并热重载生效！` });
+      setNewDomain('');
+      const rData = await api.getCustomRules().catch(() => null);
+      if (rData) setRules(rData);
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: `添加直连域名失败: ${err.message}` });
+    } finally {
+      setAddingDomain(false);
+    }
+  };
 
   const handleSaveSubStore = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -227,6 +253,68 @@ export const SettingsLogs: React.FC = () => {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 3. Custom Direct Domains & Split Rules (直连域名白名单与自定义规则) */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 flex items-center">
+              <Globe className="w-4 h-4 mr-2 text-indigo-600" />
+              分流规则补丁与国内直连域名管理
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              动态添加需要强制国内直连解析的办公、企业或政务域名，自动合并进自定义 Patch 算子
+            </p>
+          </div>
+        </div>
+
+        {/* Add Domain Form */}
+        <form onSubmit={handleAddDirectDomain} className="flex gap-2">
+          <input
+            type="text"
+            required
+            placeholder="例如: oa.company.com 或 .edu.cn"
+            value={newDomain}
+            onChange={(e) => setNewDomain(e.target.value)}
+            className="flex-1 px-3 py-2 border border-slate-300 rounded-lg font-mono text-xs focus:ring-1 focus:ring-indigo-600 focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={addingDomain}
+            className="inline-flex items-center px-4 py-2 text-xs font-semibold rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 transition shadow-2xs"
+          >
+            {addingDomain ? (
+              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <Plus className="w-3.5 h-3.5 mr-1.5" />
+            )}
+            添加直连域名
+          </button>
+        </form>
+
+        {/* Current Direct Domains */}
+        {rules?.direct_domains && rules.direct_domains.length > 0 ? (
+          <div className="space-y-1.5">
+            <span className="text-2xs font-semibold text-slate-500 uppercase tracking-wider block">
+              当前已生效的自定义直连域名 ({rules.direct_domains.length}):
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {rules.direct_domains.map((dom) => (
+                <span
+                  key={dom}
+                  className="px-2.5 py-1 bg-slate-100 text-slate-700 border border-slate-200 rounded-lg font-mono text-xs"
+                >
+                  {dom}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="text-slate-400 text-2xs italic">
+            尚未配置自定义直连域名（内置默认涵盖国内常见 CDN 与常用白名单）。
+          </div>
+        )}
       </div>
     </div>
   );

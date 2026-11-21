@@ -2,25 +2,36 @@ import React, { useState, useEffect } from 'react';
 import { 
   Share2, 
   RotateCw, 
-  CheckCircle2, 
   Copy, 
   Check, 
-  ExternalLink, 
   Trash2, 
   Save, 
   Layers, 
   FileCode, 
-  Network,
-  Loader2,
-  AlertCircle
+  Loader2, 
+  Plus, 
+  Zap, 
+  Globe, 
+  ShieldCheck, 
+  RefreshCw, 
+  Power 
 } from 'lucide-react';
-import { api } from '../api/client';
-import { SubStoreMode, SubStoreModeInfo, SubStoreManifest } from '../types';
+import { api, getStoredToken } from '../api/client';
+import { 
+  SubStoreMode, 
+  SubStoreModeInfo, 
+  SubStoreManifest,
+  ExternalSubsResponse,
+  ExternalSubDetail,
+  SnapshotStatusResponse
+} from '../types';
 
 export const SubStoreHub: React.FC = () => {
   const [modeInfo, setModeInfo] = useState<SubStoreModeInfo | null>(null);
   const [manifest, setManifest] = useState<SubStoreManifest | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [extSubs, setExtSubs] = useState<ExternalSubsResponse | null>(null);
+  const [snapshots, setSnapshots] = useState<SnapshotStatusResponse | null>(null);
+  const [, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'nodes' | 'scripts'>('nodes');
   const [subNodesText, setSubNodesText] = useState('');
@@ -30,12 +41,20 @@ export const SubStoreHub: React.FC = () => {
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
 
+  // Modal for Adding External Subscription
+  const [showAddExtModal, setShowAddExtModal] = useState(false);
+  const [newExtName, setNewExtName] = useState('');
+  const [newExtDisplayName, setNewExtDisplayName] = useState('');
+  const [newExtUrl, setNewExtUrl] = useState('');
+
   const fetchHubData = async () => {
     setLoading(true);
     try {
-      const [mInfo, mfest] = await Promise.all([
+      const [mInfo, mfest, extData, snapData] = await Promise.all([
         api.getSubStoreMode().catch(() => null),
         api.getSubStoreManifest().catch(() => null),
+        api.getExternalSubs().catch(() => null),
+        api.getSnapshotStatus().catch(() => null),
       ]);
       if (mInfo) setModeInfo(mInfo);
       if (mfest) {
@@ -44,6 +63,8 @@ export const SubStoreHub: React.FC = () => {
           setSelectedScript(mfest.scripts[0].name);
         }
       }
+      if (extData) setExtSubs(extData);
+      if (snapData) setSnapshots(snapData);
 
       // Load nodes for subscription
       const nodeData = await api.getSubStoreNodes("ashan's vps").catch(() => null);
@@ -68,8 +89,12 @@ export const SubStoreHub: React.FC = () => {
     try {
       await api.setSubStoreMode(newMode);
       setStatusMsg({ type: 'success', text: `已成功切换为【${newMode}】模式并持久化！` });
-      const mInfo = await api.getSubStoreMode();
+      const [mInfo, extData] = await Promise.all([
+        api.getSubStoreMode(),
+        api.getExternalSubs().catch(() => null),
+      ]);
       setModeInfo(mInfo);
+      if (extData) setExtSubs(extData);
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: `模式切换失败: ${err.message}` });
     } finally {
@@ -92,16 +117,93 @@ export const SubStoreHub: React.FC = () => {
     }
   };
 
-  // Cleanup dead socks
-  const handleCleanupDeadSocks = async () => {
-    setActionLoading('cleanup-socks');
+  // Trigger Snapshot Warmup (PR #22 / Issue #21)
+  const handleWarmupSnapshots = async () => {
+    setActionLoading('warmup');
     setStatusMsg(null);
     try {
-      const res = await api.cleanupDeadSocks('Q');
-      setStatusMsg({ type: 'success', text: `已安全清理失效 Socks5 节点: 移除了 ${res.removed_count || 0} 个` });
-      await fetchHubData();
+      await api.warmupSnapshot(['Q', 'ashan']);
+      setStatusMsg({ type: 'success', text: '后台预烘焙任务已触发！稍后将生成最新毫秒级静态快照。' });
+      setTimeout(async () => {
+        const snap = await api.getSnapshotStatus().catch(() => null);
+        if (snap) setSnapshots(snap);
+      }, 2500);
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: `清理失败: ${err.message}` });
+      setStatusMsg({ type: 'error', text: `触发快照预热失败: ${err.message}` });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Add / Upsert External Subscription (PR #20 / Issue #19)
+  const handleAddExternalSub = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newExtName.trim() || !newExtUrl.trim()) {
+      setStatusMsg({ type: 'error', text: '订阅标识与订阅 URL 为必填项' });
+      return;
+    }
+    setActionLoading('add-ext');
+    setStatusMsg(null);
+    try {
+      await api.upsertExternalSub({
+        name: newExtName.trim(),
+        display_name: newExtDisplayName.trim() || newExtName.trim(),
+        url: newExtUrl.trim(),
+        enabled: true,
+        auto_mount: true,
+      });
+      setStatusMsg({ type: 'success', text: `外部机场订阅【${newExtName}】已成功挂载并联动 Sub-Store 同步！` });
+      setShowAddExtModal(false);
+      setNewExtName('');
+      setNewExtDisplayName('');
+      setNewExtUrl('');
+      const extData = await api.getExternalSubs();
+      setExtSubs(extData);
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: `添加外部机场失败: ${err.message}` });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Toggle External Source Enable/Disable
+  const handleToggleExtSource = async (detail: ExternalSubDetail) => {
+    setActionLoading(`toggle-${detail.name}`);
+    setStatusMsg(null);
+    try {
+      await api.upsertExternalSub({
+        name: detail.name,
+        display_name: detail.display_name,
+        url: detail.url || '',
+        enabled: !detail.enabled,
+      });
+      setStatusMsg({ 
+        type: 'success', 
+        text: `外部源【${detail.display_name || detail.name}】已${detail.enabled ? '停用' : '启用'}！` 
+      });
+      const extData = await api.getExternalSubs();
+      setExtSubs(extData);
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: `操作失败: ${err.message}` });
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  // Delete External Source
+  const handleDeleteExtSource = async (name: string) => {
+    if (!window.confirm(`确定要解绑并从 Sub-Store 中物理清除外部订阅【${name}】吗？`)) {
+      return;
+    }
+    setActionLoading(`del-${name}`);
+    setStatusMsg(null);
+    try {
+      await api.deleteExternalSub(name, true);
+      setStatusMsg({ type: 'success', text: `外部源【${name}】已成功物理卸载并清除！` });
+      const extData = await api.getExternalSubs();
+      setExtSubs(extData);
+    } catch (err: any) {
+      setStatusMsg({ type: 'error', text: `删除失败: ${err.message}` });
     } finally {
       setActionLoading(null);
     }
@@ -163,6 +265,13 @@ export const SubStoreHub: React.FC = () => {
     setTimeout(() => setCopiedLink(null), 2000);
   };
 
+  // 生成当前环境下的 1.3ms 快照直出地址
+  const currentToken = getStoredToken() || 'Woo@@@204317';
+  const getInstantSnapshotUrl = (fileName: string) => {
+    const origin = window.location.origin;
+    return `${origin}/api/sub/file/${fileName}?token=${encodeURIComponent(currentToken)}`;
+  };
+
   return (
     <div className="space-y-6">
       {/* Status banner */}
@@ -207,19 +316,6 @@ export const SubStoreHub: React.FC = () => {
               )}
               一键三层拓扑自愈同步
             </button>
-
-            <button
-              onClick={handleCleanupDeadSocks}
-              disabled={!!actionLoading}
-              className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-lg text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 transition shadow-2xs"
-            >
-              {actionLoading === 'cleanup-socks' ? (
-                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin text-blue-600" />
-              ) : (
-                <Trash2 className="w-3.5 h-3.5 mr-1.5 text-slate-500" />
-              )}
-              清理失效 Socks5
-            </button>
           </div>
         </div>
 
@@ -229,13 +325,13 @@ export const SubStoreHub: React.FC = () => {
             {
               id: 'external+self' as SubStoreMode,
               title: 'external+self (机场 + 自有)',
-              desc: '主流混合模式：包含外部蜂窝云/机场节点与自有云主机，兼顾大带宽与隐私落地',
+              desc: '主流混合模式：包含外部商业机场节点与自建线路机/家宽机，兼顾大带宽与隐私落地',
               activeColor: 'border-blue-600 bg-blue-50/50 ring-1 ring-blue-600',
             },
             {
               id: 'self' as SubStoreMode,
-              title: 'self (纯自有服务)',
-              desc: '自建专线纯净模式：仅输出自建 ACCK、IIJ、软银等自有节点，绝对安全干净',
+              title: 'self (纯自有专线 - V2Ray强保密)',
+              desc: '自建专线纯净模式：全量输出自建 ACCK、IIJ、软银等 V2Ray 强保密节点，绝对干净安全',
               activeColor: 'border-emerald-600 bg-emerald-50/50 ring-1 ring-emerald-600',
             },
             {
@@ -269,18 +365,202 @@ export const SubStoreHub: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Middle Share Distribution View */}
+      {/* 2. External Subscriptions Management Card (PR #20 / Issue #19 新增展现) */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div>
+            <div className="flex items-center space-x-2">
+              <Globe className="w-5 h-5 text-indigo-600" />
+              <h3 className="text-sm font-bold text-slate-900">外部商业订阅与第三方机场纳管</h3>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              直接传入机场订阅 URL 联动 Sub-Store 自动挂载，支持全动态增删与状态开关
+            </p>
+          </div>
+
+          <button
+            onClick={() => setShowAddExtModal(true)}
+            className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 transition shadow-2xs"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1" />
+            添加外部订阅
+          </button>
+        </div>
+
+        {/* External Subs List */}
+        <div className="mt-4 space-y-3">
+          {extSubs?.details && extSubs.details.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {extSubs.details.map((sub) => (
+                <div
+                  key={sub.name}
+                  className={`p-3.5 rounded-xl border transition flex items-center justify-between ${
+                    sub.enabled ? 'bg-slate-50/70 border-slate-200' : 'bg-slate-100/50 border-slate-200 opacity-60'
+                  }`}
+                >
+                  <div className="space-y-1 pr-3 truncate">
+                    <div className="flex items-center space-x-2">
+                      <span className="font-bold text-xs text-slate-900">{sub.display_name || sub.name}</span>
+                      <span className="font-mono text-2xs px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">
+                        {sub.name}
+                      </span>
+                      {sub.enabled ? (
+                        <span className="text-2xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">
+                          已启用
+                        </span>
+                      ) : (
+                        <span className="text-2xs px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 font-semibold">
+                          已停用
+                        </span>
+                      )}
+                    </div>
+                    {sub.url && (
+                      <p className="text-2xs font-mono text-slate-500 truncate" title={sub.url}>
+                        URL: {sub.url}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center space-x-1.5 flex-shrink-0">
+                    <button
+                      onClick={() => handleToggleExtSource(sub)}
+                      disabled={actionLoading === `toggle-${sub.name}`}
+                      title={sub.enabled ? '停用此外部源' : '启用此外部源'}
+                      className={`p-1.5 rounded-lg border transition ${
+                        sub.enabled 
+                          ? 'text-emerald-700 border-emerald-200 bg-emerald-50 hover:bg-emerald-100' 
+                          : 'text-slate-500 border-slate-200 bg-white hover:bg-slate-50'
+                      }`}
+                    >
+                      <Power className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteExtSource(sub.name)}
+                      disabled={actionLoading === `del-${sub.name}`}
+                      title="解绑并从 Sub-Store 物理删除"
+                      className="p-1.5 rounded-lg border border-red-200 text-red-600 bg-red-50 hover:bg-red-100 transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center text-slate-400 py-6 text-xs bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              当前尚未纳管外部机场，点击右上角「添加外部订阅」直接填入 URL 一键纳管！
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 3. Pre-rendered Snapshot & Instant Delivery (PR #22 / Issue #21 毫秒级直出展现) */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 pb-3 border-b border-slate-100">
+          <div>
+            <div className="flex items-center space-x-2">
+              <Zap className="w-5 h-5 text-amber-500" />
+              <h3 className="text-sm font-bold text-slate-900">预烘焙快照极速直出大盘 (1.3ms 零计算风暴)</h3>
+              <span className="px-2 py-0.5 rounded-full text-2xs font-semibold bg-emerald-100 text-emerald-800">
+                推荐客户端生产使用
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              彻底告别 30s 现场即时计算与 300% CPU 假死，后台静默烘焙，客户端请求直接读纯静态流秒级返回
+            </p>
+          </div>
+
+          <button
+            onClick={handleWarmupSnapshots}
+            disabled={actionLoading === 'warmup'}
+            className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 transition shadow-2xs"
+          >
+            {actionLoading === 'warmup' ? (
+              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin text-amber-600" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5 text-amber-600" />
+            )}
+            立即重新预热烘焙
+          </button>
+        </div>
+
+        {/* Snapshot Cards */}
+        {snapshots?.snapshots && Object.keys(snapshots.snapshots).length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Object.entries(snapshots.snapshots).map(([name, meta]: [string, any]) => {
+              const instantUrl = getInstantSnapshotUrl(name);
+              return (
+                <div key={name} className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <span className="font-bold text-sm text-slate-900 font-mono">{name}</span>
+                      <span className="text-2xs font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-800 flex items-center">
+                        <Zap className="w-3 h-3 mr-1" />
+                        直出 1.3ms
+                      </span>
+                    </div>
+                    <span className="text-2xs font-mono text-slate-400">
+                      节点数: <strong className="text-slate-800">{meta.proxy_count}</strong>
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-2xs font-mono bg-white p-2.5 rounded-lg border border-slate-200">
+                    <div>
+                      <span className="text-slate-400 block">快照大小</span>
+                      <span className="font-semibold text-slate-700">{meta.size_human}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block">烘焙耗时</span>
+                      <span className="font-semibold text-slate-700">{meta.duration_ms}ms</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block">生成时间</span>
+                      <span className="font-semibold text-slate-700">{meta.updated_at_str.split(' ')[1] || meta.updated_at_str}</span>
+                    </div>
+                  </div>
+
+                  {/* Instant Delivery URL with Copy */}
+                  <div className="space-y-1">
+                    <label className="text-2xs font-semibold text-slate-600 flex items-center">
+                      <ShieldCheck className="w-3 h-3 mr-1 text-emerald-600" />
+                      毫秒直出分享链接 (含 ETag 304 极速协商):
+                    </label>
+                    <div className="p-2 bg-white rounded border border-slate-200 font-mono text-2xs text-slate-600 break-all select-all flex items-center justify-between">
+                      <span className="truncate pr-2">{instantUrl}</span>
+                      <button
+                        onClick={() => handleCopy(instantUrl, `instant-${name}`)}
+                        className="text-amber-600 hover:text-amber-800 text-xs font-medium ml-1 flex-shrink-0"
+                      >
+                        {copiedLink === `instant-${name}` ? (
+                          <Check className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-center text-slate-400 py-6 text-xs bg-slate-50 rounded-xl border border-dashed border-slate-200">
+            暂无落盘快照，正在等待后台定时烘焙或点击上方「立即预热」立即生成！
+          </div>
+        )}
+      </div>
+
+      {/* 4. Sub-Store Origin Live Sharing Views */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <Share2 className="w-4 h-4 text-blue-600" />
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              客户端订阅分发与双域名连通性视图
+              Sub-Store 源站动态计算订阅链接 (用于算子调试)
             </h3>
           </div>
-          <span className="text-2xs font-mono text-emerald-600 flex items-center">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 mr-1.5 animate-pulse"></span>
-            双域名就绪 (free.1992004.xyz)
+          <span className="text-2xs font-mono text-slate-500">
+            仅作为测试参考，生产拉取请使用上方极速直出链接
           </span>
         </div>
 
@@ -319,7 +599,7 @@ export const SubStoreHub: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. Bottom Management Workbench */}
+      {/* 5. Bottom Management Workbench */}
       <div className="bg-white border border-slate-200 rounded-xl shadow-2xs overflow-hidden">
         {/* Workspace Tab Nav */}
         <div className="flex border-b border-slate-200 bg-slate-50 px-4">
@@ -331,7 +611,7 @@ export const SubStoreHub: React.FC = () => {
                 : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
-            自有订阅节点清单在线维护
+            自建专线节点在线维护 (V2Ray强保密)
           </button>
           <button
             onClick={() => setActiveTab('scripts')}
@@ -377,11 +657,11 @@ export const SubStoreHub: React.FC = () => {
               rows={12}
               value={subNodesText}
               onChange={(e) => setSubNodesText(e.target.value)}
-              placeholder="每行输入一条完整的代理协议链接 (vless://, trojan://, ss://, vmess://)"
+              placeholder="每行输入一条完整的自建代理协议链接 (vless://, trojan://, ss://, vmess://) —— 提示：自建对外直连全量要求 V2Ray 高保密协议"
               className="w-full p-3 font-mono text-xs border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600 bg-slate-50/50 leading-relaxed"
             />
             <div className="text-2xs text-slate-400">
-              提示：每行一条明文链接，换端口自愈或手工增删均会自动在此热同步更新。
+              安全规范提示：所有自建对外节点必须使用 V2Ray / Xray 生态协议（VLESS Reality / Vision / WS TLS）；懒猫云到家宽内部链路允许使用 SS。
             </div>
           </div>
         )}
@@ -429,6 +709,95 @@ export const SubStoreHub: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Modal: Add External Subscription */}
+      {showAddExtModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-900 flex items-center">
+                <Plus className="w-5 h-5 mr-1.5 text-indigo-600" />
+                添加外部商业机场订阅 (一键联动 Sub-Store)
+              </h3>
+              <button
+                onClick={() => setShowAddExtModal(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-semibold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleAddExternalSub} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  订阅唯一标识 (Name) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="例如: fwcloud, airport_a"
+                  value={newExtName}
+                  onChange={(e) => setNewExtName(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono focus:ring-2 focus:ring-indigo-600 focus:outline-none"
+                />
+                <span className="text-2xs text-slate-400 mt-1 block">用于 Sub-Store 内部存储与 URL 路由标识</span>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  显示别名 (Display Name)
+                </label>
+                <input
+                  type="text"
+                  placeholder="例如: 蜂窝云 (香港/新加坡BGP)"
+                  value={newExtDisplayName}
+                  onChange={(e) => setNewExtDisplayName(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-600 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  第三方机场订阅 URL <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  required
+                  rows={3}
+                  placeholder="https://api.example.com/link/token?clash=1"
+                  value={newExtUrl}
+                  onChange={(e) => setNewExtUrl(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono focus:ring-2 focus:ring-indigo-600 focus:outline-none leading-relaxed"
+                />
+                <span className="text-2xs text-slate-400 mt-1 block">
+                  直接粘贴第三方机场的原生 Clash/V2Ray 链接，系统将自动向 Sub-Store 创建并完成挂载。
+                </span>
+              </div>
+
+              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAddExtModal(false)}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-slate-700 hover:bg-slate-50 font-medium"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'add-ext'}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold flex items-center shadow-2xs disabled:opacity-50"
+                >
+                  {actionLoading === 'add-ext' ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Check className="w-3.5 h-3.5 mr-1.5" />
+                  )}
+                  保存并同步挂载
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

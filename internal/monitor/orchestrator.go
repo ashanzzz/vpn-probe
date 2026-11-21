@@ -464,14 +464,52 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 			continue
 		}
 		res := s.LastResult
-		if strings.EqualFold(res.Name, transitName) || strings.EqualFold(res.ID, transitName) {
+		if strings.EqualFold(res.Name, transitName) || strings.EqualFold(res.ID, transitName) || strings.Contains(strings.ToLower(res.Name), strings.ToLower(transitName)) {
 			transitNode = res
 		}
-		if strings.EqualFold(res.Name, resiName) || strings.EqualFold(res.ID, resiName) {
+		if strings.EqualFold(res.Name, resiName) || strings.EqualFold(res.ID, resiName) || strings.Contains(strings.ToLower(res.Name), strings.ToLower(resiName)) {
 			resiNode = res
 		}
 	}
 	o.scheduler.mu.RUnlock()
+
+	// 支持直接传入原始代理 URL 作为线路机
+	if transitNode == nil && strings.Contains(transitName, "://") {
+		tag := "transit-custom"
+		if u, err := url.Parse(transitName); err == nil && u.Fragment != "" {
+			if unescaped, err := url.QueryUnescape(u.Fragment); err == nil {
+				tag = unescaped
+			} else {
+				tag = u.Fragment
+			}
+		}
+		transitNode = &model.NodeProbeResult{
+			ID:          tag,
+			Name:        tag,
+			OriginalURL: transitName,
+			NodeType:    "transit",
+			Online:      true,
+		}
+	}
+
+	// 支持直接传入原始代理 URL 作为家宽机
+	if resiNode == nil && strings.Contains(resiName, "://") {
+		tag := "residential-custom"
+		if u, err := url.Parse(resiName); err == nil && u.Fragment != "" {
+			if unescaped, err := url.QueryUnescape(u.Fragment); err == nil {
+				tag = unescaped
+			} else {
+				tag = u.Fragment
+			}
+		}
+		resiNode = &model.NodeProbeResult{
+			ID:          tag,
+			Name:        tag,
+			OriginalURL: resiName,
+			NodeType:    "residential",
+			Online:      true,
+		}
+	}
 
 	if transitNode == nil {
 		return CustomChainBind{}, fmt.Errorf("transit node '%s' not found or offline", transitName)

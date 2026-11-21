@@ -24,6 +24,7 @@ import (
 	"vpn-probe/internal/speedtest"
 	"vpn-probe/internal/store"
 	"vpn-probe/internal/substore"
+	"vpn-probe/internal/vpsmgr"
 )
 
 type APIServer struct {
@@ -36,11 +37,17 @@ type APIServer struct {
 	mcpServer      *mcp.MCPServer
 	scheduler      *monitor.Scheduler
 	rulesMgr       *rules.Manager
+	vpsMgr         *vpsmgr.Manager
 }
 
 // SetConfigPath 设置配置文件路径以支持运行时热改写保存
 func (s *APIServer) SetConfigPath(p string) {
 	s.configPath = p
+}
+
+// SetVPSManager 注入 VPS 管理器
+func (s *APIServer) SetVPSManager(m *vpsmgr.Manager) {
+	s.vpsMgr = m
 }
 
 func NewAPIServer(
@@ -881,6 +888,13 @@ func (s *APIServer) setupRoutes() {
 
 	s.app.Get("/mcp/sse", adaptor.HTTPHandler(sse.SSEHandler()))
 	s.app.Post("/mcp/messages", adaptor.HTTPHandler(sse.MessageHandler()))
+
+	// 7. VPS 节点生命周期、深度墙况分析与换端口自愈 API
+	s.app.Get("/api/vps/manage", s.handleVPSManage)
+	s.app.Post("/api/vps/manage/install", s.handleVPSInstall)
+	s.app.Post("/api/vps/manage/update", s.handleVPSUpdate)
+	s.app.Get("/api/vps/blocked-analysis", s.handleBlockedAnalysis)
+	s.app.Post("/api/vps/heal/port", s.handleHealPort)
 }
 
 func (s *APIServer) Start(addr string) error {
@@ -1175,11 +1189,17 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 
 	// 1. 订阅策略组与节点引用深度审计 (统计究竟有多少个分组，每个分组有几个连接)
 	audit, err := s.substoreClient.AuditFileGroups(ctx, fileName)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error":     err.Error(),
-			"file_name": fileName,
-		})
+	if audit == nil {
+		auditErrMsg := "unknown error"
+		if err != nil {
+			auditErrMsg = err.Error()
+		}
+		audit = &substore.GroupAuditResult{
+			FileName:           fileName,
+			Valid:              false,
+			GroupCounts:        make(map[string]int),
+			DanglingReferences: map[string][]string{"substore_error": {auditErrMsg}},
+		}
 	}
 
 	// 2. 本地对 free.1992004.xyz 和 sub.ashanzzz.com 分享链接进行连通性与防墙测试
@@ -1293,4 +1313,105 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 		"composite_valid":        compositeValid,
 		"summary":                summary,
 	})
+}
+
+// 7.1 查询所有托管 VPS 运行形态、当前版本与最新 GitHub 发版
+func (s *APIServer) handleVPSManage(c *fiber.Ctx) error {
+	if s.vpsMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
+	}
+	infos := s.vpsMgr.ListVPSInstances(c.Context())
+	return c.JSON(fiber.Map{
+		"status":    "ok",
+		"total":     len(infos),
+		"instances": infos,
+	})
+}
+
+// 7.2 一键部署代理软件 (首选轻量 sing-box, 可选 3x-ui)
+func (s *APIServer) handleVPSInstall(c *fiber.Ctx) error {
+	if s.vpsMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
+	}
+	var req struct {
+		VPSID    string `json:"vps_id"`
+		Software string `json:"software"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.VPSID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "vps_id is required"})
+	}
+	msg, err := s.vpsMgr.InstallSoftware(c.Context(), req.VPSID, req.Software)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error(), "output": msg})
+	}
+	return c.JSON(fiber.Map{"status": "ok", "message": msg})
+}
+
+// 7.3 一键升级指定 VPS 容器至最新稳定镜像并平滑重启
+func (s *APIServer) handleVPSUpdate(c *fiber.Ctx) error {
+	if s.vpsMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
+	}
+	var req struct {
+		VPSID string `json:"vps_id"`
+	}
+	if err := c.BodyParser(&req); err != nil || req.VPSID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "vps_id is required"})
+	}
+	msg, err := s.vpsMgr.UpdateSoftware(c.Context(), req.VPSID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error(), "output": msg})
+	}
+	return c.JSON(fiber.Map{"status": "ok", "message": msg})
+}
+
+// 7.4 节点深度墙况分类大盘 (端口墙 vs 整机墙 vs 密钥协议错误 vs 机器宕机)
+func (s *APIServer) handleBlockedAnalysis(c *fiber.Ctx) error {
+	if s.vpsMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
+	}
+	if s.scheduler == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
+	}
+	allStates := s.scheduler.GetStatus()
+	var probeResults []*model.NodeProbeResult
+	for _, st := range allStates {
+		if st.LastResult != nil {
+			probeResults = append(probeResults, st.LastResult)
+		}
+	}
+	analysis := s.vpsMgr.GetBlockedAnalysis(probeResults)
+	return c.JSON(fiber.Map{
+		"status":   "ok",
+		"total":    len(analysis),
+		"analysis": analysis,
+	})
+}
+
+// 7.5 主动或自动触发换端口自愈 (生成 20000-60000 端口，sing-box 预检与原子回滚，同步 SubStore 与本地)
+func (s *APIServer) handleHealPort(c *fiber.Ctx) error {
+	if s.vpsMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
+	}
+	if s.scheduler == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
+	}
+	var req vpsmgr.PortHealRequest
+	if err := c.BodyParser(&req); err != nil || req.NodeName == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "node_name is required"})
+	}
+	allStates := s.scheduler.GetStatus()
+	var probeResults []*model.NodeProbeResult
+	for _, st := range allStates {
+		if st.LastResult != nil {
+			probeResults = append(probeResults, st.LastResult)
+		}
+	}
+	resp, err := s.vpsMgr.HealPort(c.Context(), req.NodeName, req.TargetPort, probeResults)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(resp)
+	}
+	// 触发立即重检并刷新大盘
+	go s.scheduler.RunAllChecks(context.Background(), true)
+	return c.JSON(resp)
 }

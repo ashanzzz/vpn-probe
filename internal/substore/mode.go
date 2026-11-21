@@ -226,36 +226,73 @@ type GroupAuditResult struct {
 	DomainsCheck       []ShareDomainCheck  `json:"domains_check,omitempty"`
 }
 
+var (
+	auditCacheMu sync.RWMutex
+	auditCache   = make(map[string]*GroupAuditResult)
+)
+
 // AuditFileGroups 审计指定 File 的 Clash 配置是否存在悬空/不存在的节点引用
 func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAuditResult, error) {
 	if c.cfg == nil || !c.cfg.Enabled || c.cfg.URL == "" {
 		return nil, fmt.Errorf("substore is not configured or disabled")
 	}
 
-	base := strings.TrimRight(c.cfg.URL, "/")
-	auditCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	req, _ := http.NewRequestWithContext(auditCtx, "GET", fmt.Sprintf("%s/api/file/%s", base, fileName), nil)
-	c.setAuth(req)
-	req.Header.Set("User-Agent", "ClashX/1.90.0")
-
-	auditClient := &http.Client{
-		Timeout: 120 * time.Second,
-	}
-	resp, err := auditClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch file: %w", err)
-	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
+	urlsToTry := []string{
+		strings.TrimRight(c.cfg.URL, "/"),
+		"http://156.231.113.91:3001/Woo@@@204317", // 源站直连兜底 (避开 Cloudflare 30s 504 限制)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("substore returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+	var lastErr error
+	var bodyBytes []byte
+
+	for _, base := range urlsToTry {
+		fn := func(baseURL string) ([]byte, error) {
+			auditCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
+
+			req, _ := http.NewRequestWithContext(auditCtx, "GET", fmt.Sprintf("%s/api/file/%s", baseURL, fileName), nil)
+			c.setAuth(req)
+			req.Header.Set("User-Agent", "ClashX/1.90.0")
+
+			auditClient := &http.Client{Timeout: 120 * time.Second}
+			resp, err := auditClient.Do(req)
+			if err != nil {
+				return nil, err
+			}
+			defer resp.Body.Close()
+
+			b, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, err
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("substore returned HTTP %d: %s", resp.StatusCode, string(b))
+			}
+
+			return b, nil
+		}
+
+		b, err := fn(base)
+		if err == nil && len(b) > 0 {
+			bodyBytes = b
+			lastErr = nil
+			break
+		}
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		// 降级：检查是否有历史内存缓存
+		auditCacheMu.RLock()
+		cached, exists := auditCache[fileName]
+		auditCacheMu.RUnlock()
+		if exists && cached != nil {
+			logger.Warnf("[SUBSTORE-AUDIT] Fetching file %s failed (%v), returning cached audit (%d groups, %d proxies)",
+				fileName, lastErr, cached.TotalGroups, cached.TotalProxies)
+			return cached, nil
+		}
+		return nil, fmt.Errorf("failed to fetch file: %w", lastErr)
 	}
 
 	var parsed struct {
@@ -312,14 +349,20 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 		}
 	}
 
-	return &GroupAuditResult{
+	res := &GroupAuditResult{
 		FileName:           fileName,
 		TotalProxies:       len(parsed.Proxies),
 		TotalGroups:        len(parsed.Groups),
 		Valid:              allValid,
 		DanglingReferences: dangling,
 		GroupCounts:        groupCounts,
-	}, nil
+	}
+
+	auditCacheMu.Lock()
+	auditCache[fileName] = res
+	auditCacheMu.Unlock()
+
+	return res, nil
 }
 
 // CheckShareDomains 并发对 free.1992004.xyz 与 sub.ashanzzz.com 进行本地连通性与防墙检测

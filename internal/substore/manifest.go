@@ -34,6 +34,10 @@ type ShareLinkInfo struct {
 	Name             string               `json:"name"`
 	DisplayName      string               `json:"display_name"`
 	ShareURL         string               `json:"share_url"`
+	ShareURLDomain1  string               `json:"share_url_domain1"`
+	ShareURLDomain2  string               `json:"share_url_domain2"`
+	SubURLDomain1    string               `json:"sub_url_domain1"`
+	SubURLDomain2    string               `json:"sub_url_domain2"`
 	TargetFormat     string               `json:"target_format"`
 	SourceCollection string               `json:"source_collection"`
 	PipelineScripts  []ScriptOperatorInfo `json:"pipeline_scripts"`
@@ -119,11 +123,11 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		sourceName, _ := item["sourceName"].(string)
 		targetType, _ := item["type"].(string)
 
-		origin := baseURL
-		if parsedU, err := url.Parse(baseURL); err == nil {
-			origin = fmt.Sprintf("%s://%s", parsedU.Scheme, parsedU.Host)
-		}
-		shareURL := fmt.Sprintf("%s/share/file/%s?token=13602004317", origin, url.PathEscape(name))
+		escapedName := url.PathEscape(name)
+		shareURL1 := fmt.Sprintf("https://free.1992004.xyz/share/file/%s?token=13602004317", escapedName)
+		shareURL2 := fmt.Sprintf("https://sub.ashanzzz.com/share/file/%s?token=13602004317", escapedName)
+		subURL1 := fmt.Sprintf("https://ashan:Woo@@@204317@free.1992004.xyz/Woo@@@204317/api/file/%s", escapedName)
+		subURL2 := fmt.Sprintf("https://ashan:Woo@@@204317@sub.ashanzzz.com/Woo@@@204317/api/file/%s", escapedName)
 
 		var ops []ScriptOperatorInfo
 		if procList, ok := item["process"].([]any); ok {
@@ -168,7 +172,11 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		manifest.ShareLinks = append(manifest.ShareLinks, ShareLinkInfo{
 			Name:             name,
 			DisplayName:      displayName,
-			ShareURL:         shareURL,
+			ShareURL:         subURL1,
+			ShareURLDomain1:  shareURL1,
+			ShareURLDomain2:  shareURL2,
+			SubURLDomain1:    subURL1,
+			SubURLDomain2:    subURL2,
 			TargetFormat:     targetType,
 			SourceCollection: sourceName,
 			PipelineScripts:  ops,

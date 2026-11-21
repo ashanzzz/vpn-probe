@@ -19,6 +19,7 @@ import (
 	"vpn-probe/internal/rules"
 	"vpn-probe/internal/store"
 	"vpn-probe/internal/substore"
+	"vpn-probe/internal/vpsmgr"
 )
 
 func main() {
@@ -105,7 +106,10 @@ func runServer(args []string) {
 		logger.Infof("SubStore sync disabled (can be enabled in config.yaml)")
 	}
 
+	vpsMgr := vpsmgr.NewManager(cfg, subClient, *configPath)
+
 	sched := monitor.NewScheduler(cfg, engine, st, subClient)
+	sched.SetVPSManager(vpsMgr)
 	if cfg.Monitor.Enabled {
 		sched.Start(context.Background())
 	}
@@ -119,6 +123,7 @@ func runServer(args []string) {
 	mcpSrv := mcp.NewMCPServer(cfg, engine, st, subClient)
 	apiSrv := api.NewAPIServer(cfg, engine, st, subClient, mcpSrv, sched, rulesMgr)
 	apiSrv.SetConfigPath(*configPath)
+	apiSrv.SetVPSManager(vpsMgr)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	logger.Infof("REST API listening on http://%s", addr)

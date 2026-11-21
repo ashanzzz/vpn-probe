@@ -15,6 +15,7 @@ import (
 	"vpn-probe/internal/speedtest"
 	"vpn-probe/internal/store"
 	"vpn-probe/internal/substore"
+	"vpn-probe/internal/vpsmgr"
 )
 
 type NodeState struct {
@@ -29,9 +30,16 @@ type Scheduler struct {
 	store          *store.Store
 	substoreClient *substore.Client
 	healer         *healer.Healer
+	vpsMgr         *vpsmgr.Manager
 	mu             sync.RWMutex
 	nodeStates     map[string]*NodeState // node name -> state
 	cancel         context.CancelFunc
+}
+
+func (s *Scheduler) SetVPSManager(m *vpsmgr.Manager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.vpsMgr = m
 }
 
 func NewScheduler(
@@ -151,6 +159,30 @@ func (s *Scheduler) Start(ctx context.Context) {
 					logger.Sync("[SCHEDULE] Triggering 15-min periodic SubStore topology reconcile & node refresh...")
 					_, _ = s.substoreClient.ReconcileTopology(runCtx)
 					_ = s.RefreshNodesFromSubStore(runCtx)
+				}
+			}
+		}
+	}()
+
+	// 定时器 4: 每日凌晨 03:00 巡检 VPS 代理软件版本与 GitHub 上游更新
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		var lastCheckedDay int = -1
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case now := <-ticker.C:
+				if now.Hour() == 3 && now.Day() != lastCheckedDay {
+					s.mu.RLock()
+					mgr := s.vpsMgr
+					s.mu.RUnlock()
+					if mgr != nil {
+						lastCheckedDay = now.Day()
+						logger.Infof("[SCHEDULE] 03:00 Daily Software Lifecycle & GitHub Release check triggered...")
+						_ = mgr.DailyCheckUpdates(runCtx)
+					}
 				}
 			}
 		}

@@ -287,7 +287,7 @@ func (m *Manager) InstallSoftware(ctx context.Context, vpsID string, software st
 	}
 
 	if software == "" || software == "sing-box" {
-		// 首选方案：安装现代轻量 sing-box Docker 容器
+		// 首选方案：安装现代轻量安全 VLESS Reality sing-box Docker 容器 (彻底废除 Shadowsocks)
 		installCmd := `
 command -v docker >/dev/null 2>&1 || curl -fsSL https://get.docker.com | sh
 docker pull ghcr.io/sagernet/sing-box:latest
@@ -297,18 +297,35 @@ cat << 'EOF' > /opt/sb-mgr/config.json
   "log": {"level": "warn", "timestamp": true},
   "inbounds": [
     {
-      "type": "shadowsocks",
-      "tag": "ss2022",
+      "type": "vless",
+      "tag": "vless-reality",
       "listen": "::",
-      "listen_port": 24443,
-      "method": "2022-blake3-aes-128-gcm",
-      "password": "06Dsfq1xKDxX/AIzTHMmmQ=="
+      "listen_port": 36564,
+      "users": [
+        {
+          "uuid": "5b84d275-d328-4565-9b47-20e9121fee7e",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "aws.amazon.com",
+        "reality": {
+          "enabled": true,
+          "handshake": {
+            "server": "aws.amazon.com",
+            "server_port": 443
+          },
+          "private_key": "oA6K1zcO9AWpQkBOmx9kU2yTMc9g9oGINyB9OmC38WY",
+          "short_id": ["3c4ffcc0"]
+        }
+      }
     }
   ],
   "outbounds": [{"type": "direct", "tag": "direct"}]
 }
 EOF
-iptables -I INPUT -p tcp --dport 24443 -j ACCEPT
+iptables -I INPUT -p tcp --dport 36564 -j ACCEPT
 docker rm -f sb-mgr 2>/dev/null
 docker run -d --name sb-mgr --restart always --net=host -v /opt/sb-mgr:/etc/sing-box ghcr.io/sagernet/sing-box:latest run -c /etc/sing-box/config.json
 `
@@ -316,7 +333,7 @@ docker run -d --name sb-mgr --restart always --net=host -v /opt/sb-mgr:/etc/sing
 		if err != nil {
 			return out, fmt.Errorf("install sing-box failed: %w", err)
 		}
-		return fmt.Sprintf("Successfully installed sing-box container 'sb-mgr' on %s (port 24443)", inst.IP), nil
+		return fmt.Sprintf("Successfully installed sing-box VLESS Reality container 'sb-mgr' on %s (port 36564)", inst.IP), nil
 	} else if software == "3x-ui" {
 		cmd := "docker pull ghcr.io/mhsanaei/3x-ui:latest && docker run -d --name 3x-ui --restart always --net=host -v /etc/x-ui:/etc/x-ui ghcr.io/mhsanaei/3x-ui:latest"
 		out, err := m.detector.RunSSH(inst, cmd)

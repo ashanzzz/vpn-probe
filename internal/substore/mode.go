@@ -224,6 +224,7 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 
 	req, _ := http.NewRequestWithContext(auditCtx, "GET", fmt.Sprintf("%s/api/file/%s", base, fileName), nil)
 	c.setAuth(req)
+	req.Header.Set("User-Agent", "ClashX/1.90.0")
 
 	auditClient := &http.Client{
 		Timeout: 120 * time.Second,
@@ -239,6 +240,10 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 		return nil, err
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("substore returned HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
 	var parsed struct {
 		Proxies []map[string]any `yaml:"proxies"`
 		Groups  []struct {
@@ -249,6 +254,16 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 
 	if err := yaml.Unmarshal(bodyBytes, &parsed); err != nil {
 		return nil, fmt.Errorf("failed to parse Clash YAML: %w", err)
+	}
+
+	if len(parsed.Proxies) == 0 {
+		return &GroupAuditResult{
+			FileName:           fileName,
+			TotalProxies:       0,
+			Valid:              false,
+			DanglingReferences: make(map[string][]string),
+			GroupCounts:        make(map[string]int),
+		}, fmt.Errorf("subscription '%s' rendered 0 proxies", fileName)
 	}
 
 	proxySet := make(map[string]bool)

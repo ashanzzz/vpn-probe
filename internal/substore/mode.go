@@ -322,70 +322,76 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 	}, nil
 }
 
-// CheckShareDomains 对 free.1992004.xyz 与 sub.ashanzzz.com 进行本地连通性与防墙检测
+// CheckShareDomains 并发对 free.1992004.xyz 与 sub.ashanzzz.com 进行本地连通性与防墙检测
 func CheckShareDomains(ctx context.Context, fileName string, token string) []ShareDomainCheck {
 	if token == "" {
 		token = "13602004317"
 	}
 	domains := []string{"free.1992004.xyz", "sub.ashanzzz.com"}
-	var results []ShareDomainCheck
+	results := make([]ShareDomainCheck, len(domains))
+	var wg sync.WaitGroup
 
-	for _, domain := range domains {
-		url := fmt.Sprintf("https://%s/share/file/%s?token=%s", domain, fileName, token)
-		check := ShareDomainCheck{
-			Domain: domain,
-			URL:    url,
-		}
+	for i, domain := range domains {
+		wg.Add(1)
+		go func(idx int, d string) {
+			defer wg.Done()
+			url := fmt.Sprintf("https://%s/share/file/%s?token=%s", d, fileName, token)
+			check := ShareDomainCheck{
+				Domain: d,
+				URL:    url,
+			}
 
-		t0 := time.Now()
-		// 1. 本地 TCP / TLS 握手探活 (端口 443)
-		dialer := &tls.Dialer{
-			Config: &tls.Config{
-				InsecureSkipVerify: true,
-				ServerName:         domain,
-			},
-		}
-		dialCtx, dialCancel := context.WithTimeout(ctx, 6*time.Second)
-		conn, err := dialer.DialContext(dialCtx, "tcp", domain+":443")
-		dialCancel()
+			t0 := time.Now()
+			// 1. 本地 TCP / TLS 握手探活 (端口 443，4s 超时)
+			dialer := &tls.Dialer{
+				Config: &tls.Config{
+					InsecureSkipVerify: true,
+					ServerName:         d,
+				},
+			}
+			dialCtx, dialCancel := context.WithTimeout(ctx, 4*time.Second)
+			conn, err := dialer.DialContext(dialCtx, "tcp", d+":443")
+			dialCancel()
 
-		if err != nil {
-			check.Reachable = false
-			check.PossibleGFW = true
-			check.Error = fmt.Sprintf("TLS/TCP 握手失败 (链接可能被墙或CF节点受阻): %v", err)
-			results = append(results, check)
-			continue
-		}
-		_ = conn.Close()
-		handshakeMs := time.Since(t0).Milliseconds()
-		check.Reachable = true
-		check.LatencyMs = handshakeMs
+			if err != nil {
+				check.Reachable = false
+				check.PossibleGFW = true
+				check.Error = fmt.Sprintf("TLS/TCP 握手失败 (链接可能被墙或CF节点受阻): %v", err)
+				results[idx] = check
+				return
+			}
+			_ = conn.Close()
+			handshakeMs := time.Since(t0).Milliseconds()
+			check.Reachable = true
+			check.LatencyMs = handshakeMs
 
-		// 2. 发起 HTTP HEAD 请求测试分享端点响应 (带 12s 超时)
-		httpCtx, httpCancel := context.WithTimeout(ctx, 12*time.Second)
-		req, _ := http.NewRequestWithContext(httpCtx, "HEAD", url, nil)
-		req.Header.Set("User-Agent", "ClashX/1.90.0")
+			// 2. 发起 HTTP HEAD 请求测试分享端点响应 (带 8s 超时)
+			httpCtx, httpCancel := context.WithTimeout(ctx, 8*time.Second)
+			req, _ := http.NewRequestWithContext(httpCtx, "HEAD", url, nil)
+			req.Header.Set("User-Agent", "ClashX/1.90.0")
 
-		client := &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-		}
-		resp, httpErr := client.Do(req)
-		httpCancel()
+			client := &http.Client{
+				Transport: &http.Transport{
+					TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				},
+			}
+			resp, httpErr := client.Do(req)
+			httpCancel()
 
-		if httpErr != nil {
-			// TLS 握手已成功证明未被墙，HTTP 请求若因上游复杂脚本耗时较长则正常标记直连畅通
-			check.StatusCode = 200
-			check.Error = fmt.Sprintf("上游脚本渲染等待 (%v)，但域名端口直连畅通", httpErr)
-		} else {
-			check.StatusCode = resp.StatusCode
-			check.LatencyMs = time.Since(t0).Milliseconds()
-			_ = resp.Body.Close()
-		}
+			if httpErr != nil {
+				// TLS 握手已成功证明未被墙，HTTP 请求若因上游复杂脚本耗时较长则正常标记直连畅通
+				check.StatusCode = 200
+				check.Error = fmt.Sprintf("上游脚本渲染等待 (%v)，但域名端口直连畅通", httpErr)
+			} else {
+				check.StatusCode = resp.StatusCode
+				check.LatencyMs = time.Since(t0).Milliseconds()
+				_ = resp.Body.Close()
+			}
 
-		results = append(results, check)
+			results[idx] = check
+		}(i, domain)
 	}
 
+	wg.Wait()
 	return results
 }

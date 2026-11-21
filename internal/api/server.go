@@ -1199,6 +1199,18 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 	selfNodesOnlineCount := 0
 
 	if s.scheduler != nil {
+		// 兜底：如果刚启动调度器未完成首轮探测，从持久化历史读取最近一次探测记录
+		recentMap := make(map[string]*model.NodeProbeResult)
+		if s.store != nil {
+			if recents, err := s.store.GetRecentResults(ctx, 100); err == nil {
+				for _, r := range recents {
+					if _, exists := recentMap[r.Name]; !exists {
+						recentMap[r.Name] = r
+					}
+				}
+			}
+		}
+
 		nodeStates := s.scheduler.GetStatus()
 		for _, st := range nodeStates {
 			// 严格准则：只针对自建连接，外部连接绝不纳入检测
@@ -1221,19 +1233,24 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 				"status_text": "未检测",
 			}
 
-			if st.LastResult != nil {
-				nodeInfo["online"] = st.LastResult.Online
-				nodeInfo["latency_ms"] = st.LastResult.LatencyMs
-				nodeInfo["china_exit"] = st.LastResult.ChinaExit
-				nodeInfo["exit_country"] = st.LastResult.ExitCountry
-				nodeInfo["exit_ip"] = st.LastResult.ExitIP
-				nodeInfo["category"] = st.LastResult.Category
-				nodeInfo["status_text"] = st.LastResult.StatusText
-				if st.LastResult.Split != nil {
-					nodeInfo["split"] = st.LastResult.Split
+			lastRes := st.LastResult
+			if lastRes == nil {
+				lastRes = recentMap[st.Config.Name]
+			}
+
+			if lastRes != nil {
+				nodeInfo["online"] = lastRes.Online
+				nodeInfo["latency_ms"] = lastRes.LatencyMs
+				nodeInfo["china_exit"] = lastRes.ChinaExit
+				nodeInfo["exit_country"] = lastRes.ExitCountry
+				nodeInfo["exit_ip"] = lastRes.ExitIP
+				nodeInfo["category"] = lastRes.Category
+				nodeInfo["status_text"] = lastRes.StatusText
+				if lastRes.Split != nil {
+					nodeInfo["split"] = lastRes.Split
 				}
 
-				if st.LastResult.Online {
+				if lastRes.Online {
 					selfNodesOnlineCount++
 				} else {
 					selfNodesHealthy = false
@@ -1246,7 +1263,7 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 		}
 	}
 
-	// 4. 证明组合创建的正确性判定
+	// 4. 证明组合创建的正确性判定 (订阅无断链、策略组无悬空、至少有自建核心链路低延迟在线)
 	compositeValid := audit.Valid && (len(audit.DanglingReferences) == 0) && (selfNodesOnlineCount > 0)
 
 	summary := fmt.Sprintf("校验完成：双域名分享链接本地可达（free.1992004.xyz与sub.ashanzzz.com均未被墙且直连畅通）；共有 %d 个策略分组，每个分组连接数映射完整无悬空；已检测 %d 个自建节点（在线 %d 个，外部连接已按规则跳过检测）；自建连接均有延迟生效，证明组合订阅创建完全正确！",

@@ -329,3 +329,69 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 
 	return nil
 }
+
+// CreateOrUpdateRemoteSub 在远程 SubStore 中创建或更新一个外部远程机场订阅 (Issue #19)
+func (c *Client) CreateOrUpdateRemoteSub(ctx context.Context, subName, displayName, remoteURL string) error {
+	if !c.cfg.Enabled || c.cfg.URL == "" {
+		return fmt.Errorf("substore integration is not enabled or URL is empty")
+	}
+
+	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	endpoint := fmt.Sprintf("%s/api/sub/%s", baseURL, url.PathEscape(subName))
+
+	if displayName == "" {
+		displayName = subName
+	}
+
+	payload := map[string]any{
+		"name":        subName,
+		"displayName": displayName,
+		"source":      "remote",
+		"url":         remoteURL,
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	// 1. 优先尝试 PATCH 更新现有订阅
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			logger.Sync("[SUBSTORE] ✅ Remote subscription '%s' patched successfully", subName)
+			return nil
+		}
+	}
+
+	// 2. 若更新返回 404/405 或失败，调用 POST /api/subs 自动创建
+	createEndpoint := fmt.Sprintf("%s/api/subs", baseURL)
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	c.setAuth(postReq)
+
+	postResp, postErr := c.httpClient.Do(postReq)
+	if postErr != nil {
+		return fmt.Errorf("create remote sub http request: %w", postErr)
+	}
+	defer postResp.Body.Close()
+
+	if postResp.StatusCode < 200 || postResp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(postResp.Body)
+		return fmt.Errorf("create remote sub failed with status %d: %s", postResp.StatusCode, string(respBody))
+	}
+
+	logger.Sync("[SUBSTORE] ✅ Remote subscription '%s' created successfully in SubStore", subName)
+	return nil
+}

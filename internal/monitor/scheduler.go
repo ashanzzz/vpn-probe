@@ -3,6 +3,8 @@ package monitor
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -203,8 +205,8 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 		return nil
 	}
 
-	// 核心逻辑限制：只针对自建 VPS 订阅 (ashan's vps)，外部机场连接 (蜂窝云等) 绝不纳入探测
-	subsToPull := []string{"ashan's vps"}
+	// 核心逻辑限制：只针对自建 VPS 订阅 (ashan-transit-direct)，外部机场连接 (蜂窝云等) 绝不纳入探测
+	subsToPull := []string{"ashan-transit-direct"}
 	var dynamicNodes []config.MonitoredNode
 
 	for _, subName := range subsToPull {
@@ -240,14 +242,32 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	getEndpoint := func(rawURL string) string {
+		h, p, s := parseEndpoint(rawURL)
+		if h != "" {
+			return fmt.Sprintf("%s:%d:%s", h, p, s)
+		}
+		return rawURL
+	}
+
 	validSelfSet := make(map[string]bool)
 	for _, n := range dynamicNodes {
-		validSelfSet[n.Name] = true
-		if _, exists := s.nodeStates[n.Name]; !exists {
-			s.nodeStates[n.Name] = &NodeState{Config: n}
+		ep := getEndpoint(n.URL)
+		matchedKey := ""
+		for key, state := range s.nodeStates {
+			if getEndpoint(state.Config.URL) == ep || key == n.Name {
+				matchedKey = key
+				break
+			}
+		}
+
+		if matchedKey != "" {
+			validSelfSet[matchedKey] = true
+			s.nodeStates[matchedKey].Config.URL = n.URL
+			s.nodeStates[matchedKey].Config.IsSelf = true
 		} else {
-			s.nodeStates[n.Name].Config.URL = n.URL
-			s.nodeStates[n.Name].Config.IsSelf = true
+			validSelfSet[n.Name] = true
+			s.nodeStates[n.Name] = &NodeState{Config: n}
 		}
 	}
 
@@ -394,13 +414,11 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 				fmt.Sprintf("reason=engine_error_ratio ratio=%.2f threshold=0.30 total=%d engine_err=%d",
 					ratio, total, resp.EngineErrors))
 		} else {
-			var transitLinks, resiLinks []string
-			for _, t := range rankedTransits {
-				if t.Online {
-					transitLinks = append(transitLinks, t.OriginalURL)
-				}
-			}
-			for _, r := range resiNodes {
+			// 5. 线路机节点去重与灾备逃生热备联动 (CF救活原则: 一切能直连时热备隐藏，直连全军覆没时自动提升)
+			transitLinks := filterActiveTransitNodes(rankedTransits)
+			var resiLinks []string
+			uniqueResis := deduplicateNodeResults(resiNodes)
+			for _, r := range uniqueResis {
 				if r.Online {
 					resiLinks = append(resiLinks, r.OriginalURL)
 				}
@@ -513,13 +531,10 @@ func (s *Scheduler) SyncThreeTierNow(ctx context.Context) error {
 	ranked := speedtest.RankNodes(allTransits)
 	chains := s.healer.BuildSmartChains(ranked, allResis)
 
-	var transitLinks, resiLinks []string
-	for _, t := range ranked {
-		if t.Online {
-			transitLinks = append(transitLinks, t.OriginalURL)
-		}
-	}
-	for _, r := range allResis {
+	transitLinks := filterActiveTransitNodes(ranked)
+	var resiLinks []string
+	uniqueResis := deduplicateNodeResults(allResis)
+	for _, r := range uniqueResis {
 		if r.Online {
 			resiLinks = append(resiLinks, r.OriginalURL)
 		}
@@ -530,6 +545,150 @@ func (s *Scheduler) SyncThreeTierNow(ctx context.Context) error {
 		ResidentialNodes:   resiLinks,
 		ChainNodes:         chains,
 	})
+}
+
+// filterActiveTransitNodes 对线路机节点进行去重、主机分组与灾备热备联动过滤 (CF救活原则: 直连健康时热备隐藏，直连全军覆没时自动提升)
+func filterActiveTransitNodes(transits []*model.NodeProbeResult) []string {
+	uniqueTransits := deduplicateNodeResults(transits)
+
+	type HostGroup struct {
+		HostID      string
+		DirectNodes []*model.NodeProbeResult
+		RescueNodes []*model.NodeProbeResult
+	}
+	groups := make(map[string]*HostGroup)
+	var groupOrder []string
+
+	for _, t := range uniqueTransits {
+		gid := getHostGroupKey(t)
+		if _, ok := groups[gid]; !ok {
+			groups[gid] = &HostGroup{HostID: gid}
+			groupOrder = append(groupOrder, gid)
+		}
+		if isCFRescueNode(t) {
+			groups[gid].RescueNodes = append(groups[gid].RescueNodes, t)
+		} else {
+			groups[gid].DirectNodes = append(groups[gid].DirectNodes, t)
+		}
+	}
+
+	var activeTransitLinks []string
+	for _, gid := range groupOrder {
+		grp := groups[gid]
+		hasDirectOnline := false
+		for _, d := range grp.DirectNodes {
+			if d.Online {
+				hasDirectOnline = true
+				activeTransitLinks = append(activeTransitLinks, d.OriginalURL)
+			}
+		}
+
+		if hasDirectOnline {
+			// 主力直连节点健康！CF 救活节点保持在待命池 (Standby)，从活跃推送订阅中剔除
+			for _, r := range grp.RescueNodes {
+				logger.Sync("[RESCUE-STANDBY] 🛡️ VPS主机 [%s] 主力直连节点健康在线，CF救活应急节点 [%s] 保持待命 (已从活跃订阅隐藏)", gid, r.Name)
+			}
+		} else {
+			// 🚨 主力直连节点全部离线/被墙！自动激活/提升 CF 救活节点塞入订阅
+			promoted := 0
+			for _, r := range grp.RescueNodes {
+				if r.Online {
+					activeTransitLinks = append(activeTransitLinks, r.OriginalURL)
+					promoted++
+					logger.Sync("[RESCUE-ACTIVE] 🚨 VPS主机 [%s] 直连全部离线！自动激活并提升 CF救活应急节点 [%s] 进入活跃订阅！", gid, r.Name)
+				}
+			}
+			if promoted == 0 {
+				logger.Warnf("[RESCUE-FAILED] ⚠️ VPS主机 [%s] 直连与CF救活节点均不可用！", gid)
+			}
+		}
+	}
+	return activeTransitLinks
+}
+
+// parseEndpoint 从代理链接中安全提取 (Host, Port, Scheme)
+func parseEndpoint(rawURL string) (string, int, string) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", 0, ""
+	}
+	host := u.Hostname()
+	portStr := u.Port()
+	port := 0
+	if p, err := strconv.Atoi(portStr); err == nil {
+		port = p
+	}
+	return host, port, u.Scheme
+}
+
+// deduplicateNodeResults 按网络端点 (Server:Port:Scheme) 彻底剔除重复节点
+func deduplicateNodeResults(nodes []*model.NodeProbeResult) []*model.NodeProbeResult {
+	seen := make(map[string]bool)
+	var unique []*model.NodeProbeResult
+	for _, n := range nodes {
+		if n == nil {
+			continue
+		}
+		h, p, s := parseEndpoint(n.OriginalURL)
+		endpoint := ""
+		if h != "" {
+			endpoint = fmt.Sprintf("%s:%d:%s", h, p, s)
+		} else {
+			endpoint = n.OriginalURL
+		}
+		if seen[endpoint] {
+			continue
+		}
+		seen[endpoint] = true
+		unique = append(unique, n)
+	}
+	return unique
+}
+
+// isCFRescueNode 判定是否为 Cloudflare CDN WS 救活逃生备用节点
+func isCFRescueNode(res *model.NodeProbeResult) bool {
+	if res == nil {
+		return false
+	}
+	name := strings.ToLower(res.Name)
+	url := strings.ToLower(res.OriginalURL)
+	return strings.Contains(name, "cf救活") ||
+		strings.Contains(name, "救活") ||
+		strings.Contains(name, "cf-ws") ||
+		strings.Contains(name, "cf/openresty") ||
+		strings.Contains(url, "-free.1992004.xyz") ||
+		strings.Contains(url, "cf-vless") ||
+		strings.Contains(url, "%2fcf-")
+}
+
+// getHostGroupKey 根据节点配置、Tag 或出口域名/IP归属 VPS 主机分组
+func getHostGroupKey(res *model.NodeProbeResult) string {
+	if res == nil {
+		return "unknown"
+	}
+	name := res.Name
+	host, _, _ := parseEndpoint(res.OriginalURL)
+	if host == "" && res.Diagnostic != nil {
+		host = res.Diagnostic.TargetIP
+	}
+
+	// 1. 美西 LAX 主机 (38.175.222.44 / lax-free.1992004.xyz)
+	if strings.Contains(host, "lax-free") || strings.Contains(name, "US-LAX") || strings.Contains(name, "洛杉矶") || strings.Contains(name, "美西") || host == "38.175.222.44" {
+		return "US-LAX"
+	}
+	// 2. 东京 IIJ 主机 (156.231.113.91 / tokyo-free.1992004.xyz)
+	if strings.Contains(host, "tokyo-free") || strings.Contains(name, "JP-Tokyo-IIJ") || strings.Contains(name, "东京 IIJ") || strings.Contains(name, "东京IIJ") || host == "156.231.113.91" {
+		return "JP-Tokyo-IIJ"
+	}
+	// 3. 东京软银 主机 (45.192.242.72)
+	if strings.Contains(name, "JP-Tokyo-Softbank") || strings.Contains(name, "东京软银") || host == "45.192.242.72" {
+		return "JP-Tokyo-Softbank"
+	}
+
+	if host != "" {
+		return host
+	}
+	return name
 }
 
 // GetStatus 返回当前所有监控节点的实时健康度与分组

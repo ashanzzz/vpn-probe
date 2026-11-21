@@ -444,29 +444,35 @@ func (s *APIServer) setupRoutes() {
 	// 5.1.5.1 综合订阅全量校验报告 (双域名测试 + 策略组与连接分布 + 仅自建节点延迟/送中/分流 + 组合创建正确性证明)
 	s.app.Get("/api/substore/verify", s.handleVerifySubscription)
 
-	// 5.1.6 查询组合订阅当前三模式状态
+	// 5.1.6 查询组合订阅当前三模式状态与动态外部机场池 (Issue #18)
 	s.app.Get("/api/substore/mode", func(c *fiber.Ctx) error {
 		if s.substoreClient == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
 		}
 		curr := s.substoreClient.GetCurrentMode()
+		extSources := s.substoreClient.GetExternalSources()
 		return c.JSON(fiber.Map{
-			"current_mode":  curr,
-			"allowed_modes": []string{"external+self", "self", "external"},
-			"subscriptions": substore.ModeSubscriptions[curr],
+			"current_mode":     curr,
+			"allowed_modes":    []string{"external+self", "self", "external"},
+			"external_sources": extSources,
+			"subscriptions":    s.substoreClient.GetModeSubscriptions(curr),
 		})
 	})
 
-	// 5.1.7 动态切换组合订阅三模式并原子持久化
+	// 5.1.7 动态切换组合订阅三模式并原子持久化 (支持传入 external_sources)
 	s.app.Post("/api/substore/mode", func(c *fiber.Ctx) error {
 		if s.substoreClient == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
 		}
 		var req struct {
-			Mode string `json:"mode"`
+			Mode            string   `json:"mode"`
+			ExternalSources []string `json:"external_sources,omitempty"`
 		}
 		if err := c.BodyParser(&req); err != nil || req.Mode == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "mode is required (allowed: 'external+self', 'self', 'external')"})
+		}
+		if len(req.ExternalSources) > 0 {
+			_ = s.substoreClient.SetExternalSources(req.ExternalSources)
 		}
 		state, err := s.substoreClient.SetMode(c.Context(), substore.SubStoreMode(req.Mode))
 		if err != nil {
@@ -474,6 +480,99 @@ func (s *APIServer) setupRoutes() {
 		}
 		customlog.Audit("switch_substore_mode", c.IP(), "ashan-mode", "success", fmt.Sprintf("Switched mode to %s", req.Mode))
 		return c.JSON(state)
+	})
+
+	// 5.1.7.1 获取当前配置的外部订阅列表 (Issue #18 全动态外部源)
+	s.app.Get("/api/external/subs", func(c *fiber.Ctx) error {
+		if s.substoreClient == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
+		}
+		sources := s.substoreClient.GetExternalSources()
+		return c.JSON(fiber.Map{
+			"status":  "ok",
+			"count":   len(sources),
+			"sources": sources,
+		})
+	})
+
+	// 5.1.7.2 动态更新或添加外部订阅列表
+	s.app.Post("/api/external/subs", func(c *fiber.Ctx) error {
+		if s.substoreClient == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
+		}
+		var req struct {
+			Sources []string `json:"sources"`
+			Source  string   `json:"source"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		sources := req.Sources
+		if len(sources) == 0 && req.Source != "" {
+			existing := s.substoreClient.GetExternalSources()
+			found := false
+			for _, ex := range existing {
+				if ex == req.Source {
+					found = true
+					break
+				}
+			}
+			if !found {
+				sources = append(existing, req.Source)
+			} else {
+				sources = existing
+			}
+		}
+
+		if len(sources) == 0 {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "sources or source is required"})
+		}
+
+		if err := s.substoreClient.SetExternalSources(sources); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		curr := s.substoreClient.GetCurrentMode()
+		_, _ = s.substoreClient.SetMode(c.Context(), curr)
+
+		customlog.Audit("update_external_sources", c.IP(), "external_sources", "success", fmt.Sprintf("Updated sources: %v", sources))
+		return c.JSON(fiber.Map{
+			"status":  "ok",
+			"sources": sources,
+		})
+	})
+
+	// 5.1.7.3 删除某个外部订阅
+	s.app.Delete("/api/external/subs/:name", func(c *fiber.Ctx) error {
+		if s.substoreClient == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
+		}
+		target := c.Params("name")
+		if target == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "source name is required"})
+		}
+
+		existing := s.substoreClient.GetExternalSources()
+		var updated []string
+		for _, ex := range existing {
+			if ex != target {
+				updated = append(updated, ex)
+			}
+		}
+
+		if err := s.substoreClient.SetExternalSources(updated); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		curr := s.substoreClient.GetCurrentMode()
+		_, _ = s.substoreClient.SetMode(c.Context(), curr)
+
+		customlog.Audit("delete_external_source", c.IP(), target, "success", fmt.Sprintf("Removed source: %s", target))
+		return c.JSON(fiber.Map{
+			"status":  "ok",
+			"sources": updated,
+		})
 	})
 
 	// 5.1.8 动态触发从 SubStore 重新拉取待测节点列表 (包含自建与蜂窝云)

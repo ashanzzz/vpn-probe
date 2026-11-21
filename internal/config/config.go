@@ -52,6 +52,12 @@ type SubStoreConfig struct {
 	Username string `yaml:"username"` // SubStore HTTP Basic Auth Username
 	Password string `yaml:"password"` // SubStore HTTP Basic Auth Password
 	Token    string `yaml:"token"`    // SubStore API Token
+
+	// 动态全周期解耦架构字段 (Issue #18)
+	ExternalSources []string `yaml:"external_sources"` // 动态外部机场订阅列表 (如 ["蜂窝云"])
+	Domains         []string `yaml:"domains"`          // 域名列表 (如 ["free.1992004.xyz", "sub.ashanzzz.com"])
+	ShareToken      string   `yaml:"share_token"`      // 分享 Token (如 "13602004317")
+
 	// 四大分组对应的 SubStore 订阅或集合名称
 	GroupSelfOnline      string `yaml:"group_self_online"`       // 在线自有服务
 	GroupSelfOffline     string `yaml:"group_self_offline"`      // 离线自有服务
@@ -104,6 +110,9 @@ func DefaultConfig() *Config {
 			Enabled:              false,
 			URL:                  "http://127.0.0.1:2999",
 			Token:                "",
+			ExternalSources:      []string{"蜂窝云"},
+			Domains:              []string{"free.1992004.xyz", "sub.ashanzzz.com"},
+			ShareToken:           "13602004317",
 			GroupSelfOnline:      "在线自有服务",
 			GroupSelfOffline:     "离线自有服务",
 			GroupSelfOnlineChina: "在线自有服务送中",

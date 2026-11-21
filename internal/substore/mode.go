@@ -26,9 +26,70 @@ const (
 )
 
 var ModeSubscriptions = map[SubStoreMode][]string{
-	ModeExternalAndSelf: {"Q", "蜂窝云", "ashan's vps", "ashan-transit-direct", "ashan-resi-direct", "ashan-chain"},
-	ModeSelfOnly:        {"ashan's vps", "ashan-transit-direct", "ashan-resi-direct", "ashan-chain"},
-	ModeExternalOnly:    {"Q", "蜂窝云"},
+	ModeExternalAndSelf: {"蜂窝云", "ashan-transit-direct", "ashan-resi-direct", "ashan-chain"},
+	ModeSelfOnly:        {"ashan-transit-direct", "ashan-resi-direct", "ashan-chain"},
+	ModeExternalOnly:    {"蜂窝云"},
+}
+
+type ExternalSourcesConfig struct {
+	Sources []string `json:"sources"`
+}
+
+var (
+	extSourcesFile = filepath.Join("data", "external_sources.json")
+	extMutex       sync.RWMutex
+)
+
+// GetExternalSources 获取当前配置的外部订阅列表 (Issue #18 全动态解耦)
+func (c *Client) GetExternalSources() []string {
+	extMutex.RLock()
+	defer extMutex.RUnlock()
+
+	data, err := os.ReadFile(extSourcesFile)
+	if err == nil {
+		var cfg ExternalSourcesConfig
+		if err := json.Unmarshal(data, &cfg); err == nil && len(cfg.Sources) > 0 {
+			return cfg.Sources
+		}
+	}
+	if c.cfg != nil && len(c.cfg.ExternalSources) > 0 {
+		return c.cfg.ExternalSources
+	}
+	return []string{"蜂窝云"}
+}
+
+// SetExternalSources 设置外部订阅列表并持久化
+func (c *Client) SetExternalSources(sources []string) error {
+	extMutex.Lock()
+	defer extMutex.Unlock()
+
+	_ = os.MkdirAll("data", 0755)
+	cfg := ExternalSourcesConfig{Sources: sources}
+	bytesData, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(extSourcesFile, bytesData, 0644)
+}
+
+// GetModeSubscriptions 动态根据外部机场列表计算当前模式下的订阅成员
+func (c *Client) GetModeSubscriptions(mode SubStoreMode) []string {
+	extSources := c.GetExternalSources()
+	selfSubs := []string{"ashan-transit-direct", "ashan-resi-direct", "ashan-chain"}
+
+	switch mode {
+	case ModeSelfOnly:
+		return selfSubs
+	case ModeExternalOnly:
+		return extSources
+	case ModeExternalAndSelf:
+		fallthrough
+	default:
+		var all []string
+		all = append(all, extSources...)
+		all = append(all, selfSubs...)
+		return all
+	}
 }
 
 type ModeState struct {
@@ -57,12 +118,13 @@ func (c *Client) GetCurrentMode() SubStoreMode {
 	return ModeExternalAndSelf
 }
 
-// SetMode 动态切换组合订阅三模式并原子持久化
+// SetMode 动态切换组合订阅三模式并原子持久化 (Issue #17 & #18 解耦架构)
 func (c *Client) SetMode(ctx context.Context, mode SubStoreMode) (*ModeState, error) {
-	subs, exists := ModeSubscriptions[mode]
-	if !exists {
+	if mode != ModeExternalAndSelf && mode != ModeSelfOnly && mode != ModeExternalOnly {
 		return nil, fmt.Errorf("invalid mode: %s (allowed: 'external+self', 'self', 'external')", mode)
 	}
+
+	subs := c.GetModeSubscriptions(mode)
 
 	modeMutex.Lock()
 	defer modeMutex.Unlock()
@@ -107,13 +169,23 @@ func (c *Client) SetMode(ctx context.Context, mode SubStoreMode) (*ModeState, er
 		}
 	}
 
-	// 2. 将 4 个分享 File 全部指向 ashan-mode 集合
-	filesToUpdate := []string{"Q", "q", "ashan", "Ashan"}
-	for _, fname := range filesToUpdate {
+	// 2. 职责解耦 (Issue #17):
+	// - Q 和 q (动态组合订阅): 绑定 ashan-mode 集合
+	for _, fname := range []string{"Q", "q"} {
 		patchPayload := map[string]any{
 			"source":     "local",
 			"sourceType": "collection",
 			"sourceName": "ashan-mode",
+		}
+		_ = c.UpdateFile(ctx, fname, patchPayload)
+	}
+
+	// - ashan 和 Ashan (纯自建专属订阅): 始终绑定 ashan-master 纯净三层自建集合，毫秒级极速响应，永不受外部机场拖累
+	for _, fname := range []string{"ashan", "Ashan"} {
+		patchPayload := map[string]any{
+			"source":     "local",
+			"sourceType": "collection",
+			"sourceName": "ashan-master",
 		}
 		_ = c.UpdateFile(ctx, fname, patchPayload)
 	}

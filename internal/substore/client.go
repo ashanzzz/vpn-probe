@@ -305,15 +305,7 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 		logger.Sync("[SUBSTORE] ✅ 'ashan-chain' updated with %d chain nodes", len(payload.ChainNodes))
 	}
 
-	// 4. 保持向前兼容: 将全量自建节点合并写入 ashan's vps
-	var allSelf []string
-	allSelf = append(allSelf, payload.TransitDirectNodes...)
-	allSelf = append(allSelf, payload.ResidentialNodes...)
-	if len(allSelf) > 0 {
-		_ = c.updateSubStoreSubscription(ctx, "ashan's vps", allSelf)
-	}
-
-	// 5. 确保总集合 ashan-master 存在并包含 3 个订阅
+	// 4. 确保总集合 ashan-master 存在并包含 3 个订阅
 	masterPayload := map[string]any{
 		"name":                  "ashan-master",
 		"displayName":           "Ashan 总合集 (线路直连+家宽直连+链式代理)",

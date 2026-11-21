@@ -104,16 +104,26 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		return nil, fmt.Errorf("decode files response: %w", err)
 	}
 
+	domains := []string{"free.1992004.xyz", "sub.ashanzzz.com"}
+	if len(c.cfg.Domains) >= 2 {
+		domains = c.cfg.Domains
+	}
+
 	manifest := &SubStoreManifest{
 		Status:        "ok",
 		SubStoreURL:   baseURL,
 		Username:      c.cfg.Username,
-		Domains:       []string{"free.1992004.xyz", "sub.ashanzzz.com"},
+		Domains:       domains,
 		ShareLinks:    make([]ShareLinkInfo, 0),
 		Scripts:       make(map[string]ScriptFileInfo),
 		ScriptList:    make([]string, 0),
 		SyncMechanism: "三层原子架构: ashan-transit-direct (线路机) + ashan-resi-direct (家宽) + ashan-chain (链式代理) -> ashan-纯净合集 -> ashan / Ashan 订阅文件",
 		UpdatedAt:     time.Now().Format("2006-01-02 15:04:05"),
+	}
+
+	token := "13602004317"
+	if c.cfg.ShareToken != "" {
+		token = c.cfg.ShareToken
 	}
 
 	scriptSet := make(map[string]bool)
@@ -128,10 +138,10 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		targetType, _ := item["type"].(string)
 
 		escapedName := url.PathEscape(name)
-		shareURL1 := fmt.Sprintf("https://free.1992004.xyz/share/file/%s?token=13602004317", escapedName)
-		shareURL2 := fmt.Sprintf("https://sub.ashanzzz.com/share/file/%s?token=13602004317", escapedName)
-		subURL1 := fmt.Sprintf("https://ashan:Woo@@@204317@free.1992004.xyz/Woo@@@204317/api/file/%s", escapedName)
-		subURL2 := fmt.Sprintf("https://ashan:Woo@@@204317@sub.ashanzzz.com/Woo@@@204317/api/file/%s", escapedName)
+		shareURL1 := fmt.Sprintf("https://%s/share/file/%s?token=%s", domains[0], escapedName, token)
+		shareURL2 := fmt.Sprintf("https://%s/share/file/%s?token=%s", domains[1], escapedName, token)
+		subURL1 := fmt.Sprintf("https://%s:%s@%s/%s/api/file/%s", c.cfg.Username, c.cfg.Password, domains[0], c.cfg.Password, escapedName)
+		subURL2 := fmt.Sprintf("https://%s:%s@%s/%s/api/file/%s", c.cfg.Username, c.cfg.Password, domains[1], c.cfg.Password, escapedName)
 
 		var ops []ScriptOperatorInfo
 		if procList, ok := item["process"].([]any); ok {

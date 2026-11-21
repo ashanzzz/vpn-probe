@@ -238,6 +238,72 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 	return nil
 }
 
+// UpsertRemoteSubscription 在 SubStore 中自动创建或更新外部远程订阅 (Issue #19)
+func (c *Client) UpsertRemoteSubscription(ctx context.Context, name, displayName, subURL string) error {
+	if c.cfg == nil || !c.cfg.Enabled || c.cfg.URL == "" {
+		return fmt.Errorf("substore is not configured or disabled")
+	}
+
+	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	endpoint := fmt.Sprintf("%s/api/sub/%s", baseURL, url.PathEscape(name))
+
+	if displayName == "" {
+		displayName = name
+	}
+
+	payload := map[string]any{
+		"name":        name,
+		"displayName": displayName,
+		"source":      "remote",
+		"url":         subURL,
+	}
+
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	// 1. 尝试 PATCH 更新现有订阅
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			logger.Sync("[SUBSTORE] Remote subscription '%s' updated successfully", name)
+			return nil
+		}
+	}
+
+	// 2. 若不存在，调用 POST /api/subs 新建
+	createEndpoint := fmt.Sprintf("%s/api/subs", baseURL)
+	postReq, err := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	c.setAuth(postReq)
+
+	postResp, err := c.httpClient.Do(postReq)
+	if err != nil {
+		return fmt.Errorf("create remote subscription http error: %w", err)
+	}
+	defer postResp.Body.Close()
+
+	if postResp.StatusCode >= 200 && postResp.StatusCode < 300 {
+		logger.Sync("[SUBSTORE] Remote subscription '%s' created successfully", name)
+		return nil
+	}
+
+	body, _ := io.ReadAll(postResp.Body)
+	return fmt.Errorf("create remote subscription returned %d: %s", postResp.StatusCode, string(body))
+}
+
 // TriggerDownload 触发 SubStore 重新拉取/刷新
 func (c *Client) TriggerDownload(ctx context.Context, subName string) error {
 	baseURL := strings.TrimRight(c.cfg.URL, "/")

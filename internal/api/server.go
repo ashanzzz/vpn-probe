@@ -482,32 +482,119 @@ func (s *APIServer) setupRoutes() {
 		return c.JSON(state)
 	})
 
-	// 5.1.7.1 获取当前配置的外部订阅列表 (Issue #18 全动态外部源)
+	// 5.1.7.1 获取当前配置的外部订阅列表与元数据详情 (Issue #18 & #19)
 	s.app.Get("/api/external/subs", func(c *fiber.Ctx) error {
 		if s.substoreClient == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
 		}
 		sources := s.substoreClient.GetExternalSources()
+
+		type SubDetail struct {
+			Name        string `json:"name"`
+			DisplayName string `json:"display_name"`
+			URL         string `json:"url,omitempty"`
+			SourceType  string `json:"source_type"`
+		}
+
+		details := make([]SubDetail, 0)
+		subItems, _ := s.substoreClient.GetSubscriptions(c.Context())
+		itemMap := make(map[string]substore.SubscriptionItem)
+		for _, item := range subItems {
+			itemMap[item.Name] = item
+		}
+
+		for _, src := range sources {
+			if item, exists := itemMap[src]; exists {
+				details = append(details, SubDetail{
+					Name:        item.Name,
+					DisplayName: item.DisplayName,
+					URL:         item.URL,
+					SourceType:  item.Source,
+				})
+			} else {
+				details = append(details, SubDetail{
+					Name:        src,
+					DisplayName: src,
+					SourceType:  "remote",
+				})
+			}
+		}
+
 		return c.JSON(fiber.Map{
 			"status":  "ok",
 			"count":   len(sources),
 			"sources": sources,
+			"details": details,
 		})
 	})
 
-	// 5.1.7.2 动态更新或添加外部订阅列表
+	// 5.1.7.2 动态更新或添加外部订阅列表 (支持直接传入 URL 级外部订阅自动创建, Issue #19)
 	s.app.Post("/api/external/subs", func(c *fiber.Ctx) error {
 		if s.substoreClient == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
 		}
 		var req struct {
-			Sources []string `json:"sources"`
-			Source  string   `json:"source"`
+			Sources     []string `json:"sources"`
+			Source      string   `json:"source"`
+			Name        string   `json:"name"`
+			DisplayName string   `json:"display_name"`
+			URL         string   `json:"url"`
+			Enabled     *bool    `json:"enabled"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 
+		// 格式 A: 传入 URL 级外部订阅，自动在 SubStore 中创建/更新并挂载
+		if req.URL != "" {
+			name := req.Name
+			if name == "" {
+				name = req.DisplayName
+			}
+			if name == "" {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "name or display_name is required when url is provided"})
+			}
+			disp := req.DisplayName
+			if disp == "" {
+				disp = name
+			}
+
+			if err := s.substoreClient.UpsertRemoteSubscription(c.Context(), name, disp, req.URL); err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+					"error":   "failed_to_create_substore_remote_sub",
+					"message": err.Error(),
+				})
+			}
+
+			existing := s.substoreClient.GetExternalSources()
+			found := false
+			for _, ex := range existing {
+				if ex == name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				existing = append(existing, name)
+				_ = s.substoreClient.SetExternalSources(existing)
+			}
+
+			curr := s.substoreClient.GetCurrentMode()
+			_, _ = s.substoreClient.SetMode(c.Context(), curr)
+
+			customlog.Audit("create_external_remote_sub", c.IP(), name, "success",
+				fmt.Sprintf("Created/Updated remote sub in SubStore and mounted into %s: url=%s", curr, req.URL))
+
+			return c.JSON(fiber.Map{
+				"status":  "ok",
+				"message": fmt.Sprintf("Remote subscription '%s' created in SubStore and mounted to active mode", name),
+				"name":    name,
+				"url":     req.URL,
+				"sources": existing,
+			})
+		}
+
+		// 格式 B: 批量设置或单名追加
 		sources := req.Sources
 		if len(sources) == 0 && req.Source != "" {
 			existing := s.substoreClient.GetExternalSources()
@@ -526,13 +613,14 @@ func (s *APIServer) setupRoutes() {
 		}
 
 		if len(sources) == 0 {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "sources or source is required"})
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "sources, source, or (name + url) is required"})
 		}
 
 		if err := s.substoreClient.SetExternalSources(sources); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
 
+		// 同步更新当前生效模式
 		curr := s.substoreClient.GetCurrentMode()
 		_, _ = s.substoreClient.SetMode(c.Context(), curr)
 
@@ -543,7 +631,7 @@ func (s *APIServer) setupRoutes() {
 		})
 	})
 
-	// 5.1.7.3 删除某个外部订阅
+	// 5.1.7.3 删除某个外部订阅 (支持 ?purge=true 物理从 SubStore 清理)
 	s.app.Delete("/api/external/subs/:name", func(c *fiber.Ctx) error {
 		if s.substoreClient == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
@@ -552,6 +640,8 @@ func (s *APIServer) setupRoutes() {
 		if target == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "source name is required"})
 		}
+
+		purge := c.Query("purge") == "true"
 
 		existing := s.substoreClient.GetExternalSources()
 		var updated []string
@@ -565,13 +655,20 @@ func (s *APIServer) setupRoutes() {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
 
+		// 若指定 purge=true，同时在 SubStore 中物理删除该废弃订阅
+		if purge {
+			_ = s.substoreClient.DeleteItem(c.Context(), "subs", target)
+		}
+
 		curr := s.substoreClient.GetCurrentMode()
 		_, _ = s.substoreClient.SetMode(c.Context(), curr)
 
-		customlog.Audit("delete_external_source", c.IP(), target, "success", fmt.Sprintf("Removed source: %s", target))
+		customlog.Audit("delete_external_source", c.IP(), target, "success",
+			fmt.Sprintf("Removed source: %s (purged_from_substore: %v)", target, purge))
 		return c.JSON(fiber.Map{
-			"status":  "ok",
-			"sources": updated,
+			"status":                "ok",
+			"sources":               updated,
+			"purged_from_substore": purge,
 		})
 	})
 
@@ -985,14 +1082,16 @@ func (s *APIServer) setupRoutes() {
 	})
 
 	// 6. 挂载远程 AI 专用的 MCP over SSE 传输接口
-	sse := mcpserver.NewSSEServer(
-		s.mcpServer.GetServer(),
-		mcpserver.WithSSEEndpoint("/mcp/sse"),
-		mcpserver.WithMessageEndpoint("/mcp/messages"),
-	)
+	if s.mcpServer != nil && s.mcpServer.GetServer() != nil {
+		sse := mcpserver.NewSSEServer(
+			s.mcpServer.GetServer(),
+			mcpserver.WithSSEEndpoint("/mcp/sse"),
+			mcpserver.WithMessageEndpoint("/mcp/messages"),
+		)
 
-	s.app.Get("/mcp/sse", adaptor.HTTPHandler(sse.SSEHandler()))
-	s.app.Post("/mcp/messages", adaptor.HTTPHandler(sse.MessageHandler()))
+		s.app.Get("/mcp/sse", adaptor.HTTPHandler(sse.SSEHandler()))
+		s.app.Post("/mcp/messages", adaptor.HTTPHandler(sse.MessageHandler()))
+	}
 
 	// 7. VPS 节点生命周期、深度墙况分析与换端口自愈 API
 	s.app.Get("/api/vps/manage", s.handleVPSManage)

@@ -331,12 +331,23 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 	// 3. 组装智能链式代理
 	chainLinks := s.healer.BuildSmartChains(rankedTransits, resiNodes)
 
-	// 4. 更新状态与持久化 (以稳定的 Node.Name 作为 Key，杜绝 URL 变动导致的 Key 丢失)
+	// 4. 更新状态与持久化 (支持以 Node.Name 或 OriginalURL 精准匹配)
 	s.mu.Lock()
 	for _, res := range resp.Results {
+		updated := false
 		if state, ok := s.nodeStates[res.Name]; ok {
 			state.LastResult = res
 			state.LastChecked = time.Now()
+			updated = true
+		}
+		if !updated {
+			for _, state := range s.nodeStates {
+				if state.Config.URL == res.OriginalURL {
+					state.LastResult = res
+					state.LastChecked = time.Now()
+					break
+				}
+			}
 		}
 		_ = s.store.SaveResult(ctx, res)
 	}

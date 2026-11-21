@@ -1199,11 +1199,14 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 	selfNodesOnlineCount := 0
 
 	if s.scheduler != nil {
-		// 兜底：如果刚启动调度器未完成首轮探测，从持久化历史读取最近一次探测记录
+		// 兜底：如果刚启动调度器未完成首轮探测，从持久化历史读取最近一次探测记录 (支持 URL 与 Name 双向匹配)
 		recentMap := make(map[string]*model.NodeProbeResult)
 		if s.store != nil {
 			if recents, err := s.store.GetRecentResults(ctx, 100); err == nil {
 				for _, r := range recents {
+					if _, exists := recentMap[r.OriginalURL]; !exists {
+						recentMap[r.OriginalURL] = r
+					}
 					if _, exists := recentMap[r.Name]; !exists {
 						recentMap[r.Name] = r
 					}
@@ -1235,7 +1238,11 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 
 			lastRes := st.LastResult
 			if lastRes == nil {
-				lastRes = recentMap[st.Config.Name]
+				if r, ok := recentMap[st.Config.URL]; ok {
+					lastRes = r
+				} else if r, ok := recentMap[st.Config.Name]; ok {
+					lastRes = r
+				}
 			}
 
 			if lastRes != nil {

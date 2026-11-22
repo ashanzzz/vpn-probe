@@ -85,11 +85,11 @@ func TestSummaryAndAlertsEndpoints(t *testing.T) {
 		if _, ok := body["summary"]; !ok {
 			t.Errorf("expected summary field in %s", p)
 		}
-		if _, ok := body["healthy_nodes"]; !ok {
-			t.Errorf("expected healthy_nodes field in %s", p)
+		if hn, ok := body["healthy_nodes"]; !ok || hn == nil {
+			t.Errorf("expected non-nil healthy_nodes slice in %s", p)
 		}
-		if _, ok := body["nodes_requiring_action"]; !ok {
-			t.Errorf("expected nodes_requiring_action field in %s", p)
+		if na, ok := body["nodes_requiring_action"]; !ok || na == nil {
+			t.Errorf("expected non-nil nodes_requiring_action slice in %s", p)
 		}
 	}
 
@@ -113,6 +113,9 @@ func TestSummaryAndAlertsEndpoints(t *testing.T) {
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			t.Fatalf("decode alerts json failed: %v", err)
+		}
+		if body.Alerts == nil {
+			t.Errorf("expected non-nil Alerts slice in %s", p)
 		}
 		if body.Total != 1 {
 			t.Errorf("expected 1 alert, got %d", body.Total)

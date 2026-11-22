@@ -279,24 +279,6 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 				IsSelf: true,
 			})
 		}
-
-		// 若 SubStore 中 ashan-resi-direct 为空，自动以本地家宽池补充同步
-		if subName == "ashan-resi-direct" && subNodesCount == 0 {
-			var localResi []string
-			s.mu.RLock()
-			for _, st := range s.nodeStates {
-				if st.LastResult != nil && st.LastResult.NodeType == "residential" {
-					localResi = append(localResi, st.Config.URL)
-				}
-			}
-			s.mu.RUnlock()
-			if len(localResi) > 0 {
-				logger.Infof("[MONITOR] SubStore ashan-resi-direct is empty, seeding with %d local residential nodes...", len(localResi))
-				_ = s.substoreClient.SyncThreeTier(ctx, substore.ThreeTierPayload{
-					ResidentialNodes: localResi,
-				})
-			}
-		}
 	}
 
 	if len(dynamicNodes) == 0 {
@@ -528,19 +510,12 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 
 			// 方案B：五维智能策略组分类 (线路机、美区全家桶、日区全家桶、其他、送中隔离)
 			fiveGroups := ClassifyIntoFiveGroups(rankedTransits, uniqueResis, chainLinks)
-			_ = s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
-
-			// 兼容已有三层同步
-			err := s.substoreClient.SyncThreeTier(ctx, substore.ThreeTierPayload{
-				TransitDirectNodes: transitLinks,
-				ResidentialNodes:   resiLinks,
-				ChainNodes:         chainLinks,
-			})
+			err := s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
 			if err != nil {
 				logger.Event(logger.LevelWarn, "substore", "sync_failed", fmt.Sprintf("error=%v", err))
 			} else {
 				logger.Event(logger.LevelInfo, "substore", "sync_done",
-					fmt.Sprintf("transit=%d resi=%d chains=%d five_groups=synced", len(transitLinks), len(resiLinks), len(chainLinks)))
+					fmt.Sprintf("transit=%d resi=%d chains=%d five_groups=synced", len(transitLinks), len(uniqueResis), len(chainLinks)))
 			}
 		}
 	}
@@ -594,22 +569,12 @@ func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, duration
 	chains := s.healer.BuildSmartChains(ranked, allResis)
 
 	if s.substoreClient != nil && s.cfg.SubStore.Enabled {
-		var transitLinks, resiLinks []string
-		for _, t := range ranked {
-			if t.Online {
-				transitLinks = append(transitLinks, t.OriginalURL)
-			}
+		fullMeshChains := s.healer.BuildFullMeshRegionalChains(ranked, allResis)
+		if len(fullMeshChains) == 0 {
+			fullMeshChains = chains
 		}
-		for _, r := range allResis {
-			if r.Online {
-				resiLinks = append(resiLinks, r.OriginalURL)
-			}
-		}
-		_ = s.substoreClient.SyncThreeTier(ctx, substore.ThreeTierPayload{
-			TransitDirectNodes: transitLinks,
-			ResidentialNodes:   resiLinks,
-			ChainNodes:         chains,
-		})
+		fiveGroups := ClassifyIntoFiveGroups(ranked, allResis, fullMeshChains)
+		_ = s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
 	}
 
 	return ranked

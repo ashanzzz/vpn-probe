@@ -605,3 +605,32 @@ func (c *Client) DeleteSubscription(ctx context.Context, subName string) error {
 	logger.Sync("[SUBSTORE] 🗑️ Subscription '%s' deleted from SubStore", subName)
 	return nil
 }
+
+// LegacyThreeTierSubNames 历史残留的三层架构与多余独立订阅名
+var LegacyThreeTierSubNames = []string{
+	"ashan-transit-direct",
+	"ashan-resi-direct",
+	"ashan-chain",
+	"ashan-tw-resi",
+}
+
+// PurgeLegacyThreeTierSubs 从 SubStore 彻底平退并删除历史残留的三层订阅 (Issue/Task 备忘闭环)
+func (c *Client) PurgeLegacyThreeTierSubs(ctx context.Context) (int, error) {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
+		return 0, fmt.Errorf("substore integration is not enabled or URL is empty")
+	}
+
+	purgedCount := 0
+	var lastErr error
+	for _, name := range LegacyThreeTierSubNames {
+		if err := c.DeleteSubscription(ctx, name); err != nil {
+			logger.Warnf("[SUBSTORE] Purge legacy subscription '%s': %v", name, err)
+			lastErr = err
+		} else {
+			purgedCount++
+			logger.Sync("[SUBSTORE] 🗑️ Legacy subscription '%s' purged from SubStore", name)
+		}
+	}
+	return purgedCount, lastErr
+}

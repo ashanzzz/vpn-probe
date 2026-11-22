@@ -306,6 +306,48 @@ func TestClient_DeleteSubscription_Auth(t *testing.T) {
 	}
 }
 
+func TestClient_PurgeLegacyThreeTierSubs(t *testing.T) {
+	deletedSubs := make(map[string]bool)
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Method == http.MethodDelete {
+			parts := strings.Split(r.URL.Path, "/")
+			if len(parts) >= 4 {
+				deletedSubs[parts[len(parts)-1]] = true
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled:  true,
+		URL:      ts.URL,
+		Username: "ashan",
+		Password: "password",
+	}
+	c := NewClient(cfg)
+	c.SetHTTPClient(ts.Client())
+
+	count, err := c.PurgeLegacyThreeTierSubs(context.Background())
+	if err != nil {
+		t.Fatalf("PurgeLegacyThreeTierSubs failed: %v", err)
+	}
+	if count != len(LegacyThreeTierSubNames) {
+		t.Errorf("expected %d purged subs, got %d", len(LegacyThreeTierSubNames), count)
+	}
+	for _, expected := range LegacyThreeTierSubNames {
+		if !deletedSubs[expected] {
+			t.Errorf("expected sub %q to be deleted, but it was not", expected)
+		}
+	}
+}
+
 func TestResolveFallbackURL(t *testing.T) {
 	cases := []struct {
 		name     string

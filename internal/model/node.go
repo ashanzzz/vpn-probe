@@ -118,6 +118,13 @@ type BatchProbeResponse struct {
 	SubStoreMessage string        `json:"substore_message,omitempty"`
 }
 
+func matchCountryToken(s, code string) bool {
+	return strings.HasPrefix(s, code+"-") ||
+		strings.Contains(s, "-"+code+"-") ||
+		strings.HasSuffix(s, "-"+code) ||
+		s == code
+}
+
 // ResolveCountry 通用解析节点的所属国家/地区 ISO 二位大写代码 (如 US, JP, HK, SG, DE)
 // 严禁绑定具体机房名或运营商名 (4837 仅为美区线路机举例，非硬编码标识)，严格依据真实探测出口或规范国别标签
 func ResolveCountry(exitCountry, nodeName string) string {
@@ -134,22 +141,41 @@ func ResolveCountry(exitCountry, nodeName string) string {
 	}
 
 	upper := strings.ToUpper(nodeName)
-	switch {
-	case strings.Contains(upper, "-US-") || strings.Contains(upper, "美国") || strings.Contains(upper, "美西") || strings.Contains(upper, "美东") || strings.Contains(upper, "USA") || strings.Contains(upper, "UNITED STATES"):
+
+	// 针对紧凑型链式代理命名 [前置]-[落地区域]-[运营商] (如 SB-美宽-Pavlov, LAX-日宽-SoftBank, SB-台宽-HiNet)，
+	// 必须优先以落地家宽区域标识为准，彻底防止前置机前缀 (如 LAX/美西) 误导国别解析
+	if strings.Contains(upper, "美宽") {
 		return "US"
-	case strings.Contains(upper, "-JP-") || strings.Contains(upper, "日本") || strings.Contains(upper, "东京") || strings.Contains(upper, "大阪") || strings.Contains(upper, "JAPAN"):
+	}
+	if strings.Contains(upper, "日宽") {
 		return "JP"
-	case strings.Contains(upper, "-HK-") || strings.Contains(upper, "香港") || strings.Contains(upper, "HONG KONG"):
-		return "HK"
-	case strings.Contains(upper, "-SG-") || strings.Contains(upper, "新加坡") || strings.Contains(upper, "SINGAPORE"):
-		return "SG"
-	case strings.Contains(upper, "-TW-") || strings.Contains(upper, "台湾") || strings.Contains(upper, "TAIWAN"):
+	}
+	if strings.Contains(upper, "台宽") {
 		return "TW"
-	case strings.Contains(upper, "-KR-") || strings.Contains(upper, "韩国") || strings.Contains(upper, "首尔") || strings.Contains(upper, "KOREA"):
+	}
+	if strings.Contains(upper, "韩宽") {
 		return "KR"
-	case strings.Contains(upper, "-DE-") || strings.Contains(upper, "德国") || strings.Contains(upper, "GERMANY") || strings.Contains(upper, "法兰克福"):
+	}
+	if strings.Contains(upper, "新宽") {
+		return "SG"
+	}
+
+	switch {
+	case matchCountryToken(upper, "US") || strings.Contains(upper, "美国") || strings.Contains(upper, "美西") || strings.Contains(upper, "美东") || strings.Contains(upper, "USA") || strings.Contains(upper, "UNITED STATES"):
+		return "US"
+	case matchCountryToken(upper, "JP") || strings.Contains(upper, "日本") || strings.Contains(upper, "东京") || strings.Contains(upper, "大阪") || strings.Contains(upper, "JAPAN"):
+		return "JP"
+	case matchCountryToken(upper, "HK") || strings.Contains(upper, "香港") || strings.Contains(upper, "HONG KONG"):
+		return "HK"
+	case matchCountryToken(upper, "SG") || strings.Contains(upper, "新加坡") || strings.Contains(upper, "SINGAPORE"):
+		return "SG"
+	case matchCountryToken(upper, "TW") || strings.Contains(upper, "台湾") || strings.Contains(upper, "TAIWAN"):
+		return "TW"
+	case matchCountryToken(upper, "KR") || strings.Contains(upper, "韩国") || strings.Contains(upper, "首尔") || strings.Contains(upper, "KOREA"):
+		return "KR"
+	case matchCountryToken(upper, "DE") || strings.Contains(upper, "德国") || strings.Contains(upper, "GERMANY") || strings.Contains(upper, "法兰克福"):
 		return "DE"
-	case strings.Contains(upper, "-GB-") || strings.Contains(upper, "-UK-") || strings.Contains(upper, "英国") || strings.Contains(upper, "伦敦"):
+	case matchCountryToken(upper, "GB") || matchCountryToken(upper, "UK") || strings.Contains(upper, "英国") || strings.Contains(upper, "伦敦"):
 		return "GB"
 	default:
 		return "OTHER"

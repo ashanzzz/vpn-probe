@@ -1755,7 +1755,11 @@ func (s *APIServer) handleHealPort(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(resp)
 	}
 	// 触发立即重检并刷新大盘
-	go s.scheduler.RunAllChecks(context.Background(), true)
+	go func() {
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		s.scheduler.RunAllChecks(checkCtx, true)
+	}()
 	return c.JSON(resp)
 }
 

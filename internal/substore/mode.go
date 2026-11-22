@@ -733,10 +733,12 @@ func CheckShareDomains(ctx context.Context, fileName string, token string) []Sha
 			req, _ := http.NewRequestWithContext(httpCtx, "HEAD", url, nil)
 			req.Header.Set("User-Agent", "ClashX/1.90.0")
 
+			tr := &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			}
+			defer tr.CloseIdleConnections()
 			client := &http.Client{
-				Transport: &http.Transport{
-					TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-				},
+				Transport: tr,
 			}
 			resp, httpErr := client.Do(req)
 			httpCancel()

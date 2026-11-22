@@ -1,6 +1,8 @@
 package rules
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,5 +102,54 @@ func TestManagerRuleUpdates(t *testing.T) {
 	js := mgr.GenerateJS()
 	if !strings.Contains(js, "test.example.com") {
 		t.Fatalf("expected generated JS to contain 'test.example.com'")
+	}
+}
+
+func TestGetBridgedConvertJS(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr, err := NewManager(filepath.Join(tmpDir, "rules.json"))
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	callCount := 0
+	statusCode := 200
+	responseBody := "// mock convert.min.js\nconst x = 1;"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.WriteHeader(statusCode)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	defer server.Close()
+
+	revert := SetConvertUpstreamURLForTest(server.URL)
+	defer revert()
+
+	// 1. 测试成功拉取与桥接注入
+	res := mgr.GetBridgedConvertJS()
+	if !strings.Contains(res, "mock convert.min.js") || !strings.Contains(res, "function operator") {
+		t.Fatalf("expected bridged JS, got: %s", res)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected 1 call, got %d", callCount)
+	}
+
+	// 2. 测试缓存命中 (不重复发起网络请求)
+	resCached := mgr.GetBridgedConvertJS()
+	if resCached != res {
+		t.Fatalf("expected cached result to match")
+	}
+	if callCount != 1 {
+		t.Fatalf("expected still 1 call due to cache, got %d", callCount)
+	}
+
+	// 3. 测试上游返回 500 时的优雅降级 (新 manager 无缓存)
+	statusCode = 500
+	responseBody = "Internal Server Error"
+	mgr2, _ := NewManager(filepath.Join(tmpDir, "rules2.json"))
+	resFallback := mgr2.GetBridgedConvertJS()
+	if !strings.Contains(resFallback, "convert.js fetch fallback") {
+		t.Fatalf("expected fallback JS when server returns 500, got: %s", resFallback)
 	}
 }

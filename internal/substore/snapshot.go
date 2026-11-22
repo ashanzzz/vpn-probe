@@ -76,6 +76,13 @@ func NewSnapshotManager(client *Client, storageDir string) *SnapshotManager {
 	return sm
 }
 
+// SetHTTPClient 注入自定义 HTTP 客户端 (便于单测与超时控制)
+func (sm *SnapshotManager) SetHTTPClient(client *http.Client) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.httpClient = client
+}
+
 // loadFromDisk 从磁盘读取历史快照
 func (sm *SnapshotManager) loadFromDisk() {
 	files, err := os.ReadDir(sm.storageDir)
@@ -323,20 +330,27 @@ func (sm *SnapshotManager) fetchRenderedYAML(ctx context.Context, fileName strin
 	if cfg.URL != "" {
 		urlsToTry = append(urlsToTry, strings.TrimRight(cfg.URL, "/"))
 	}
-	// 直连兜底端点
-	directEndpoint := "http://156.231.113.91:3001/Woo@@@204317"
-	hasDirect := false
-	for _, u := range urlsToTry {
-		if strings.Contains(u, "156.231.113.91") {
-			hasDirect = true
-			break
+	// 直连兜底端点 (仅在外网生产环境且未包含该端点时按需补充，动态提取 Token，避免单测或硬编码凭据泄漏)
+	if !isLocalOrTestEndpoint(cfg.URL) {
+		fallbackURL := "http://156.231.113.91:3001"
+		if cfg.Token != "" {
+			fallbackURL = fmt.Sprintf("http://156.231.113.91:3001/%s", strings.TrimLeft(cfg.Token, "/"))
+		}
+		hasDirect := false
+		for _, u := range urlsToTry {
+			if strings.Contains(u, "156.231.113.91") {
+				hasDirect = true
+				break
+			}
+		}
+		if !hasDirect {
+			urlsToTry = append(urlsToTry, fallbackURL)
 		}
 	}
-	if !hasDirect {
-		urlsToTry = append(urlsToTry, directEndpoint)
-	}
 
+	sm.mu.RLock()
 	httpClient := sm.httpClient
+	sm.mu.RUnlock()
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 75 * time.Second}
 	}

@@ -33,6 +33,22 @@ func NewClient(cfg *config.SubStoreConfig) *Client {
 	}
 }
 
+// SetHTTPClient 注入自定义 HTTP 客户端 (便于单测与超时控制)
+func (c *Client) SetHTTPClient(client *http.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.httpClient = client
+}
+
+// isLocalOrTestEndpoint 检查 URL 是否为本地环回或测试服务，避免在单测或本地模拟环境下向外部兜底 IP 发起长耗时无效连接
+func isLocalOrTestEndpoint(rawURL string) bool {
+	lower := strings.ToLower(rawURL)
+	return strings.Contains(lower, "127.0.0.1") ||
+		strings.Contains(lower, "localhost") ||
+		strings.Contains(lower, "::1") ||
+		strings.Contains(lower, "example.com")
+}
+
 // UpdateConfig 动态热更新 SubStore 连接参数 (并发写安全，支持无需重启进程切换地址或账密)
 func (c *Client) UpdateConfig(newCfg *config.SubStoreConfig) {
 	c.mu.Lock()

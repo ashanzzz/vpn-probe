@@ -418,30 +418,30 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 		}
 	}
 
-	// 2. 修复 Q-汇总：融合自建 Q 与蜂窝云
+	// 2. 修复 Q-汇总：融合自建与蜂窝云全量订阅
 	if qSummary, exists := audit.Collections["Q-汇总"]; exists {
-		hasQ := false
 		hasCloud := false
+		hasTransit := false
 		for _, s := range qSummary {
-			if s == "Q" {
-				hasQ = true
-			}
 			if s == "蜂窝云" {
 				hasCloud = true
 			}
+			if s == "ashan-transit" {
+				hasTransit = true
+			}
 		}
-		if !hasQ || !hasCloud {
+		if !hasTransit || !hasCloud {
 			payload := map[string]any{
 				"name":                  "Q-汇总",
 				"displayName":           "Q 组合订阅 (蜂窝云 + 自建VPS)",
-				"subscriptions":         []string{"Q", "蜂窝云"},
+				"subscriptions":         []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak", "蜂窝云"},
 				"ignoreFailedRemoteSub": "quiet",
 			}
 			if err := c.UpdateCollection(ctx, "Q-汇总", payload); err != nil {
 				return nil, fmt.Errorf("reconcile Q-汇总: %w", err)
 			}
-			actions = append(actions, "已为集合 'Q-汇总' 补齐 [\"Q\", \"蜂窝云\"]，激活 19 个 CF 救活与家宽节点")
-			logger.Sync("Reconciled collection 'Q-汇总' -> [\"Q\", \"蜂窝云\"]")
+			actions = append(actions, "已为集合 'Q-汇总' 补齐 [自建五维 + 蜂窝云]，激活全量自建家宽与中继节点")
+			logger.Sync("Reconciled collection 'Q-汇总' -> 全量自建+蜂窝云")
 		}
 	}
 

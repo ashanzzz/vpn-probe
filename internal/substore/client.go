@@ -380,12 +380,12 @@ func (c *Client) SyncFiveGroups(ctx context.Context, payload model.FiveGroupPayl
 		}
 	}
 
-	fiveSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
+	fiveSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak", "蜂窝云"}
 
 	// 1. 同步更新 ashan-master 总合集
 	masterPayload := map[string]any{
 		"name":                  "ashan-master",
-		"displayName":           "Ashan 总合集 (自建五维策略全景)",
+		"displayName":           "Ashan 总合集 (自建五维策略全景+外部机场)",
 		"subscriptions":         fiveSubs,
 		"ignoreFailedRemoteSub": "quiet",
 	}
@@ -457,11 +457,11 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 		logger.Sync("[SUBSTORE] ✅ 'ashan-chain' updated with %d chain nodes", len(payload.ChainNodes))
 	}
 
-	// 4. 确保总集合 ashan-master 存在并包含自建分组 (若未设置，默认包含自建五维分组)
-	fiveSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
+	// 4. 确保总集合 ashan-master 存在并包含自建分组与外部机场
+	fiveSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak", "蜂窝云"}
 	masterPayload := map[string]any{
 		"name":                  "ashan-master",
-		"displayName":           "Ashan 总合集 (自建五维策略全景)",
+		"displayName":           "Ashan 总合集 (自建五维策略全景+外部机场)",
 		"subscriptions":         fiveSubs,
 		"ignoreFailedRemoteSub": "quiet",
 	}

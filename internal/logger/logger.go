@@ -266,6 +266,18 @@ func (l *Logger) Sync(format string, args ...any) {
 	l.logf(LevelInfo, "substore", format, args...)
 }
 
+// Close 安全关闭底层日志与审计文件句柄
+func (l *Logger) Close() {
+	if l.file != nil {
+		_ = l.file.Close()
+		l.file = nil
+	}
+	if l.auditFile != nil {
+		_ = l.auditFile.Close()
+		l.auditFile = nil
+	}
+}
+
 // 全局便捷调用
 func Event(lvl Level, component, action, details string) { Get().Event(lvl, component, action, details) }
 func Audit(action, actor, target, result, detail string)  { Get().Audit(action, actor, target, result, detail) }

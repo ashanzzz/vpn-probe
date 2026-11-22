@@ -282,7 +282,10 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 			if postResp.StatusCode >= 200 && postResp.StatusCode < 300 {
 				return nil
 			}
+			postBody, _ := io.ReadAll(postResp.Body)
+			return fmt.Errorf("subscription patch %d, fallback create returned %d: %s", resp.StatusCode, postResp.StatusCode, string(postBody))
 		}
+		return fmt.Errorf("subscription patch %d, fallback create failed: %w", resp.StatusCode, postErr)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

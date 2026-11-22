@@ -146,13 +146,8 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 
 	// 3. 线路拉家宽链式中继原子 (方案B通用区域池化 + 显式定制绑定)
 	if o.scheduler.healer != nil {
-		chains := o.scheduler.healer.BuildFullMeshRegionalChains(transits, uniqueResis)
-
-		// 合并用户显式定制的动态链式绑定
-		customChains, _ := LoadCustomChains()
-		for _, cc := range customChains {
-			chains = append(chains, cc.ChainURL)
-		}
+		fullMesh := o.scheduler.healer.BuildFullMeshRegionalChains(transits, uniqueResis)
+		chains := mergeCustomChains(fullMesh)
 
 		for _, ch := range chains {
 			decodedCh, err := url.QueryUnescape(ch)
@@ -677,7 +672,9 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 	if err != nil {
 		return bind, err
 	}
-	_ = os.WriteFile(customChainsFile, bytes, 0644)
+	if err := os.WriteFile(customChainsFile, bytes, 0644); err != nil {
+		return bind, err
+	}
 
 	logger.Sync("[CHAIN-BIND] 🔗 Custom chain bound: %s ➔ %s (URL: %s)", transitNode.Name, resiNode.Name, chainName)
 	return bind, nil
@@ -712,7 +709,9 @@ func (o *Orchestrator) UnbindExplicitChain(target string) error {
 	if err != nil {
 		return err
 	}
-	_ = os.WriteFile(customChainsFile, bytes, 0644)
+	if err := os.WriteFile(customChainsFile, bytes, 0644); err != nil {
+		return err
+	}
 
 	logger.Sync("[CHAIN-UNBIND] ✂️ Custom chain removed for target: %s", target)
 	return nil

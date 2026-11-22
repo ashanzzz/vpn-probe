@@ -111,6 +111,7 @@ func (m *Manager) refreshFromVPSHub() {
 		return
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
+	defer client.CloseIdleConnections()
 
 	// 1. 登录 VPS Hub 获取 Token
 	loginBody := strings.NewReader(fmt.Sprintf(`{"username":"%s","password":"%s"}`, hubUser, hubPass))

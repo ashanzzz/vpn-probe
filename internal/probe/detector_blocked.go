@@ -412,6 +412,17 @@ func EvaluateFault(
 				tip = fmt.Sprintf("【家宽链路特征】中转服务器 %s:%d 在线且端口开放，但家庭端应用层探测超时。家宽网络通常存在高延迟、丢包或家庭设备连接未就绪。严禁更换端口，请检查家庭端设备或经专线中转！", host, port)
 				return
 			}
+			// 若错误为连接被拒、重置、管道破裂或 EOF (中转端口开放但家庭端反向隧道未就绪或断开)
+			if probeErr != nil {
+				errLower := strings.ToLower(probeErr.Error())
+				if strings.Contains(errLower, "connection refused") || strings.Contains(errLower, "connection reset") || strings.Contains(errLower, "broken pipe") || strings.Contains(errLower, "eof") {
+					faultType = model.FaultResidentialTunnelOffline
+					statusText = "【家庭端未就绪或断开】家宽反向隧道未建立或连接被拒"
+					actionType = "CHECK_RESIDENTIAL_DEVICE"
+					tip = fmt.Sprintf("【家宽链路特征】中转服务器 %s:%d 在线且端口开放，但家庭端反向隧道未建立或连接被拒(%v)。严禁更换端口，请检查家庭端设备反向连接状态！", host, port, probeErr)
+					return
+				}
+			}
 			// 若非超时且为加密协议 (VLESS/Reality 等)，且国内外 TCP 握手均成功，流转至下方通用协议握手诊断 (如 Reality 公钥/ShortID 校验失败)
 		} else if !abroadOK && !domesticTCPOK {
 			if pingOK {

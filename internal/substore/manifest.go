@@ -74,11 +74,12 @@ type SubStoreManifest struct {
 
 // GetManifest 获取 Sub-Store 所有分享订阅、插入的脚本管道及脚本完整源码
 func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
-	if !c.cfg.Enabled || c.cfg.URL == "" {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		return nil, fmt.Errorf("substore integration is not enabled")
 	}
 
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	filesURL := fmt.Sprintf("%s/api/files", baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, filesURL, nil)
@@ -107,14 +108,14 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 	}
 
 	domains := []string{"free.1992004.xyz", "sub.ashanzzz.com"}
-	if len(c.cfg.Domains) >= 2 {
-		domains = c.cfg.Domains
+	if len(cfg.Domains) >= 2 {
+		domains = cfg.Domains
 	}
 
 	manifest := &SubStoreManifest{
 		Status:        "ok",
 		SubStoreURL:   baseURL,
-		Username:      c.cfg.Username,
+		Username:      cfg.Username,
 		Domains:       domains,
 		ShareLinks:    make([]ShareLinkInfo, 0),
 		Scripts:       make(map[string]ScriptFileInfo),
@@ -124,8 +125,8 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 	}
 
 	token := "13602004317"
-	if c.cfg.ShareToken != "" {
-		token = c.cfg.ShareToken
+	if cfg.ShareToken != "" {
+		token = cfg.ShareToken
 	}
 
 	scriptSet := make(map[string]bool)
@@ -142,8 +143,8 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		escapedName := url.PathEscape(name)
 		shareURL1 := fmt.Sprintf("https://%s/share/file/%s?token=%s", domains[0], escapedName, token)
 		shareURL2 := fmt.Sprintf("https://%s/share/file/%s?token=%s", domains[1], escapedName, token)
-		subURL1 := fmt.Sprintf("https://%s:%s@%s/%s/api/file/%s", c.cfg.Username, c.cfg.Password, domains[0], c.cfg.Password, escapedName)
-		subURL2 := fmt.Sprintf("https://%s:%s@%s/%s/api/file/%s", c.cfg.Username, c.cfg.Password, domains[1], c.cfg.Password, escapedName)
+		subURL1 := fmt.Sprintf("https://%s:%s@%s/%s/api/file/%s", cfg.Username, cfg.Password, domains[0], cfg.Password, escapedName)
+		subURL2 := fmt.Sprintf("https://%s:%s@%s/%s/api/file/%s", cfg.Username, cfg.Password, domains[1], cfg.Password, escapedName)
 
 		var ops []ScriptOperatorInfo
 		if procList, ok := item["process"].([]any); ok {
@@ -378,7 +379,11 @@ func (c *Client) UpdateScript(ctx context.Context, scriptName string, newContent
 }
 
 func (c *Client) bustScriptCacheInFiles(ctx context.Context, scriptName, newVer string) error {
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	cfg := c.GetConfig()
+	if cfg == nil || cfg.URL == "" {
+		return fmt.Errorf("substore URL is empty")
+	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	filesURL := fmt.Sprintf("%s/api/files", baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, filesURL, nil)

@@ -130,3 +130,85 @@ func TestVerifyEndpoint_ResidentialAware(t *testing.T) {
 		t.Errorf("expected self_nodes_healthy to be false when residential node tunnel is down, got true")
 	}
 }
+
+func TestVerifyEndpoint_ResidentialFallbackNameMatch(t *testing.T) {
+	ResetAuthTracker()
+	cleanupDomains := substore.SetShareDomainsForTest(nil)
+	defer cleanupDomains()
+
+	mockSubStore := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success",
+			"data": []map[string]any{
+				{
+					"name":    "ashan",
+					"content": "socks5://user:pass@167.104.167.151:40981#LZ-US-Pavlov-家宽-01",
+				},
+			},
+		})
+	}))
+	defer mockSubStore.Close()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "admin-token-123",
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     mockSubStore.URL,
+		},
+	}
+
+	sc := substore.NewClient(&cfg.SubStore)
+	sch := monitor.NewScheduler(cfg, nil, nil, sc)
+
+	now := time.Now()
+	// 模拟冷启动或历史数据中 NodeType 为空，但名称带“家宽”且海外隧道畅通
+	resiResult := &model.NodeProbeResult{
+		ID:          "resi-fallback-1",
+		Name:        "LZ-US-Pavlov-家宽-01",
+		OriginalURL: "socks5://user:pass@167.104.167.151:40981#LZ-US-Pavlov-家宽-01",
+		NodeType:    "", // 无显式标记
+		Protocol:    "socks5",
+		IsSelf:      true,
+		Online:      false,
+		TestedAt:    now,
+		Diagnostic: &model.DiagnosticInfo{
+			FaultType:       model.FaultResidentialDirectBlocked,
+			AbroadReachable: true,
+			ActionType:      "CHAIN_VIA_TRANSIT",
+		},
+	}
+
+	sch.InjectNodeStateForTest("LZ-US-Pavlov-家宽-01", resiResult)
+
+	server := NewAPIServer(cfg, nil, nil, sc, nil, sch, nil)
+	app := server.app
+
+	req := httptest.NewRequest("GET", "/api/substore/verify?file=ashan", nil)
+	req.Header.Set("Authorization", "Bearer admin-token-123")
+
+	resp, err := app.Test(req, 5000)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var res map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+
+	healthy, _ := res["self_nodes_healthy"].(bool)
+	if !healthy {
+		t.Errorf("expected self_nodes_healthy to be true via fallback name matching, got false")
+	}
+
+	chainedCount, _ := res["self_nodes_residential_chained"].(float64)
+	if chainedCount != 1 {
+		t.Errorf("expected self_nodes_residential_chained == 1, got %v", chainedCount)
+	}
+}

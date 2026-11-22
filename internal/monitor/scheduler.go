@@ -275,11 +275,13 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 		// 若 SubStore 中 ashan-resi-direct 为空，自动以本地家宽池补充同步
 		if subName == "ashan-resi-direct" && subNodesCount == 0 {
 			var localResi []string
+			s.mu.RLock()
 			for _, st := range s.nodeStates {
 				if st.LastResult != nil && st.LastResult.NodeType == "residential" {
 					localResi = append(localResi, st.Config.URL)
 				}
 			}
+			s.mu.RUnlock()
 			if len(localResi) > 0 {
 				logger.Infof("[MONITOR] SubStore ashan-resi-direct is empty, seeding with %d local residential nodes...", len(localResi))
 				_ = s.substoreClient.SyncThreeTier(ctx, substore.ThreeTierPayload{
@@ -290,7 +292,10 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 	}
 
 	if len(dynamicNodes) == 0 {
-		logger.Warnf("[MONITOR] Dynamic pull returned 0 nodes, preserving existing %d nodes", len(s.nodeStates))
+		s.mu.RLock()
+		existingCount := len(s.nodeStates)
+		s.mu.RUnlock()
+		logger.Warnf("[MONITOR] Dynamic pull returned 0 nodes, preserving existing %d nodes", existingCount)
 		return nil
 	}
 

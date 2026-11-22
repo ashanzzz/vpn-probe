@@ -100,7 +100,7 @@ func (h *Healer) HealIPBlocked(res *model.NodeProbeResult, healthyRelays []*mode
 	}
 
 	fallbackName := fmt.Sprintf("%s-借道%s扶持", nameTag, chosenRelay.Name)
-	newURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(chosenRelay.Name), url.QueryEscape(fallbackName))
+	newURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(chosenRelay.Name), fallbackName)
 
 	logger.Sync("[HEALER] 🛡️ Mutual Relay Activated: IP %s blocked -> Downstream injected with dialer-proxy '%s'",
 		res.ExitIP, chosenRelay.Name)
@@ -165,7 +165,7 @@ func (h *Healer) BuildSmartChains(transitNodes []*model.NodeProbeResult, resiNod
 		}
 
 		chainName := fmt.Sprintf("链式|%s ➔ %s", pairedRelay.Name, resiLabel)
-		chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(pairedRelay.Name), url.QueryEscape(chainName))
+		chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(pairedRelay.Name), chainName)
 
 		chains = append(chains, chainURL)
 	}
@@ -222,7 +222,7 @@ func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResu
 		// 咱们所有自有中转服务器，全部把所有家宽链式代理
 		for _, transit := range activeTransits {
 			chainName := fmt.Sprintf("链式|%s ➔ %s", transit.Name, resiLabel)
-			chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(transit.Name), url.QueryEscape(chainName))
+			chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(transit.Name), chainName)
 			if !seen[chainURL] {
 				seen[chainURL] = true
 				chains = append(chains, chainURL)

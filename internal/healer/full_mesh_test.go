@@ -109,4 +109,15 @@ func TestBuildFullMeshRegionalChains(t *testing.T) {
 	if usChains != 3 {
 		t.Errorf("expected 3 US chains with 4837, got %d", usChains)
 	}
+
+	// 验收标准：节点名（# fragment）洁净度，严禁含有 '+' 编码残留字符
+	for _, c := range chains {
+		hashIdx := strings.Index(c, "#")
+		if hashIdx != -1 {
+			fragment := c[hashIdx+1:]
+			if strings.Contains(fragment, "+") {
+				t.Errorf("chain URL fragment contains '+' residue: %s (full: %s)", fragment, c)
+			}
+		}
+	}
 }

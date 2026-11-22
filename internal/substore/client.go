@@ -443,7 +443,7 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 	// 1. 同步 线路机-直连 (ashan-transit-direct)
 	transitContent := payload.TransitDirectNodes
 	if len(transitContent) == 0 {
-		transitContent = []string{"# No active transit nodes"}
+		transitContent = []string{}
 	}
 	if err := c.updateSubStoreSubscription(ctx, "ashan-transit-direct", transitContent); err != nil {
 		logger.Warnf("[SUBSTORE] Update ashan-transit-direct: %v", err)
@@ -454,7 +454,7 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 	// 2. 同步 家宽机-直连 (ashan-resi-direct)
 	resiContent := payload.ResidentialNodes
 	if len(resiContent) == 0 {
-		resiContent = []string{""}
+		resiContent = []string{}
 	}
 	if err := c.updateSubStoreSubscription(ctx, "ashan-resi-direct", resiContent); err != nil {
 		logger.Warnf("[SUBSTORE] Update ashan-resi-direct: %v", err)
@@ -465,7 +465,7 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 	// 3. 同步 线路➔家宽链式代理 (ashan-chain)
 	chainContent := payload.ChainNodes
 	if len(chainContent) == 0 {
-		chainContent = []string{""}
+		chainContent = []string{}
 	}
 	if err := c.updateSubStoreSubscription(ctx, "ashan-chain", chainContent); err != nil {
 		logger.Warnf("[SUBSTORE] Update ashan-chain: %v", err)
@@ -569,9 +569,7 @@ func (c *Client) DeleteSubscription(ctx context.Context, subName string) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.Token)
-	}
+	c.setAuth(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

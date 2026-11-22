@@ -225,6 +225,9 @@ func (e *Engine) ProbeBatch(ctx context.Context, req *model.BatchProbeRequest) *
 	if concurrency <= 0 {
 		concurrency = e.cfg.Probe.MaxConcurrency
 	}
+	if concurrency <= 0 {
+		concurrency = 5
+	}
 	if concurrency > 30 {
 		concurrency = 30
 	}

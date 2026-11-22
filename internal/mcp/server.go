@@ -103,9 +103,18 @@ func (m *MCPServer) registerTools() {
 		mcp.WithDescription("【平滑兼容】触发 Sub-Store 拓扑自愈与五维策略组原子同步 (已升级取代历史三层架构)。"),
 	)
 	m.server.AddTool(threetierTool, m.handleSyncFiveGroups)
+
+	// 8. substore_purge_legacy (彻底平退并删除 SubStore 中历史残留的旧三层独立订阅)
+	purgeTool := mcp.NewTool("substore_purge_legacy",
+		mcp.WithDescription("从 Sub-Store 彻底平退并删除历史残留的旧三层独立订阅(ashan-transit-direct, ashan-resi-direct, ashan-chain, ashan-tw-resi)，保证五维拓扑洁净度。"),
+	)
+	m.server.AddTool(purgeTool, m.handlePurgeLegacySubs)
 }
 
 func (m *MCPServer) handleProbeLinks(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if m.engine == nil {
+		return mcp.NewToolResultError("probe engine is not initialized"), nil
+	}
 	links, err := request.RequireStringSlice("links")
 	if err != nil || len(links) == 0 {
 		return mcp.NewToolResultError("links must be a non-empty string array"), nil
@@ -127,8 +136,10 @@ func (m *MCPServer) handleProbeLinks(ctx context.Context, request mcp.CallToolRe
 	resp := m.engine.ProbeBatch(ctx, batchReq)
 
 	// 保存记录到数据库
-	for _, res := range resp.Results {
-		_ = m.store.SaveResult(ctx, res)
+	if m.store != nil {
+		for _, res := range resp.Results {
+			_ = m.store.SaveResult(ctx, res)
+		}
 	}
 
 	// 同步到 SubStore
@@ -153,11 +164,17 @@ func (m *MCPServer) handleProbeLinks(ctx context.Context, request mcp.CallToolRe
 }
 
 func (m *MCPServer) handleGetHistory(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if m.store == nil {
+		return mcp.NewToolResultError("store is not initialized"), nil
+	}
 	limit := request.GetInt("limit", 20)
 
 	records, err := m.store.GetRecentResults(ctx, limit)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("query history failed: %v", err)), nil
+	}
+	if records == nil {
+		records = make([]*model.NodeProbeResult, 0)
 	}
 
 	b, _ := json.MarshalIndent(records, "", "  ")
@@ -182,12 +199,15 @@ func (m *MCPServer) handleSyncSubStore(ctx context.Context, request mcp.CallTool
 }
 
 func (m *MCPServer) handleListPortBlocked(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if m.store == nil {
+		return mcp.NewToolResultError("store is not initialized"), nil
+	}
 	records, err := m.store.GetRecentResults(ctx, 100)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("query history failed: %v", err)), nil
 	}
 
-	var blockedList []map[string]any
+	blockedList := make([]map[string]any, 0)
 	seen := make(map[string]bool)
 
 	for _, r := range records {
@@ -216,13 +236,16 @@ func (m *MCPServer) handleListPortBlocked(ctx context.Context, request mcp.CallT
 }
 
 func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if m.store == nil {
+		return mcp.NewToolResultError("store is not initialized"), nil
+	}
 	records, err := m.store.GetRecentResults(ctx, 100)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("query history failed: %v", err)), nil
 	}
 
-	var healthyList []map[string]any
-	var actionList []map[string]any
+	healthyList := make([]map[string]any, 0)
+	actionList := make([]map[string]any, 0)
 	seen := make(map[string]bool)
 
 	healthyCount := 0
@@ -349,6 +372,9 @@ func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallTool
 }
 
 func (m *MCPServer) handleSpeedtestNode(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if m.engine == nil {
+		return mcp.NewToolResultError("probe engine is not initialized"), nil
+	}
 	link, err := request.RequireString("link")
 	if err != nil || link == "" {
 		return mcp.NewToolResultError("link is required"), nil
@@ -379,4 +405,24 @@ func (m *MCPServer) handleSyncFiveGroups(ctx context.Context, request mcp.CallTo
 
 	b, _ := json.MarshalIndent(audit, "", "  ")
 	return mcp.NewToolResultText(fmt.Sprintf("Sub-Store Five-Group topology synchronized and organized successfully:\n%s", string(b))), nil
+}
+
+func (m *MCPServer) handlePurgeLegacySubs(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if m.substoreClient == nil || !m.cfg.SubStore.Enabled {
+		return mcp.NewToolResultError("SubStore integration is disabled"), nil
+	}
+
+	purged, err := m.substoreClient.PurgeLegacyThreeTierSubs(ctx)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("purge legacy subscriptions failed: %v", err)), nil
+	}
+
+	res := map[string]any{
+		"status":       "ok",
+		"purged_count": purged,
+		"purged_subs":  substore.LegacyThreeTierSubNames,
+		"message":      "Successfully purged legacy 3-tier subscriptions from SubStore",
+	}
+	b, _ := json.MarshalIndent(res, "", "  ")
+	return mcp.NewToolResultText(string(b)), nil
 }

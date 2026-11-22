@@ -220,7 +220,7 @@ func (m *Manager) ListVPSInstances(ctx context.Context) []*SoftwareInfo {
 
 // GetBlockedAnalysis 对所有自建节点执行四分类深度墙况计算
 func (m *Manager) GetBlockedAnalysis(probeResults []*model.NodeProbeResult) []*BlockedAnalysisResult {
-	var analysis []*BlockedAnalysisResult
+	analysis := make([]*BlockedAnalysisResult, 0)
 	for _, res := range probeResults {
 		if !res.IsSelf {
 			continue // 严格限制：仅对自建节点执行墙况计算

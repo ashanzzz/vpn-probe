@@ -76,6 +76,7 @@ func TestLoggerInitAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Init logger failed: %v", err)
 	}
+	defer l.Close()
 
 	l.Debugf("debug message: %s", "hello")
 	l.Infof("info message: %s", "world")

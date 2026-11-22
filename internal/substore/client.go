@@ -387,7 +387,7 @@ func (c *Client) SyncFiveGroups(ctx context.Context, payload model.FiveGroupPayl
 	for _, g := range groups {
 		content := g.Nodes
 		if len(content) == 0 {
-			content = []string{fmt.Sprintf("# No active nodes for %s", g.DisplayName)}
+			content = []string{}
 		}
 		if err := c.updateSubStoreSubscription(ctx, g.SubName, content); err != nil {
 			logger.Warnf("[SUBSTORE] Update %s (%s): %v", g.SubName, g.DisplayName, err)

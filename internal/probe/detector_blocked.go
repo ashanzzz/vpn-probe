@@ -345,7 +345,39 @@ func EvaluateFault(
 ) (faultType model.FaultType, statusText string, actionType string, tip string) {
 	isResi := len(isResidential) > 0 && isResidential[0]
 
-	// 1. 协议认证失败判断 (境内外TCP端口握手均畅通，但应用层握手被服务端拒绝)
+	// 1. 住宅家宽节点专属故障模型 (Issue #26: 根除“端口被墙/换端口/认证失败”误判，识别家庭穿透隧道与宿主机状态)
+	// 家宽节点物理上为境外中转+反向家庭隧道，国内直连受阻为常态；优先判定家宽链路健康度，严禁被误判为凭据认证失败或盲目换端口
+	if isResi {
+		if abroadOK {
+			// 海外探针正常 (穿透隧道在海外连通)，但国内直连受阻 (无论国内TCP SYN是否握手成功)
+			faultType = model.FaultResidentialDirectBlocked
+			statusText = "【仅境外通】国内直连受阻/需经自建专线链式中继"
+			actionType = "CHAIN_VIA_TRANSIT"
+			tip = fmt.Sprintf("【家宽网络特征】住宅家宽目标 %s:%d 海外隧道正常(%s)，仅国内直连受阻。严禁更换端口（换端口无效），请通过自建专线中转（链式代理）接入使用！", host, port, abroadSource)
+		} else if !abroadOK && !domesticTCPOK {
+			if pingOK {
+				// 中转宿主机 Ping 通，但国内外端口都不通 -> 家庭端穿透掉线/设备关机
+				faultType = model.FaultResidentialTunnelOffline
+				statusText = "【家宽穿透掉线】家庭设备离线或反向穿透隧道中断"
+				actionType = "CHECK_RESIDENTIAL_DEVICE_OR_TUNNEL"
+				tip = fmt.Sprintf("【家宽穿透掉线】中转宿主机 %s 在线(Ping通)，但端口 %d 全球不通。通常为本地家庭端光猫重拨、断电或反向穿透(Rathole/FRP)服务中断，严禁换端口，请检查家庭端设备！", host, port)
+			} else {
+				// 中转宿主机连 Ping 都不通 -> 宿主机离线
+				faultType = model.FaultTransitRelayDown
+				statusText = "【中转离线】家宽中转宿主机宕机或网络中断"
+				actionType = "CHECK_TRANSIT_RELAY_HOST"
+				tip = fmt.Sprintf("【中转宿主宕机】家宽中转宿主机 %s 丢包不通，请检查日本中转宿主机或云服务商网络！", host)
+			}
+		} else {
+			faultType = model.FaultResidentialTunnelOffline
+			statusText = "【家宽异常】家庭设备或穿透服务异常"
+			actionType = "CHECK_RESIDENTIAL_DEVICE_OR_TUNNEL"
+			tip = fmt.Sprintf("目标 %s:%d 状态异常，请核查家庭穿透隧道与设备。", host, port)
+		}
+		return
+	}
+
+	// 2. 协议认证失败判断 (仅针对自建专线/VPS线路机：境内外TCP端口握手均畅通，但应用层握手被服务端拒绝)
 	if domesticTCPOK && abroadOK {
 		faultType = model.FaultProtocolMismatch
 		switch strings.ToLower(protocol) {
@@ -373,37 +405,6 @@ func EvaluateFault(
 			statusText = fmt.Sprintf("【配置错误】%s 协议握手或认证失败", protoUpper)
 			actionType = "CHECK_PROXY_CREDENTIALS"
 			tip = fmt.Sprintf("【非被墙】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但代理握手失败，请核对凭据配置！", host, port, abroadSource)
-		}
-		return
-	}
-
-	// 2. 住宅家宽节点专属故障模型 (Issue #26: 根除“端口被墙/换端口”误判，识别家庭穿透隧道与宿主机状态)
-	if isResi {
-		if abroadOK && !domesticTCPOK {
-			// 海外探针正常 (穿透隧道在海外连通)，但国内直连受阻
-			faultType = model.FaultResidentialDirectBlocked
-			statusText = "【仅境外通】国内直连受阻/需经自建专线链式中继"
-			actionType = "CHAIN_VIA_TRANSIT"
-			tip = fmt.Sprintf("【家宽网络特征】住宅家宽目标 %s:%d 海外隧道正常(%s)，仅国内直连受阻。严禁更换端口（换端口无效），请通过自建专线中转（链式代理）接入使用！", host, port, abroadSource)
-		} else if !abroadOK && !domesticTCPOK {
-			if pingOK {
-				// 中转宿主机 Ping 通，但国内外端口都不通 -> 家庭端穿透掉线/设备关机
-				faultType = model.FaultResidentialTunnelOffline
-				statusText = "【家宽穿透掉线】家庭设备离线或反向穿透隧道中断"
-				actionType = "CHECK_RESIDENTIAL_DEVICE_OR_TUNNEL"
-				tip = fmt.Sprintf("【家宽穿透掉线】中转宿主机 %s 在线(Ping通)，但端口 %d 全球不通。通常为本地家庭端光猫重拨、断电或反向穿透(Rathole/FRP)服务中断，严禁换端口，请检查家庭端设备！", host, port)
-			} else {
-				// 中转宿主机连 Ping 都不通 -> 宿主机离线
-				faultType = model.FaultTransitRelayDown
-				statusText = "【中转离线】家宽中转宿主机宕机或网络中断"
-				actionType = "CHECK_TRANSIT_RELAY_HOST"
-				tip = fmt.Sprintf("【中转宿主宕机】家宽中转宿主机 %s 丢包不通，请检查日本中转宿主机或云服务商网络！", host)
-			}
-		} else {
-			faultType = model.FaultResidentialTunnelOffline
-			statusText = "【家宽异常】家庭设备或穿透服务异常"
-			actionType = "CHECK_RESIDENTIAL_DEVICE_OR_TUNNEL"
-			tip = fmt.Sprintf("目标 %s:%d 状态异常，请核查家庭穿透隧道与设备。", host, port)
 		}
 		return
 	}

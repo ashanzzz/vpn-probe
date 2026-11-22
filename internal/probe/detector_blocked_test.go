@@ -108,6 +108,18 @@ func TestDiagnosisLogic(t *testing.T) {
 			wantActionType: "CHAIN_VIA_TRANSIT",
 		},
 		{
+			name:           "家宽国内直连受阻(TCP握手成功但直连不可用): 境外隧道正常，无论国内TCP SYN是否握手成功，均判定为需链式中继",
+			port:           40981,
+			protocol:       "socks5",
+			domesticTCPOK:  true,
+			abroadOK:       true,
+			pingOK:         true,
+			isResi:         true,
+			wantFault:      model.FaultResidentialDirectBlocked,
+			wantStatusText: "【仅境外通】国内直连受阻/需经自建专线链式中继",
+			wantActionType: "CHAIN_VIA_TRANSIT",
+		},
+		{
 			name:           "家宽穿透掉线: 宿主机Ping通但内外端口不通 (家庭设备关机或反向穿透中断)",
 			port:           40985,
 			protocol:       "socks5",

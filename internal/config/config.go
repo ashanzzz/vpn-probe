@@ -71,8 +71,8 @@ type SubStoreConfig struct {
 
 type ProbeConfig struct {
 	SingboxBin      string            `yaml:"singbox_bin"`       // sing-box 可执行路径，留空默认从 PATH 找
-	PortStart       int               `yaml:"port_start"`        // 随机端口起始，默认 30000
-	PortEnd         int               `yaml:"port_end"`          // 随机端口结束，默认 40000
+	PortStart       int               `yaml:"port_start"`        // 随机端口起始，默认 20000 (避开 Linux 临时端口 32768-60999)
+	PortEnd         int               `yaml:"port_end"`          // 随机端口结束，默认 28000
 	DefaultTimeout  int               `yaml:"default_timeout"`   // 默认超时(秒)，如 8
 	MaxConcurrency  int               `yaml:"max_concurrency"`   // 最大并发测试数，如 10
 	GoogleNCRURL    string            `yaml:"google_ncr_url"`    // https://www.google.com/ncr
@@ -123,8 +123,8 @@ func DefaultConfig() *Config {
 		},
 		Probe: ProbeConfig{
 			SingboxBin:      "sing-box",
-			PortStart:       30000,
-			PortEnd:         40000,
+			PortStart:       20000,
+			PortEnd:         28000,
 			DefaultTimeout:  8,
 			MaxConcurrency:  10,
 			GoogleNCRURL:    "https://www.google.com/ncr",

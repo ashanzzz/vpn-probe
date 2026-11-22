@@ -194,14 +194,19 @@ kex=X25519`
 }
 
 func TestMockServers(t *testing.T) {
-	// Verify httptest works with custom handler
+	// Verify httptest works with custom handler without following external redirects
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Location", "https://www.google.com.hk")
 		w.WriteHeader(http.StatusFound)
 	}))
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL)
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get(ts.URL)
 	if err != nil {
 		t.Fatalf("failed to GET mock: %v", err)
 	}

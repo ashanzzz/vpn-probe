@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -113,8 +114,8 @@ func NewSandboxManager(binPath string, portStart, portEnd int) *SandboxManager {
 		binPath = "sing-box"
 	}
 	if portStart <= 0 || portEnd <= portStart {
-		portStart = 30000
-		portEnd = 40000
+		portStart = 20000
+		portEnd = 28000
 	}
 	return &SandboxManager{
 		singboxBin: binPath,
@@ -196,7 +197,7 @@ func (m *SandboxManager) Launch(ctx context.Context, outbound map[string]any) (*
 	}
 
 	// 轮询等待入站端口处于监听状态（最多等待 3 秒）
-	if err := waitForPort(port, 3*time.Second); err != nil {
+	if err := waitForPort(cmd, logBuf, port, 3*time.Second); err != nil {
 		outMsg := strings.TrimSpace(logBuf.String())
 		inst.Close(m)
 		if outMsg != "" {
@@ -257,10 +258,22 @@ func (m *SandboxManager) releasePort(port int) {
 	delete(m.usedPorts, port)
 }
 
-func waitForPort(port int, timeout time.Duration) error {
+func waitForPort(cmd *exec.Cmd, logBuf *TailBuffer, port int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	for time.Now().Before(deadline) {
+		if cmd != nil && cmd.Process != nil && cmd.Process.Pid > 0 {
+			if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+				outMsg := ""
+				if logBuf != nil {
+					outMsg = strings.TrimSpace(logBuf.String())
+				}
+				if outMsg != "" {
+					return fmt.Errorf("sing-box process exited prematurely: %s", outMsg)
+				}
+				return fmt.Errorf("sing-box process exited prematurely: %w", err)
+			}
+		}
 		conn, err := net.DialTimeout("tcp", addr, 150*time.Millisecond)
 		if err == nil {
 			conn.Close()

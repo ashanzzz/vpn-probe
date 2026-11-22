@@ -341,9 +341,26 @@ func EvaluateFault(
 	abroadOK bool,
 	pingOK bool,
 	abroadSource string,
-	isResidential ...bool,
+	options ...any,
 ) (faultType model.FaultType, statusText string, actionType string, tip string) {
-	isResi := len(isResidential) > 0 && isResidential[0]
+	isResi := false
+	var probeErr error
+	for _, opt := range options {
+		switch v := opt.(type) {
+		case bool:
+			isResi = v
+		case error:
+			probeErr = v
+		}
+	}
+
+	isTimeout := false
+	if probeErr != nil {
+		errStr := strings.ToLower(probeErr.Error())
+		if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded") {
+			isTimeout = true
+		}
+	}
 
 	// 1. 住宅家宽节点专属故障模型 (对齐 Issue #33 V2Ray 标准架构，根除旧黑话，精确区分中转机离线 vs 家庭端掉线)
 	// 家宽节点物理上为境外中转承接家庭端接入；严禁对家宽下发“端口被墙换端口”的自愈逻辑
@@ -358,8 +375,15 @@ func EvaluateFault(
 				tip = fmt.Sprintf("【家宽链路特征】住宅家宽目标 %s:%d 海外链路正常(%s)，国内直连受阻。严禁更换端口（换端口无效），请通过自建专线中转（链式代理）接入使用！", host, port, abroadSource)
 				return
 			}
-			// 若为加密协议 (VLESS/Reality 等)，且国内外 TCP 握手均成功，但应用层探测失败，
-			// 说明链路网络通畅，流转至下方通用协议握手诊断 (如 Reality 公钥/ShortID 校验失败)
+			// 若国内外 TCP 握手均成功，但应用层探测超时 (网络抖动/高延迟拥塞/家庭端未建立连接)
+			if isTimeout {
+				faultType = model.FaultResidentialTunnelOffline
+				statusText = "【家庭端拥堵或未就绪】家宽隧道探测超时或丢包"
+				actionType = "CHECK_RESIDENTIAL_DEVICE"
+				tip = fmt.Sprintf("【家宽链路特征】中转服务器 %s:%d 在线且端口开放，但家庭端应用层探测超时。家宽网络通常存在高延迟、丢包或家庭设备连接未就绪。严禁更换端口，请检查家庭端设备或经专线中转！", host, port)
+				return
+			}
+			// 若非超时且为加密协议 (VLESS/Reality 等)，且国内外 TCP 握手均成功，流转至下方通用协议握手诊断 (如 Reality 公钥/ShortID 校验失败)
 		} else if !abroadOK && !domesticTCPOK {
 			if pingOK {
 				// 中转宿主机 Ping 通，但国内外端口均无响应 -> 家庭设备离线或连接中断
@@ -384,8 +408,16 @@ func EvaluateFault(
 		}
 	}
 
-	// 2. 协议认证失败判断 (仅针对自建专线/VPS线路机：境内外TCP端口握手均畅通，但应用层握手被服务端拒绝)
+	// 2. 协议认证失败与网络超时判断 (自建专线/VPS线路机：境内外TCP端口握手均畅通，但应用层握手未通过)
 	if domesticTCPOK && abroadOK {
+		if isTimeout {
+			faultType = model.FaultMachineDown
+			statusText = "【网络拥塞超时】国内外TCP连通但应用层请求超时"
+			actionType = "CHECK_NETWORK_ROUTING"
+			tip = fmt.Sprintf("【网络拥塞】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但应用层探测超时。通常为国际链路拥堵、丢包或回程路由劣化，非凭据配置错误，请勿盲目修改凭据或端口！", host, port, abroadSource)
+			return
+		}
+
 		faultType = model.FaultProtocolMismatch
 		switch strings.ToLower(protocol) {
 		case "socks", "socks5":
@@ -450,8 +482,19 @@ func DiagnoseNode(
 	sm *SandboxManager,
 	peers []PeerProxyCandidate,
 	cfg *config.Config,
-	isResidential ...bool,
+	options ...any,
 ) *model.DiagnosticInfo {
+	isResi := false
+	var probeErr error
+	for _, opt := range options {
+		switch v := opt.(type) {
+		case bool:
+			isResi = v
+		case error:
+			probeErr = v
+		}
+	}
+
 	diag := &model.DiagnosticInfo{
 		TargetIP:          host,
 		TargetPort:        port,
@@ -478,9 +521,9 @@ func DiagnoseNode(
 	diag.DomesticPing = pingOK
 	logger.Probe("[%s] Domestic ping result: pingable=%v", host, pingOK)
 
-	// 4. 严格四维判定矩阵 (包含住宅家宽角色感知)
+	// 4. 严格四维判定矩阵 (包含住宅家宽角色感知与探测错误归因)
 	diag.FaultType, diag.StatusText, diag.ActionType, diag.TroubleshootTip = EvaluateFault(
-		host, port, protocol, domesticTCPOK, abroadOK, pingOK, abroadSource, isResidential...,
+		host, port, protocol, domesticTCPOK, abroadOK, pingOK, abroadSource, isResi, probeErr,
 	)
 
 	logger.Probe("[%s:%d] Final diagnosis: %s (Action: %s)", host, port, diag.StatusText, diag.ActionType)

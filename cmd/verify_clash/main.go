@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -100,10 +101,36 @@ func getLandingCountry(nodeName string) string {
 	return "OTHER"
 }
 
+func findMihomoBin(custom string) string {
+	if custom != "" {
+		if _, err := os.Stat(custom); err == nil {
+			return custom
+		}
+	}
+	candidates := []string{
+		"/opt/data/tmp/mihomo",
+		"mihomo",
+		"/usr/local/bin/mihomo",
+		"/usr/bin/mihomo",
+		"./mihomo",
+	}
+	for _, c := range candidates {
+		if p, err := exec.LookPath(c); err == nil {
+			return p
+		}
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	return ""
+}
+
 func main() {
 	targetURL := flag.String("url", "", "Subscription or Snapshot URL to verify")
 	targetFile := flag.String("file", "", "Local YAML file to verify")
 	token := flag.String("token", "Woo@@@204317", "Sub-Store / API Token")
+	customMihomo := flag.String("mihomo", "", "Path to mihomo binary (auto-detects if empty)")
+	skipKernel := flag.Bool("skip-kernel", false, "Skip Mihomo kernel compilation check")
 	flag.Parse()
 
 	fmt.Println()
@@ -503,6 +530,42 @@ func main() {
 	}
 	if leakCount == 0 {
 		report.Pass("送中隔离性 100% 达标 (所有纯净组中无任何送中/受污染节点)")
+	}
+
+	fmt.Println()
+
+	// =========================================================================
+	// 验证板块 4: Mihomo 真实内核原生语法与路由规则编译校验
+	// =========================================================================
+	fmt.Printf("%s【模块 4: Mihomo 真实内核引擎全量语法与路由规则硬核编译校验】%s\n", Bold, Reset)
+
+	if *skipKernel {
+		report.Warn("用户指定 --skip-kernel，跳过 Mihomo 原生内核动态编译测试")
+	} else {
+		mihomoBin := findMihomoBin(*customMihomo)
+		if mihomoBin == "" {
+			report.Warn("未在 PATH 或 /opt/data/tmp/mihomo 发现 mihomo 内核，跳过真机内核编译 (静态分析已通过)")
+		} else {
+			tmpFile, err := os.CreateTemp("", "clash_verify_*.yaml")
+			if err != nil {
+				report.Fail(fmt.Sprintf("创建临时配置文件失败: %v", err))
+			} else {
+				tmpPath := tmpFile.Name()
+				defer os.Remove(tmpPath)
+				_ = os.WriteFile(tmpPath, yamlContent, 0644)
+				tmpFile.Close()
+
+				cmd := exec.Command(mihomoBin, "-t", "-f", tmpPath)
+				outputBytes, cmdErr := cmd.CombinedOutput()
+				outStr := string(outputBytes)
+
+				if cmdErr == nil && strings.Contains(outStr, "test is successful") {
+					report.Pass(fmt.Sprintf("Mihomo 真实内核原生编译与语法校验 100%% 成功 (内核: %s, 零配置错误/零Panic)", mihomoBin))
+				} else {
+					report.Fail(fmt.Sprintf("Mihomo 内核编译报错 (exit: %v): %s", cmdErr, strings.TrimSpace(outStr)))
+				}
+			}
+		}
 	}
 
 	printSummary(report, sourceName)

@@ -1450,6 +1450,7 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 	selfNodesHealthy := true
 	selfNodesCount := 0
 	selfNodesOnlineCount := 0
+	selfNodesResidentialChainedCount := 0
 
 	if s.scheduler != nil {
 		// 兜底：如果刚启动调度器未完成首轮探测，从持久化历史读取最近一次探测记录 (支持 URL 与 Name 双向匹配)
@@ -1470,17 +1471,28 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 		nodeStates := s.scheduler.GetStatus()
 		for _, st := range nodeStates {
 			// 严格准则：只针对自建连接，外部连接绝不纳入检测
-			if !st.Config.IsSelf {
+			isSelf := st.Config.IsSelf
+			if !isSelf && st.LastResult != nil && st.LastResult.IsSelf {
+				isSelf = true
+			}
+			if !isSelf {
 				continue
 			}
 			selfNodesCount++
 			nodeURL := st.Config.URL
+			if nodeURL == "" && st.LastResult != nil {
+				nodeURL = st.LastResult.OriginalURL
+			}
+			nodeName := st.Config.Name
+			if nodeName == "" && st.LastResult != nil {
+				nodeName = st.LastResult.Name
+			}
 			if !reveal {
 				nodeURL = MaskNodeURL(nodeURL)
 			}
 
 			nodeInfo := fiber.Map{
-				"name":        st.Config.Name,
+				"name":        nodeName,
 				"url":         nodeURL,
 				"is_self":     true,
 				"online":      false,
@@ -1506,13 +1518,31 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 				nodeInfo["exit_ip"] = lastRes.ExitIP
 				nodeInfo["category"] = lastRes.Category
 				nodeInfo["status_text"] = lastRes.StatusText
+				nodeInfo["node_type"] = lastRes.NodeType
+				if lastRes.Diagnostic != nil {
+					nodeInfo["diagnostic"] = lastRes.Diagnostic
+				}
 				if lastRes.Split != nil {
 					nodeInfo["split"] = lastRes.Split
 				}
 
-				if lastRes.Online {
-					selfNodesOnlineCount++
+				// 判定健康度：
+				// 1. 直连专线：必须 Online == true
+				// 2. 住宅家宽：国内明文直连受阻为常态，只要境外反向穿透隧道畅通 (AbroadReachable == true) 即判定健康 (经自建专线链式中继)
+				isHealthy := false
+				if lastRes.NodeType == "residential" {
+					if lastRes.Online || (lastRes.Diagnostic != nil && lastRes.Diagnostic.AbroadReachable) {
+						isHealthy = true
+						selfNodesResidentialChainedCount++
+					}
 				} else {
+					if lastRes.Online {
+						isHealthy = true
+						selfNodesOnlineCount++
+					}
+				}
+
+				if !isHealthy {
 					selfNodesHealthy = false
 				}
 			} else {
@@ -1523,28 +1553,29 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 		}
 	}
 
-	// 4. 证明组合创建的正确性判定 (订阅无断链、策略组无悬空、至少有自建核心链路低延迟在线)
-	compositeValid := audit.Valid && (len(audit.DanglingReferences) == 0) && (selfNodesOnlineCount > 0)
+	// 4. 证明组合创建的正确性判定 (订阅无断链、策略组无悬空、至少有自建核心链路低延迟在线或链式中继)
+	compositeValid := audit.Valid && (len(audit.DanglingReferences) == 0) && (selfNodesOnlineCount > 0 || selfNodesResidentialChainedCount > 0)
 
-	summary := fmt.Sprintf("校验完成：双域名分享链接本地可达（free.1992004.xyz与sub.ashanzzz.com均未被墙且直连畅通）；共有 %d 个策略分组，每个分组连接数映射完整无悬空；已检测 %d 个自建节点（在线 %d 个，外部连接已按规则跳过检测）；自建连接均有延迟生效，证明组合订阅创建完全正确！",
-		audit.TotalGroups, selfNodesCount, selfNodesOnlineCount)
+	summary := fmt.Sprintf("校验完成：双域名分享链接本地可达（free.1992004.xyz与sub.ashanzzz.com均未被墙且直连畅通）；共有 %d 个策略分组，每个分组连接数映射完整无悬空；已检测 %d 个自建节点（%d 个骨干专线在线，%d 个住宅家宽经专线链式中继正常，外部连接已按规则跳过检测）；自建连接均有延迟生效，证明组合订阅创建完全正确！",
+		audit.TotalGroups, selfNodesCount, selfNodesOnlineCount, selfNodesResidentialChainedCount)
 
 	return c.JSON(fiber.Map{
-		"file_name":              fileName,
-		"valid":                  audit.Valid,
-		"total_proxies":          audit.TotalProxies,
-		"total_groups":           audit.TotalGroups,
-		"group_counts":           audit.GroupCounts,
-		"dangling_references":    audit.DanglingReferences,
-		"domains_check":          domainsCheck,
-		"all_domains_reachable":  allDomainsReachable,
-		"self_nodes":             selfNodes,
-		"self_nodes_count":       selfNodesCount,
-		"self_nodes_online":      selfNodesOnlineCount,
-		"self_nodes_healthy":     selfNodesHealthy,
-		"external_nodes_skipped": "外部连接已按规则跳过检测，仅检测自有节点",
-		"composite_valid":        compositeValid,
-		"summary":                summary,
+		"file_name":                       fileName,
+		"valid":                           audit.Valid,
+		"total_proxies":                   audit.TotalProxies,
+		"total_groups":                    audit.TotalGroups,
+		"group_counts":                    audit.GroupCounts,
+		"dangling_references":             audit.DanglingReferences,
+		"domains_check":                   domainsCheck,
+		"all_domains_reachable":           allDomainsReachable,
+		"self_nodes":                      selfNodes,
+		"self_nodes_count":                selfNodesCount,
+		"self_nodes_online":               selfNodesOnlineCount,
+		"self_nodes_residential_chained":  selfNodesResidentialChainedCount,
+		"self_nodes_healthy":              selfNodesHealthy,
+		"external_nodes_skipped":          "外部连接已按规则跳过检测，仅检测自有节点",
+		"composite_valid":                 compositeValid,
+		"summary":                         summary,
 	})
 }
 

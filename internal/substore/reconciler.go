@@ -528,10 +528,14 @@ func (c *Client) ToggleFilePipelineOperator(ctx context.Context, fileName, opera
 }
 
 func (c *Client) setAuth(req *http.Request) {
-	if c.cfg.Username != "" || c.cfg.Password != "" {
-		req.SetBasicAuth(c.cfg.Username, c.cfg.Password)
-	} else if c.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
-		req.Header.Set("x-api-key", c.cfg.Token)
+	cfg := c.GetConfig()
+	if cfg == nil {
+		return
+	}
+	if cfg.Username != "" || cfg.Password != "" {
+		req.SetBasicAuth(cfg.Username, cfg.Password)
+	} else if cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Token)
+		req.Header.Set("x-api-key", cfg.Token)
 	}
 }

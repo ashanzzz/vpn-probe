@@ -635,7 +635,16 @@ func (c *Client) setAuth(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+cfg.Token)
 		req.Header.Set("x-api-key", cfg.Token)
 	} else if cfg.Username != "" {
-		req.SetBasicAuth(cfg.Username, cfg.Password)
+		password := cfg.Password
+		// 当显式密码为空但配置了 URL 路径 Token (例如 /Woo@@@204317) 时，自动回落为 Basic Auth 密码，
+		// 同时设置 x-api-key，确保反向代理 HTTP Basic Auth 与 Sub-Store 后端鉴权双双通过
+		if password == "" && cfg.URL != "" {
+			if u, err := url.Parse(cfg.URL); err == nil && u.Path != "" && u.Path != "/" {
+				password = strings.Trim(u.Path, "/")
+				req.Header.Set("x-api-key", password)
+			}
+		}
+		req.SetBasicAuth(cfg.Username, password)
 	}
 	if cfg.Token != "" && (cfg.Username != "" && cfg.Password != "") {
 		req.Header.Set("x-api-key", cfg.Token)

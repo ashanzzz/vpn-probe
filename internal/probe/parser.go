@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -96,10 +97,11 @@ func parseShadowsocks(u *url.URL, tag string) (*ParsedNode, error) {
 			password = pwd
 		}
 
-		hostParts := strings.Split(u.Host, ":")
-		server = hostParts[0]
-		if len(hostParts) > 1 {
-			port, _ = strconv.Atoi(hostParts[1])
+		server = u.Hostname()
+		if p := u.Port(); p != "" {
+			if pInt, err := strconv.Atoi(p); err == nil && pInt > 0 {
+				port = pInt
+			}
 		}
 	} else {
 		// 可能是整个 base64
@@ -120,10 +122,13 @@ func parseShadowsocks(u *url.URL, tag string) (*ParsedNode, error) {
 			method = userParts[0]
 			password = userParts[1]
 		}
-		hpParts := strings.Split(hostport, ":")
-		server = hpParts[0]
-		if len(hpParts) > 1 {
-			port, _ = strconv.Atoi(hpParts[1])
+		if h, p, err := net.SplitHostPort(hostport); err == nil {
+			server = h
+			if pInt, err := strconv.Atoi(p); err == nil && pInt > 0 {
+				port = pInt
+			}
+		} else {
+			server = hostport
 		}
 	}
 
@@ -145,11 +150,12 @@ func parseShadowsocks(u *url.URL, tag string) (*ParsedNode, error) {
 
 func parseTrojan(u *url.URL, tag string) (*ParsedNode, error) {
 	password := u.User.Username()
-	hostParts := strings.Split(u.Host, ":")
-	server := hostParts[0]
+	server := u.Hostname()
 	port := 443
-	if len(hostParts) > 1 {
-		port, _ = strconv.Atoi(hostParts[1])
+	if p := u.Port(); p != "" {
+		if pInt, err := strconv.Atoi(p); err == nil && pInt > 0 {
+			port = pInt
+		}
 	}
 
 	q := u.Query()
@@ -187,11 +193,12 @@ func parseTrojan(u *url.URL, tag string) (*ParsedNode, error) {
 
 func parseVLESS(u *url.URL, tag string) (*ParsedNode, error) {
 	uuid := u.User.Username()
-	hostParts := strings.Split(u.Host, ":")
-	server := hostParts[0]
+	server := u.Hostname()
 	port := 443
-	if len(hostParts) > 1 {
-		port, _ = strconv.Atoi(hostParts[1])
+	if p := u.Port(); p != "" {
+		if pInt, err := strconv.Atoi(p); err == nil && pInt > 0 {
+			port = pInt
+		}
 	}
 
 	q := u.Query()
@@ -338,11 +345,12 @@ func parseVMess(raw string, tag string) (*ParsedNode, error) {
 
 func parseHysteria2(u *url.URL, tag string) (*ParsedNode, error) {
 	password := u.User.Username()
-	hostParts := strings.Split(u.Host, ":")
-	server := hostParts[0]
+	server := u.Hostname()
 	port := 443
-	if len(hostParts) > 1 {
-		port, _ = strconv.Atoi(hostParts[1])
+	if p := u.Port(); p != "" {
+		if pInt, err := strconv.Atoi(p); err == nil && pInt > 0 {
+			port = pInt
+		}
 	}
 
 	q := u.Query()

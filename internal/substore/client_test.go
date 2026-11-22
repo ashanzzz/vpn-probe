@@ -125,6 +125,17 @@ func TestClient_SetAuth(t *testing.T) {
 			},
 			expectNoAuth: true,
 		},
+		{
+			name: "Username with empty password falls back to URL path token",
+			cfg: &config.SubStoreConfig{
+				URL:      "https://free.1992004.xyz/Woo@@@204317",
+				Username: "ashan",
+				Password: "",
+				Token:    "",
+			},
+			expectAuth: "Basic YXNoYW46V29vQEBAMjA0MzE3",
+			expectKey:  "Woo@@@204317",
+		},
 	}
 
 	for _, tc := range tests {

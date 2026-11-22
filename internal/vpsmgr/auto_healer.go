@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -47,12 +48,9 @@ func (h *AutoHealer) DiagnoseNode(res *model.NodeProbeResult) *BlockedAnalysisRe
 	u, err := url.Parse(res.OriginalURL)
 	if err == nil {
 		result.Protocol = u.Scheme
-		hostParts := strings.Split(u.Host, ":")
-		if len(hostParts) == 2 {
-			result.ServerIP = hostParts[0]
-			result.ServerPort, _ = strconv.Atoi(hostParts[1])
-		} else {
-			result.ServerIP = u.Host
+		result.ServerIP = u.Hostname()
+		if p := u.Port(); p != "" {
+			result.ServerPort, _ = strconv.Atoi(p)
 		}
 	}
 
@@ -151,12 +149,13 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 		return resp, err
 	}
 
-	hostParts := strings.Split(u.Host, ":")
-	if len(hostParts) != 2 {
+	host := u.Hostname()
+	portStr := u.Port()
+	if portStr == "" {
 		resp.Message = "node url does not contain port"
 		return resp, fmt.Errorf("invalid host format: %s", u.Host)
 	}
-	oldPort, _ := strconv.Atoi(hostParts[1])
+	oldPort, _ := strconv.Atoi(portStr)
 	resp.OldPort = oldPort
 
 	// 选定新端口
@@ -238,7 +237,7 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 	}
 
 	// 2. 构造新节点 URL
-	u.Host = fmt.Sprintf("%s:%d", hostParts[0], newPort)
+	u.Host = net.JoinHostPort(host, strconv.Itoa(newPort))
 	newURL := u.String()
 	resp.NewURL = newURL
 

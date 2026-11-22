@@ -1,6 +1,7 @@
 package healer
 
 import (
+	"net/url"
 	"testing"
 
 	"vpn-probe/internal/model"
@@ -12,6 +13,54 @@ func TestGenerateRandomHighPort(t *testing.T) {
 		if p < 20000 || p > 50000 {
 			t.Fatalf("port %d out of range [20000, 50000]", p)
 		}
+	}
+}
+
+func TestHealPortBlocked_IPv4AndIPv6(t *testing.T) {
+	h := NewHealer(nil, nil)
+
+	// IPv4 node
+	resV4 := &model.NodeProbeResult{
+		Name:        "US-LAX-Reality",
+		OriginalURL: "vless://uuid@1.2.3.4:443?security=reality#US-LAX-Reality",
+		Diagnostic: &model.DiagnosticInfo{
+			FaultType:  model.FaultPortBlocked,
+			TargetIP:   "1.2.3.4",
+			TargetPort: 443,
+		},
+	}
+	newV4, err := h.HealPortBlocked(nil, resV4)
+	if err != nil {
+		t.Fatalf("HealPortBlocked IPv4 failed: %v", err)
+	}
+	uV4, err := url.Parse(newV4)
+	if err != nil {
+		t.Fatalf("parse healed IPv4 url failed: %v", err)
+	}
+	if uV4.Hostname() != "1.2.3.4" || uV4.Port() == "443" || uV4.Port() == "" {
+		t.Errorf("expected new port in healed IPv4 url, got %s", newV4)
+	}
+
+	// IPv6 node
+	resV6 := &model.NodeProbeResult{
+		Name:        "JP-Tokyo-IPv6",
+		OriginalURL: "vless://uuid@[2001:db8::1]:443?security=reality#JP-Tokyo-IPv6",
+		Diagnostic: &model.DiagnosticInfo{
+			FaultType:  model.FaultPortBlocked,
+			TargetIP:   "2001:db8::1",
+			TargetPort: 443,
+		},
+	}
+	newV6, err := h.HealPortBlocked(nil, resV6)
+	if err != nil {
+		t.Fatalf("HealPortBlocked IPv6 failed: %v", err)
+	}
+	uV6, err := url.Parse(newV6)
+	if err != nil {
+		t.Fatalf("parse healed IPv6 url failed: %v", err)
+	}
+	if uV6.Hostname() != "2001:db8::1" || uV6.Port() == "443" || uV6.Port() == "" {
+		t.Errorf("expected new port in healed IPv6 url, got %s", newV6)
 	}
 }
 

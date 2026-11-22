@@ -119,8 +119,12 @@ func (s *Scheduler) Start(ctx context.Context) {
 	// 启动时自动对 SubStore 拓扑进行基线健康审计
 	if s.substoreClient != nil && s.cfg.SubStore.Enabled {
 		go func() {
-			time.Sleep(3 * time.Second)
-			audit, err := s.substoreClient.AuditTopology(context.Background())
+			select {
+			case <-time.After(3 * time.Second):
+			case <-runCtx.Done():
+				return
+			}
+			audit, err := s.substoreClient.AuditTopology(runCtx)
 			if err != nil {
 				logger.Warnf("[SUBSTORE] Initial topology audit warning: %v", err)
 			} else if !audit.Healthy {
@@ -230,7 +234,11 @@ func (s *Scheduler) Start(ctx context.Context) {
 	// 启动 3 秒后尝试从 SubStore 动态扩展节点列表
 	if s.substoreClient != nil && s.cfg.SubStore.Enabled {
 		go func() {
-			time.Sleep(3 * time.Second)
+			select {
+			case <-time.After(3 * time.Second):
+			case <-runCtx.Done():
+				return
+			}
 			_ = s.RefreshNodesFromSubStore(runCtx)
 		}()
 	}

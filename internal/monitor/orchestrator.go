@@ -36,6 +36,19 @@ func SetCustomGroupsFileForTest(p string) func() {
 	}
 }
 
+// SetCustomChainsFileForTest 测试自定义链式文件重定向钩子
+func SetCustomChainsFileForTest(p string) func() {
+	customChainsMu.Lock()
+	old := customChainsFile
+	customChainsFile = p
+	customChainsMu.Unlock()
+	return func() {
+		customChainsMu.Lock()
+		customChainsFile = old
+		customChainsMu.Unlock()
+	}
+}
+
 // AtomQueryFilter 原子节点查询过滤条件
 type AtomQueryFilter struct {
 	Country   string // US, JP, SG...
@@ -529,6 +542,18 @@ func LoadCustomChains() ([]CustomChainBind, error) {
 	}
 
 	return chains, nil
+}
+
+// SaveCustomChains 保存自定义显式链式绑定列表
+func SaveCustomChains(chains []CustomChainBind) error {
+	customChainsMu.Lock()
+	defer customChainsMu.Unlock()
+	_ = os.MkdirAll(filepath.Dir(customChainsFile), 0755)
+	data, err := json.MarshalIndent(chains, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(customChainsFile, data, 0644)
 }
 
 // BindExplicitChain 显式创建一条“指定线路机拉指定家宽机”的定制连接 (满足用户 API 灵活拉线路需求)

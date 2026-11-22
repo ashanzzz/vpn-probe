@@ -20,6 +20,7 @@ type Manager struct {
 	vpsHubURL      string
 	vpsHubUser     string
 	vpsHubPass     string
+	hubMu          sync.RWMutex
 	instances      []*VPSInstance
 	instancesMu    sync.RWMutex
 	detector       *Detector
@@ -27,6 +28,21 @@ type Manager struct {
 	healer         *AutoHealer
 	substoreClient *substore.Client
 	configPath     string
+}
+
+// SetVPSHubConfig 设置 VPS Hub 访问参数 (线程安全，支持动态热修改与单测注入)
+func (m *Manager) SetVPSHubConfig(url, user, pass string) {
+	m.hubMu.Lock()
+	defer m.hubMu.Unlock()
+	m.vpsHubURL = url
+	m.vpsHubUser = user
+	m.vpsHubPass = pass
+}
+
+func (m *Manager) getVPSHubConfig() (string, string, string) {
+	m.hubMu.RLock()
+	defer m.hubMu.RUnlock()
+	return m.vpsHubURL, m.vpsHubUser, m.vpsHubPass
 }
 
 func NewManager(cfg *config.Config, sc *substore.Client, configPath string) *Manager {
@@ -90,21 +106,28 @@ func NewManager(cfg *config.Config, sc *substore.Client, configPath string) *Man
 
 // refreshFromVPSHub 从 Unraid VPS Hub API 同步最新实例与凭据
 func (m *Manager) refreshFromVPSHub() {
+	hubURL, hubUser, hubPass := m.getVPSHubConfig()
+	if hubURL == "" {
+		return
+	}
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	// 1. 登录 VPS Hub 获取 Token
-	loginBody := strings.NewReader(fmt.Sprintf(`{"username":"%s","password":"%s"}`, m.vpsHubUser, m.vpsHubPass))
-	req, err := http.NewRequest("POST", m.vpsHubURL+"/api/auth/login", loginBody)
+	loginBody := strings.NewReader(fmt.Sprintf(`{"username":"%s","password":"%s"}`, hubUser, hubPass))
+	req, err := http.NewRequest("POST", hubURL+"/api/auth/login", loginBody)
 	if err != nil {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
 
 	var loginRes struct {
 		Token string `json:"token"`
@@ -114,17 +137,20 @@ func (m *Manager) refreshFromVPSHub() {
 	}
 
 	// 2. 拉取实例列表
-	instReq, err := http.NewRequest("GET", m.vpsHubURL+"/api/instances", nil)
+	instReq, err := http.NewRequest("GET", hubURL+"/api/instances", nil)
 	if err != nil {
 		return
 	}
 	instReq.Header.Set("Authorization", "Bearer "+loginRes.Token)
 
 	instResp, err := client.Do(instReq)
-	if err != nil || instResp.StatusCode != http.StatusOK {
+	if err != nil {
 		return
 	}
 	defer instResp.Body.Close()
+	if instResp.StatusCode != http.StatusOK {
+		return
+	}
 
 	var hubData struct {
 		Instances []*struct {
@@ -148,6 +174,9 @@ func (m *Manager) refreshFromVPSHub() {
 	defer m.instancesMu.Unlock()
 
 	for _, hi := range hubData.Instances {
+		if hi == nil {
+			continue
+		}
 		if hi.ProviderID == "lazycat" {
 			continue // 家宽网关不属于标准 root SSH 托管机
 		}

@@ -362,6 +362,17 @@ if (typeof $content !== 'undefined') {
 	)
 }
 
+var convertUpstreamURL = "https://cdn.jsdelivr.net/gh/powerfullz/override-rules/convert.min.js"
+
+// SetConvertUpstreamURLForTest 测试钩子
+func SetConvertUpstreamURLForTest(u string) func() {
+	old := convertUpstreamURL
+	convertUpstreamURL = u
+	return func() {
+		convertUpstreamURL = old
+	}
+}
+
 // GetBridgedConvertJS 获取附带 SubStore operator 桥接函数的开源规则转换脚本 (自动缓存并代理 jsDelivr)
 func (m *Manager) GetBridgedConvertJS() string {
 	m.mu.RLock()
@@ -372,14 +383,15 @@ func (m *Manager) GetBridgedConvertJS() string {
 	}
 	m.mu.RUnlock()
 
-	upstreamURL := "https://cdn.jsdelivr.net/gh/powerfullz/override-rules/convert.min.js"
+	upstreamURL := convertUpstreamURL
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(upstreamURL)
-	if err == nil && resp.StatusCode == http.StatusOK {
-		data, readErr := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		if readErr == nil && len(data) > 0 {
-			bridge := `
+	if err == nil {
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			data, readErr := io.ReadAll(resp.Body)
+			if readErr == nil && len(data) > 0 {
+				bridge := `
 
 function operator(input, targetPlatform, context) {
   if (typeof globalThis.main === "function") return globalThis.main(input);
@@ -387,12 +399,13 @@ function operator(input, targetPlatform, context) {
   return input;
 }
 `
-			result := string(data) + bridge
-			m.mu.Lock()
-			m.convertJSCache = result
-			m.convertJSCacheTime = time.Now()
-			m.mu.Unlock()
-			return result
+				result := string(data) + bridge
+				m.mu.Lock()
+				m.convertJSCache = result
+				m.convertJSCacheTime = time.Now()
+				m.mu.Unlock()
+				return result
+			}
 		}
 	}
 

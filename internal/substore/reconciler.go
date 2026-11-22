@@ -580,9 +580,9 @@ func (c *Client) ToggleFilePipelineOperator(ctx context.Context, fileName, opera
 	}
 
 	var target *FileItem
-	for _, f := range files {
-		if f.Name == fileName {
-			target = &f
+	for i := range files {
+		if files[i].Name == fileName {
+			target = &files[i]
 			break
 		}
 	}

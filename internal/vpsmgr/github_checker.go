@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 )
 
 type GitHubChecker struct {
+	baseURL  string
 	client   *http.Client
 	cache    map[string]*ReleaseInfo
 	cacheMu  sync.RWMutex
@@ -21,12 +23,20 @@ type GitHubChecker struct {
 
 func NewGitHubChecker() *GitHubChecker {
 	return &GitHubChecker{
+		baseURL: "https://api.github.com",
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
 		cache:    make(map[string]*ReleaseInfo),
 		cacheTTL: 2 * time.Hour,
 	}
+}
+
+// SetBaseURLForTest 设置自定义 API 基地址 (用于单测 Mock)
+func (g *GitHubChecker) SetBaseURLForTest(u string) {
+	g.cacheMu.Lock()
+	defer g.cacheMu.Unlock()
+	g.baseURL = u
 }
 
 type ghReleaseResponse struct {
@@ -44,15 +54,24 @@ func (g *GitHubChecker) GetLatestRelease(ctx context.Context, repo string) (*Rel
 		g.cacheMu.RUnlock()
 		return cached, nil
 	}
+	base := g.baseURL
 	g.cacheMu.RUnlock()
 
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+	if base == "" {
+		base = "https://api.github.com"
+	}
+	url := fmt.Sprintf("%s/repos/%s/releases/latest", strings.TrimRight(base, "/"), repo)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create req: %w", err)
 	}
 	req.Header.Set("User-Agent", "vpn-probe-vpsmgr/1.0")
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	if ghToken := os.Getenv("GITHUB_PAT"); ghToken != "" {
+		req.Header.Set("Authorization", "token "+ghToken)
+	} else if ghToken := os.Getenv("GITHUB_TOKEN"); ghToken != "" {
+		req.Header.Set("Authorization", "Bearer "+ghToken)
+	}
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -69,6 +88,13 @@ func (g *GitHubChecker) GetLatestRelease(ctx context.Context, repo string) (*Rel
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		g.cacheMu.RLock()
+		if old, exists := g.cache[repo]; exists {
+			g.cacheMu.RUnlock()
+			logger.Warnf("[VPSMGR-GH] GitHub API returned status %d for %s, falling back to cached %s", resp.StatusCode, repo, old.Version)
+			return old, nil
+		}
+		g.cacheMu.RUnlock()
 		return nil, fmt.Errorf("github api returned status %d", resp.StatusCode)
 	}
 

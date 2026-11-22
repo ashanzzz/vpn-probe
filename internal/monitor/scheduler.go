@@ -507,6 +507,7 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 			if len(fullMeshChains) > 0 {
 				chainLinks = fullMeshChains
 			}
+			chainLinks = mergeCustomChains(chainLinks)
 
 			// 方案B：五维智能策略组分类 (线路机、美区全家桶、日区全家桶、其他、送中隔离)
 			fiveGroups := ClassifyIntoFiveGroups(rankedTransits, uniqueResis, chainLinks)
@@ -573,6 +574,7 @@ func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, duration
 		if len(fullMeshChains) == 0 {
 			fullMeshChains = chains
 		}
+		fullMeshChains = mergeCustomChains(fullMeshChains)
 		fiveGroups := ClassifyIntoFiveGroups(ranked, allResis, fullMeshChains)
 		_ = s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
 	}
@@ -609,9 +611,33 @@ func (s *Scheduler) SyncFiveGroupsNow(ctx context.Context) error {
 	ranked := speedtest.RankNodes(allTransits)
 	uniqueResis := deduplicateNodeResults(allResis)
 	fullMeshChains := s.healer.BuildFullMeshRegionalChains(ranked, uniqueResis)
+	fullMeshChains = mergeCustomChains(fullMeshChains)
 
 	fiveGroups := ClassifyIntoFiveGroups(ranked, uniqueResis, fullMeshChains)
 	return s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
+}
+
+// mergeCustomChains 合并全网状中继与用户显式定制的动态链式绑定，按 URL 去重
+func mergeCustomChains(baseChains []string) []string {
+	customChains, _ := LoadCustomChains()
+	if len(customChains) == 0 {
+		return baseChains
+	}
+	chainSet := make(map[string]bool, len(baseChains)+len(customChains))
+	var merged []string
+	for _, ch := range baseChains {
+		if !chainSet[ch] {
+			chainSet[ch] = true
+			merged = append(merged, ch)
+		}
+	}
+	for _, cc := range customChains {
+		if cc.ChainURL != "" && !chainSet[cc.ChainURL] {
+			chainSet[cc.ChainURL] = true
+			merged = append(merged, cc.ChainURL)
+		}
+	}
+	return merged
 }
 
 // filterActiveTransitNodes 对线路机节点进行去重、主机分组与灾备热备联动过滤 (CF救活原则: 直连健康时热备隐藏，直连全军覆没时自动提升)

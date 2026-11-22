@@ -125,3 +125,54 @@ func TestClassifyIntoFiveGroups(t *testing.T) {
 		t.Errorf("expected Singapore node in OtherNodes, got: %v", payload.OtherNodes)
 	}
 }
+
+func TestMergeCustomChains(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := tmpDir + "/custom_chains.json"
+	revert := SetCustomChainsFileForTest(customPath)
+	defer revert()
+
+	base := []string{
+		"socks5://u:p@1.1.1.1:1001#链式|4837 ➔ LZ-US-Frontier",
+		"socks5://u:p@1.1.1.1:1002#链式|4837 ➔ LZ-JP-SoftBank",
+	}
+
+	// 1. 无自定义链式时原样返回
+	merged := mergeCustomChains(base)
+	if len(merged) != 2 {
+		t.Fatalf("expected 2 chains when custom empty, got %d", len(merged))
+	}
+
+	// 2. 写入自定义链式 (一条重复，一条全新)
+	customChains := []CustomChainBind{
+		{
+			ID:          "c1",
+			ChainURL:    "socks5://u:p@1.1.1.1:1001#链式|4837 ➔ LZ-US-Frontier", // 重复
+			TransitName: "4837",
+		},
+		{
+			ID:          "c2",
+			ChainURL:    "socks5://u:p@1.1.1.1:1003#链式|IIJ ➔ LZ-SG-StarHub", // 全新
+			TransitName: "IIJ",
+		},
+	}
+	if err := SaveCustomChains(customChains); err != nil {
+		t.Fatalf("save custom chains: %v", err)
+	}
+
+	merged = mergeCustomChains(base)
+	if len(merged) != 3 {
+		t.Fatalf("expected 3 chains after merging without duplicate, got %d: %v", len(merged), merged)
+	}
+
+	foundNew := false
+	for _, ch := range merged {
+		if strings.Contains(ch, "LZ-SG-StarHub") {
+			foundNew = true
+			break
+		}
+	}
+	if !foundNew {
+		t.Fatalf("expected merged custom chain 'LZ-SG-StarHub' to be present")
+	}
+}

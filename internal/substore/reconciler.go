@@ -629,10 +629,15 @@ func (c *Client) setAuth(req *http.Request) {
 	if cfg == nil {
 		return
 	}
-	if cfg.Username != "" || cfg.Password != "" {
+	if cfg.Username != "" && cfg.Password != "" {
 		req.SetBasicAuth(cfg.Username, cfg.Password)
 	} else if cfg.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Token)
+		req.Header.Set("x-api-key", cfg.Token)
+	} else if cfg.Username != "" {
+		req.SetBasicAuth(cfg.Username, cfg.Password)
+	}
+	if cfg.Token != "" && (cfg.Username != "" && cfg.Password != "") {
 		req.Header.Set("x-api-key", cfg.Token)
 	}
 }

@@ -191,6 +191,10 @@ func (s *APIServer) setupRoutes() {
 	// 专供 AI / 自愈代理消费的清晰聚合大盘（含完整 V2Ray 链接、分类诊断与自愈指令）
 	s.app.Get("/api/ai/status", s.handleAISummary)
 	s.app.Get("/api/monitor/ai-summary", s.handleAISummary)
+	s.app.Get("/api/summary", s.handleAISummary)
+	s.app.Get("/api/v1/summary", s.handleAISummary)
+	s.app.Get("/api/alerts", s.handleAlerts)
+	s.app.Get("/api/v1/alerts", s.handleAlerts)
 	// 供 AI 专门拉取需要换端口的节点清单 (只包含 XXX端口被墙 的节点)
 	s.app.Get("/api/monitor/port-blocked", func(c *fiber.Ctx) error {
 		if s.scheduler == nil {
@@ -1405,6 +1409,55 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 		},
 		"nodes_requiring_action": actionList,
 		"healthy_nodes":          healthyList,
+	})
+}
+
+// handleAlerts 提供全量异常与待处置节点告警清单（支持 reveal=true 解密敏感 URL）
+func (s *APIServer) handleAlerts(c *fiber.Ctx) error {
+	if s.scheduler == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
+	}
+	reveal := c.QueryBool("reveal", false)
+	allStates := s.scheduler.GetStatus()
+	var alertList []fiber.Map
+	for _, st := range allStates {
+		if st.LastResult != nil && !st.LastResult.Online {
+			nodeURL := st.Config.URL
+			if !reveal {
+				nodeURL = MaskNodeURL(nodeURL)
+			}
+			diag := st.LastResult.Diagnostic
+			var targetIP string
+			var targetPort int
+			var faultType model.FaultType = model.FaultMachineDown
+			var statusText string = st.LastResult.StatusText
+			var actionType string = "CHECK_SERVER_AND_PROCESS"
+			var tip string = st.LastResult.ErrorMsg
+
+			if diag != nil {
+				targetIP = diag.TargetIP
+				targetPort = diag.TargetPort
+				faultType = diag.FaultType
+				statusText = diag.StatusText
+				actionType = diag.ActionType
+				tip = diag.TroubleshootTip
+			}
+
+			alertList = append(alertList, fiber.Map{
+				"name":             st.Config.Name,
+				"original_url":     nodeURL,
+				"target_ip":        targetIP,
+				"target_port":      targetPort,
+				"fault_type":       faultType,
+				"status_text":      statusText,
+				"action_type":      actionType,
+				"troubleshoot_tip": tip,
+			})
+		}
+	}
+	return c.JSON(fiber.Map{
+		"total":  len(alertList),
+		"alerts": alertList,
 	})
 }
 

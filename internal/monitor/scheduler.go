@@ -930,7 +930,14 @@ func (s *Scheduler) SetHealerForTest(h *healer.Healer) {
 func (s *Scheduler) InjectNodeStateForTest(key string, res *model.NodeProbeResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	isSelf := true
+	origURL := ""
+	if res != nil {
+		isSelf = res.IsSelf
+		origURL = res.OriginalURL
+	}
 	s.nodeStates[key] = &NodeState{
+		Config:     config.MonitoredNode{Name: key, URL: origURL, IsSelf: isSelf},
 		LastResult: res,
 	}
 }

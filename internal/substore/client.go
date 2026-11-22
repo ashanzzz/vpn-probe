@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"vpn-probe/internal/config"
@@ -18,6 +19,7 @@ import (
 
 // Client SubStore REST API 客户端
 type Client struct {
+	mu         sync.RWMutex
 	cfg        *config.SubStoreConfig
 	httpClient *http.Client
 }
@@ -31,13 +33,17 @@ func NewClient(cfg *config.SubStoreConfig) *Client {
 	}
 }
 
-// UpdateConfig 动态热更新 SubStore 连接参数 (支持无需重启进程切换地址或账密)
+// UpdateConfig 动态热更新 SubStore 连接参数 (并发写安全，支持无需重启进程切换地址或账密)
 func (c *Client) UpdateConfig(newCfg *config.SubStoreConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.cfg = newCfg
 }
 
-// GetConfig 获取当前生效的 SubStore 配置
+// GetConfig 获取当前生效的 SubStore 配置 (并发读安全)
 func (c *Client) GetConfig() *config.SubStoreConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.cfg
 }
 
@@ -46,7 +52,8 @@ type GroupUpdateMap map[model.Category][]string
 
 // SyncGroups 将分类好的节点链接更新到远程 SubStore 的指定分组/订阅
 func (c *Client) SyncGroups(ctx context.Context, groups GroupUpdateMap) error {
-	if !c.cfg.Enabled || c.cfg.URL == "" {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		logger.Debugf("SubStore integration disabled, skipping sync")
 		return fmt.Errorf("substore integration is not enabled or URL is empty")
 	}
@@ -69,7 +76,7 @@ func (c *Client) SyncGroups(ctx context.Context, groups GroupUpdateMap) error {
 	}
 
 	var errs []string
-	logger.Sync("Starting sync to SubStore (%s)...", c.cfg.URL)
+	logger.Sync("Starting sync to SubStore (%s)...", cfg.URL)
 
 	for subName, links := range targetSubLinks {
 		logger.Sync("Syncing %d nodes -> SubStore subscription '%s'", len(links), subName)
@@ -89,23 +96,27 @@ func (c *Client) SyncGroups(ctx context.Context, groups GroupUpdateMap) error {
 }
 
 func (c *Client) getSubscriptionNameForCategory(cat model.Category) string {
+	cfg := c.GetConfig()
+	if cfg == nil {
+		return ""
+	}
 	switch cat {
 	case model.CategorySelfOnline:
-		return c.cfg.GroupSelfOnline
+		return cfg.GroupSelfOnline
 	case model.CategorySelfOffline:
-		return c.cfg.GroupSelfOffline
+		return cfg.GroupSelfOffline
 	case model.CategorySelfOnlineChina:
 		// 严禁送中节点静默回退污染正常在线组
-		return c.cfg.GroupSelfOnlineChina
+		return cfg.GroupSelfOnlineChina
 	case model.CategorySelfOnlineClean:
-		if c.cfg.GroupSelfOnlineClean != "" {
-			return c.cfg.GroupSelfOnlineClean
+		if cfg.GroupSelfOnlineClean != "" {
+			return cfg.GroupSelfOnlineClean
 		}
-		return c.cfg.GroupSelfOnline
+		return cfg.GroupSelfOnline
 	case model.CategoryExtOnlineClean:
-		return c.cfg.GroupExtOnlineClean
+		return cfg.GroupExtOnlineClean
 	case model.CategoryExtOnlineChina:
-		return c.cfg.GroupExtOnlineChina
+		return cfg.GroupExtOnlineChina
 	default:
 		return ""
 	}
@@ -122,7 +133,11 @@ type SubscriptionItem struct {
 
 // GetSubscriptionContent 获取指定订阅的原始节点内容
 func (c *Client) GetSubscriptionContent(ctx context.Context, subName string) (string, error) {
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	cfg := c.GetConfig()
+	if cfg == nil || cfg.URL == "" {
+		return "", fmt.Errorf("substore URL is empty")
+	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/subs", baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -166,7 +181,11 @@ func (c *Client) UpdateSubscriptionNodes(ctx context.Context, subName string, li
 
 // updateSubStoreSubscription 向 SubStore 推送节点内容或更新订阅
 func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string, links []string) error {
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	cfg := c.GetConfig()
+	if cfg == nil || cfg.URL == "" {
+		return fmt.Errorf("substore URL is empty")
+	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/sub/%s", baseURL, url.PathEscape(subName))
 
 	content := strings.Join(links, "\n")
@@ -240,11 +259,12 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 
 // UpsertRemoteSubscription 在 SubStore 中自动创建或更新外部远程订阅 (Issue #19)
 func (c *Client) UpsertRemoteSubscription(ctx context.Context, name, displayName, subURL string) error {
-	if c.cfg == nil || !c.cfg.Enabled || c.cfg.URL == "" {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		return fmt.Errorf("substore is not configured or disabled")
 	}
 
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/sub/%s", baseURL, url.PathEscape(name))
 
 	if displayName == "" {
@@ -306,7 +326,11 @@ func (c *Client) UpsertRemoteSubscription(ctx context.Context, name, displayName
 
 // TriggerDownload 触发 SubStore 重新拉取/刷新
 func (c *Client) TriggerDownload(ctx context.Context, subName string) error {
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	cfg := c.GetConfig()
+	if cfg == nil || cfg.URL == "" {
+		return fmt.Errorf("substore URL is empty")
+	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	reqURL := fmt.Sprintf("%s/download/%s", baseURL, url.PathEscape(subName))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -325,7 +349,8 @@ func (c *Client) TriggerDownload(ctx context.Context, subName string) error {
 
 // SyncFiveGroups 方案B：原子同步自建五维策略组（线路机、美区全家桶、日区全家桶、其他、送中）与总集合
 func (c *Client) SyncFiveGroups(ctx context.Context, payload model.FiveGroupPayload) error {
-	if !c.cfg.Enabled || c.cfg.URL == "" {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		return fmt.Errorf("substore is not enabled")
 	}
 
@@ -392,7 +417,8 @@ type ThreeTierPayload struct {
 
 // SyncThreeTier 一键原子同步线路直连、家宽直连、链式代理三层订阅与总集合
 func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) error {
-	if !c.cfg.Enabled || c.cfg.URL == "" {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		return fmt.Errorf("substore is not enabled")
 	}
 
@@ -448,11 +474,12 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 
 // CreateOrUpdateRemoteSub 在远程 SubStore 中创建或更新一个外部远程机场订阅 (Issue #19)
 func (c *Client) CreateOrUpdateRemoteSub(ctx context.Context, subName, displayName, remoteURL string) error {
-	if !c.cfg.Enabled || c.cfg.URL == "" {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		return fmt.Errorf("substore integration is not enabled or URL is empty")
 	}
 
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/sub/%s", baseURL, url.PathEscape(subName))
 
 	if displayName == "" {
@@ -514,19 +541,20 @@ func (c *Client) CreateOrUpdateRemoteSub(ctx context.Context, subName, displayNa
 
 // DeleteSubscription 从 SubStore 彻底删除一个订阅
 func (c *Client) DeleteSubscription(ctx context.Context, subName string) error {
-	if !c.cfg.Enabled || c.cfg.URL == "" {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		return fmt.Errorf("substore integration is not enabled or URL is empty")
 	}
 
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/sub/%s", baseURL, url.PathEscape(subName))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return err
 	}
-	if c.cfg.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	if cfg.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Token)
 	}
 
 	resp, err := c.httpClient.Do(req)

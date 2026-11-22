@@ -36,6 +36,9 @@ func MakeProxyHTTPClient(port int, timeout time.Duration) (*http.Client, error) 
 
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if cd, ok := dialer.(proxy.ContextDialer); ok {
+				return cd.DialContext(ctx, network, addr)
+			}
 			return dialer.Dial(network, addr)
 		},
 		DisableKeepAlives:   false,

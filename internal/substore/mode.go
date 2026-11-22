@@ -653,12 +653,33 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 	return res, nil
 }
 
+var (
+	shareDomains   = []string{"free.1992004.xyz", "sub.ashanzzz.com"}
+	shareDomainsMu sync.RWMutex
+)
+
+// SetShareDomainsForTest 测试钩子：替换检测域名
+func SetShareDomainsForTest(domains []string) func() {
+	shareDomainsMu.Lock()
+	old := shareDomains
+	shareDomains = domains
+	shareDomainsMu.Unlock()
+	return func() {
+		shareDomainsMu.Lock()
+		shareDomains = old
+		shareDomainsMu.Unlock()
+	}
+}
+
 // CheckShareDomains 并发对 free.1992004.xyz 与 sub.ashanzzz.com 进行本地连通性与防墙检测
 func CheckShareDomains(ctx context.Context, fileName string, token string) []ShareDomainCheck {
 	if token == "" {
 		token = "13602004317"
 	}
-	domains := []string{"free.1992004.xyz", "sub.ashanzzz.com"}
+	shareDomainsMu.RLock()
+	domains := append([]string{}, shareDomains...)
+	shareDomainsMu.RUnlock()
+
 	results := make([]ShareDomainCheck, len(domains))
 	var wg sync.WaitGroup
 

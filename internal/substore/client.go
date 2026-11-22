@@ -575,7 +575,26 @@ func (c *Client) CreateOrUpdateRemoteSub(ctx context.Context, subName, displayNa
 	return nil
 }
 
-// DeleteSubscription 从 SubStore 彻底删除一个订阅
+// isSubStoreNotFound 检查 SubStore 的 HTTP 响应是否表示资源不存在 (实现幂等删除)
+func isSubStoreNotFound(statusCode int, body []byte) bool {
+	if statusCode == http.StatusNotFound {
+		return true
+	}
+	// Sub-Store 后端对于不存在的资源，经常返回 HTTP 500 并在 JSON 中标注 ResourceNotFoundError
+	// 例如: {"status":"failed","error":{"code":"RESOURCE_NOT_FOUND","type":"ResourceNotFoundError","message":"Subscription xxx does not exist!"}}
+	if statusCode >= 400 && len(body) > 0 {
+		bodyStr := strings.ToLower(string(body))
+		if strings.Contains(bodyStr, "resource_not_found") ||
+			strings.Contains(bodyStr, "resourcenotfounderror") ||
+			strings.Contains(bodyStr, "does not exist") ||
+			strings.Contains(bodyStr, "not found") {
+			return true
+		}
+	}
+	return false
+}
+
+// DeleteSubscription 从 SubStore 彻底删除一个订阅 (具备 404 与 500 ResourceNotFoundError 幂等性)
 func (c *Client) DeleteSubscription(ctx context.Context, subName string) error {
 	cfg := c.GetConfig()
 	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
@@ -597,8 +616,12 @@ func (c *Client) DeleteSubscription(ctx context.Context, subName string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 && resp.StatusCode != 404 {
+	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
+		if isSubStoreNotFound(resp.StatusCode, respBody) {
+			logger.Sync("[SUBSTORE] 🗑️ Subscription '%s' already absent from SubStore (idempotent)", subName)
+			return nil
+		}
 		return fmt.Errorf("delete subscription failed with status %d: %s", resp.StatusCode, string(respBody))
 	}
 
@@ -629,7 +652,7 @@ func (c *Client) PurgeLegacyThreeTierSubs(ctx context.Context) (int, error) {
 			lastErr = err
 		} else {
 			purgedCount++
-			logger.Sync("[SUBSTORE] 🗑️ Legacy subscription '%s' purged from SubStore", name)
+			logger.Sync("[SUBSTORE] 🗑️ Legacy subscription '%s' purged or confirmed absent from SubStore", name)
 		}
 	}
 	return purgedCount, lastErr

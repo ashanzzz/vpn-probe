@@ -561,8 +561,12 @@ func (c *Client) DeleteItem(ctx context.Context, itemType, name string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
+	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
+		if isSubStoreNotFound(resp.StatusCode, body) {
+			logger.Sync("[SUBSTORE] 🗑️ %s '%s' already absent from SubStore (idempotent)", itemType, name)
+			return nil
+		}
 		return fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}
 	return nil

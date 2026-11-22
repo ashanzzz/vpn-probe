@@ -580,43 +580,10 @@ func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, duration
 	return ranked
 }
 
-// SyncThreeTierNow 立即执行一次三层订阅同步
+// SyncThreeTierNow 已废弃旧三层架构，自动平滑重定向至方案B五维策略组全量同步 (防旧订阅死灰复燃)
 func (s *Scheduler) SyncThreeTierNow(ctx context.Context) error {
-	if s.substoreClient == nil || !s.cfg.SubStore.Enabled {
-		return fmt.Errorf("substore integration is not enabled")
-	}
-
-	var allTransits []*model.NodeProbeResult
-	var allResis []*model.NodeProbeResult
-	s.mu.RLock()
-	for _, state := range s.nodeStates {
-		if state.LastResult != nil {
-			if state.LastResult.NodeType == "transit" {
-				allTransits = append(allTransits, state.LastResult)
-			} else {
-				allResis = append(allResis, state.LastResult)
-			}
-		}
-	}
-	s.mu.RUnlock()
-
-	ranked := speedtest.RankNodes(allTransits)
-	chains := s.healer.BuildSmartChains(ranked, allResis)
-
-	transitLinks := filterActiveTransitNodes(ranked)
-	var resiLinks []string
-	uniqueResis := deduplicateNodeResults(allResis)
-	for _, r := range uniqueResis {
-		if r.Diagnostic == nil || r.Diagnostic.FaultType != model.FaultMachineDown {
-			resiLinks = append(resiLinks, r.OriginalURL)
-		}
-	}
-
-	return s.substoreClient.SyncThreeTier(ctx, substore.ThreeTierPayload{
-		TransitDirectNodes: transitLinks,
-		ResidentialNodes:   resiLinks,
-		ChainNodes:         chains,
-	})
+	logger.Sync("[SCHEDULER] 🔄 SyncThreeTierNow invoked; redirecting to SyncFiveGroupsNow to ensure Plan B 5-group integrity")
+	return s.SyncFiveGroupsNow(ctx)
 }
 
 // SyncFiveGroupsNow 立即执行一次自建五维策略组全量同步 (方案B全网状中继池)

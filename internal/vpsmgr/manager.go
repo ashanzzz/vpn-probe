@@ -250,8 +250,7 @@ func (m *Manager) HealPort(ctx context.Context, nodeName string, targetPort int,
 	if err != nil {
 		return nil, fmt.Errorf("parse node url: %w", err)
 	}
-	hostParts := strings.Split(u.Host, ":")
-	targetIP := hostParts[0]
+	targetIP := u.Hostname()
 
 	m.instancesMu.RLock()
 	var matchedInst *VPSInstance

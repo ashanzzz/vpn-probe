@@ -6,9 +6,11 @@ import (
 
 func TestParseLink(t *testing.T) {
 	tests := []struct {
-		name     string
-		link     string
-		wantType string
+		name       string
+		link       string
+		wantType   string
+		wantServer string
+		wantPort   int
 	}{
 		{
 			name:     "Trojan Link",
@@ -32,8 +34,36 @@ func TestParseLink(t *testing.T) {
 		},
 		{
 			name:     "Socks5 Link",
-			link:     "socks5://user1:-n9U8PoHRK7uVb2zxcKpww@167.104.167.151:40981#LZ-JP-SoftBank-家宽",
+			link:     "socks5://user1:***@167.104.167.151:40981#LZ-JP-SoftBank-家宽",
 			wantType: "socks5",
+		},
+		{
+			name:       "VLESS IPv6 Link",
+			link:       "vless://a1b2c3d4-e5f6-7890-abcd-ef1234567890@[2606:4700:4700::1111]:8443?security=reality&sni=test.com#MyVLESS6",
+			wantType:   "vless",
+			wantServer: "2606:4700:4700::1111",
+			wantPort:   8443,
+		},
+		{
+			name:       "Trojan IPv6 Link",
+			link:       "trojan://mypassword@[2001:db8::1]:443?sni=example.com#MyTrojan6",
+			wantType:   "trojan",
+			wantServer: "2001:db8::1",
+			wantPort:   443,
+		},
+		{
+			name:       "Shadowsocks IPv6 Link",
+			link:       "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@[2001:db8::2]:8388#MySS6",
+			wantType:   "shadowsocks",
+			wantServer: "2001:db8::2",
+			wantPort:   8388,
+		},
+		{
+			name:       "Hysteria2 IPv6 Link",
+			link:       "hysteria2://mypassword@[2001:db8::3]:8443?sni=example.com#MyHy2",
+			wantType:   "hysteria2",
+			wantServer: "2001:db8::3",
+			wantPort:   8443,
 		},
 	}
 
@@ -48,6 +78,16 @@ func TestParseLink(t *testing.T) {
 			}
 			if parsed.RawOutbound == nil {
 				t.Errorf("RawOutbound is nil")
+			}
+			if tt.wantServer != "" {
+				if s, ok := parsed.RawOutbound["server"].(string); !ok || s != tt.wantServer {
+					t.Errorf("server = %v, want %v", parsed.RawOutbound["server"], tt.wantServer)
+				}
+			}
+			if tt.wantPort != 0 {
+				if p, ok := parsed.RawOutbound["server_port"].(int); !ok || p != tt.wantPort {
+					t.Errorf("server_port = %v, want %v", parsed.RawOutbound["server_port"], tt.wantPort)
+				}
 			}
 		})
 	}

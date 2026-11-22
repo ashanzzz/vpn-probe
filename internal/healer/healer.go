@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"vpn-probe/internal/config"
@@ -50,9 +52,9 @@ func (h *Healer) HealPortBlocked(ctx context.Context, res *model.NodeProbeResult
 		return "", fmt.Errorf("parse url: %w", err)
 	}
 
-	hostParts := strings.Split(u.Host, ":")
-	if len(hostParts) == 2 {
-		u.Host = fmt.Sprintf("%s:%d", hostParts[0], newPort)
+	host := u.Hostname()
+	if host != "" {
+		u.Host = net.JoinHostPort(host, strconv.Itoa(newPort))
 	}
 
 	newURL := u.String()

@@ -110,6 +110,19 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 	serverPort, _ := parsed.RawOutbound["server_port"].(int)
 
 	if !online {
+		// 校验是否属于本地临时沙箱进程/端口连接被拒 (探针引擎内部故障，而非远端节点故障)
+		if err != nil {
+			errStr := strings.ToLower(err.Error())
+			if strings.Contains(errStr, "127.0.0.1") && (strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "connect: connection refused")) {
+				result.OfflineReason = "probe_engine_error"
+				result.Category = classifier.Classify(isSelf, false, false)
+				result.StatusText = "【引擎异常】本地沙箱端口连接被拒"
+				result.ErrorMsg = fmt.Sprintf("local sandbox connection refused: %v", err)
+				logger.Errorf("[%s] Local sandbox loopback connection failed on 127.0.0.1:%d: %v", parsed.Tag, inst.Port, err)
+				return result
+			}
+		}
+
 		result.OfflineReason = "node_down"
 		result.Category = classifier.Classify(isSelf, false, false)
 		e.RemoveHealthyPeer(link)
@@ -137,7 +150,7 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 				}
 			}
 			isResi := strings.Contains(parsed.Tag, "家宽") || strings.Contains(strings.ToLower(parsed.Tag), "resi") || parsed.Protocol == "socks5"
-			diag := DiagnoseNode(diagCtx, serverHost, serverPort, protoDesc, false, e.sandboxMgr, peers, e.cfg, isResi)
+			diag := DiagnoseNode(diagCtx, serverHost, serverPort, protoDesc, false, e.sandboxMgr, peers, e.cfg, isResi, err)
 			result.Diagnostic = diag
 			result.StatusText = diag.StatusText
 			result.ErrorMsg = fmt.Sprintf("离线 (%s)", diag.StatusText)

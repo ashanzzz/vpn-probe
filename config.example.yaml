@@ -43,8 +43,8 @@ substore:
 
 probe:
   singbox_bin: "sing-box"
-  port_start: 30000
-  port_end: 40000
+  port_start: 20000
+  port_end: 28000
   default_timeout: 8
   max_concurrency: 10
   google_ncr_url: "https://www.google.com/ncr"

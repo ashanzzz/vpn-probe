@@ -1,6 +1,8 @@
 package probe
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"vpn-probe/internal/model"
 )
@@ -14,6 +16,7 @@ func TestDiagnosisLogic(t *testing.T) {
 		abroadOK       bool
 		pingOK         bool
 		isResi         bool
+		probeErr       error
 		wantFault      model.FaultType
 		wantStatusText string
 		wantActionType string
@@ -151,16 +154,43 @@ func TestDiagnosisLogic(t *testing.T) {
 			abroadOK:       true,
 			pingOK:         true,
 			isResi:         true,
+			probeErr:       errors.New("reality verification failed"),
 			wantFault:      model.FaultProtocolMismatch,
 			wantStatusText: "【配置错误】Reality公钥(pbk)、ShortID校验失败或缺少flow参数",
 			wantActionType: "CHECK_REALITY_KEYS",
+		},
+		{
+			name:           "家宽应用层探测超时: 境内外TCP均通，但应用层超时 (不误判为Reality公钥错误)",
+			port:           56190,
+			protocol:       "vless-reality",
+			domesticTCPOK:  true,
+			abroadOK:       true,
+			pingOK:         true,
+			isResi:         true,
+			probeErr:       context.DeadlineExceeded,
+			wantFault:      model.FaultResidentialTunnelOffline,
+			wantStatusText: "【家庭端拥堵或未就绪】家宽隧道探测超时或丢包",
+			wantActionType: "CHECK_RESIDENTIAL_DEVICE",
+		},
+		{
+			name:           "自建VPS线路机探测超时: 境内外TCP均通，但应用层超时 (不误判为配置错误或端口被墙)",
+			port:           36564,
+			protocol:       "vless-reality",
+			domesticTCPOK:  true,
+			abroadOK:       true,
+			pingOK:         true,
+			isResi:         false,
+			probeErr:       errors.New("Client.Timeout exceeded while awaiting headers"),
+			wantFault:      model.FaultMachineDown,
+			wantStatusText: "【网络拥塞超时】国内外TCP连通但应用层请求超时",
+			wantActionType: "CHECK_NETWORK_ROUTING",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			faultType, statusText, actionType, tip := EvaluateFault(
-				"156.231.113.91", tt.port, tt.protocol, tt.domesticTCPOK, tt.abroadOK, tt.pingOK, "peer:JP-Tokyo-Softbank", tt.isResi,
+				"156.231.113.91", tt.port, tt.protocol, tt.domesticTCPOK, tt.abroadOK, tt.pingOK, "peer:JP-Tokyo-Softbank", tt.isResi, tt.probeErr,
 			)
 
 			if faultType != tt.wantFault {

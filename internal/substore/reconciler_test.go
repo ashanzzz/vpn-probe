@@ -232,3 +232,45 @@ func TestAuditTopology_FiveGroupQSummary(t *testing.T) {
 		t.Errorf("Expected 0 discrepancies, got %d: %v", len(audit.Discrepancies), audit.Discrepancies)
 	}
 }
+
+func TestDeleteItem_IdempotentOn404(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/sub/existing-sub":
+			w.WriteHeader(http.StatusOK)
+		case "/api/sub/non-existing-sub":
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"status":"error","message":"subscription not found"}`))
+		case "/api/sub/broken-sub":
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"status":"error","message":"database crash"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer mockServer.Close()
+
+	client := NewClient(&config.SubStoreConfig{
+		Enabled: true,
+		URL:     mockServer.URL,
+	})
+
+	// 1. 200 OK should succeed
+	if err := client.DeleteItem(context.Background(), "subs", "existing-sub"); err != nil {
+		t.Fatalf("expected nil for 200 OK delete, got: %v", err)
+	}
+
+	// 2. 404 Not Found should be treated as success (idempotent delete)
+	if err := client.DeleteItem(context.Background(), "subs", "non-existing-sub"); err != nil {
+		t.Fatalf("expected nil (idempotent) for 404 Not Found delete, got: %v", err)
+	}
+
+	// 3. 500 Internal Server Error should still return an error
+	if err := client.DeleteItem(context.Background(), "subs", "broken-sub"); err == nil {
+		t.Fatalf("expected error for 500 error, got nil")
+	}
+}

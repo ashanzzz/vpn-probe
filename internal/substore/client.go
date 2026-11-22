@@ -49,6 +49,26 @@ func isLocalOrTestEndpoint(rawURL string) bool {
 		strings.Contains(lower, "example.com")
 }
 
+// ResolveFallbackURL 动态计算东京 IIJ (156.231.113.91) 直连兜底端点：
+// 优先从 cfg.Token 提取路径，若 Token 为空则尝试从 cfg.URL 的 Path 中提取 (例如 /Woo@@@204317)，
+// 确保即使生产环境 Token 置空仅在 URL Path 中携带凭据时，直连兜底端点亦能精准对齐 Sub-Store 后端路由，杜绝 404 故障。
+func ResolveFallbackURL(cfg *config.SubStoreConfig) string {
+	fallbackBase := "http://156.231.113.91:3001"
+	if cfg == nil {
+		return fallbackBase
+	}
+	token := strings.Trim(cfg.Token, "/")
+	if token == "" && cfg.URL != "" {
+		if u, err := url.Parse(cfg.URL); err == nil && u.Path != "" && u.Path != "/" {
+			token = strings.Trim(u.Path, "/")
+		}
+	}
+	if token != "" {
+		return fmt.Sprintf("%s/%s", fallbackBase, token)
+	}
+	return fallbackBase
+}
+
 // UpdateConfig 动态热更新 SubStore 连接参数 (并发写安全，支持无需重启进程切换地址或账密)
 func (c *Client) UpdateConfig(newCfg *config.SubStoreConfig) {
 	c.mu.Lock()

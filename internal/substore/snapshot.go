@@ -332,10 +332,7 @@ func (sm *SnapshotManager) fetchRenderedYAML(ctx context.Context, fileName strin
 	}
 	// 直连兜底端点 (仅在外网生产环境且未包含该端点时按需补充，动态提取 Token，避免单测或硬编码凭据泄漏)
 	if !isLocalOrTestEndpoint(cfg.URL) {
-		fallbackURL := "http://156.231.113.91:3001"
-		if cfg.Token != "" {
-			fallbackURL = fmt.Sprintf("http://156.231.113.91:3001/%s", strings.TrimLeft(cfg.Token, "/"))
-		}
+		fallbackURL := ResolveFallbackURL(cfg)
 		hasDirect := false
 		for _, u := range urlsToTry {
 			if strings.Contains(u, "156.231.113.91") {

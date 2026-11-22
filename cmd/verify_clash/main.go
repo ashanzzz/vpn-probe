@@ -330,7 +330,7 @@ func main() {
 
 	// 1. 上级决策/分流策略组检查
 	requiredParentGroups := []string{
-		"选择代理", "手动选择", "AI服务", "美区流媒体", "日区流媒体与游戏", "巴哈姆特", "谷歌服务", "Youtube",
+		"选择代理", "手动选择", "AI服务", "巴哈姆特", "谷歌服务", "Youtube",
 	}
 	missingParents := 0
 	for _, p := range requiredParentGroups {
@@ -339,6 +339,16 @@ func main() {
 		} else {
 			report.Fail(fmt.Sprintf("缺少关键上级业务策略组: 【%s】", p))
 			missingParents++
+		}
+	}
+
+	// 严禁未授权的流媒体与游戏特定业务策略组（用户铁律 #19）
+	unauthorizedGroups := []string{"美区流媒体", "日区流媒体与游戏"}
+	for _, u := range unauthorizedGroups {
+		if groupNameSet[u] {
+			report.Fail(fmt.Sprintf("违规检测到未授权特定业务策略组【%s】(违反铁律 #19 严禁私加流媒体/游戏组)", u))
+		} else {
+			report.Pass(fmt.Sprintf("未授权特定业务策略组拦截合规: 未包含【%s】(符合铁律 #19)", u))
 		}
 	}
 
@@ -393,23 +403,34 @@ func main() {
 	}
 
 	aiGroup := groupMap["AI服务"]
-	if len(aiGroup.Proxies) > 0 && aiGroup.Proxies[0] == "自建-美国家宽分组" {
-		report.Pass("【AI服务】业务分流已按最高优先级硬绑定【自建-美国家宽分组】 (搞定美区风控)")
-	} else {
-		report.Fail(fmt.Sprintf("【AI服务】首选未指向【自建-美国家宽分组】, 当前首选为: %v", aiGroup.Proxies[:1]))
+	if len(aiGroup.Proxies) > 0 && (aiGroup.Proxies[0] == "自建-美国家宽分组" || aiGroup.Proxies[0] == "自建-美国和美国家宽") {
+		report.Pass("【AI服务】业务分流已按最高优先级硬绑定美国家宽分组 (搞定美区风控)")
+	} else if len(aiGroup.Proxies) > 0 {
+		report.Fail(fmt.Sprintf("【AI服务】首选未指向美国家宽分组, 当前首选为: %v", aiGroup.Proxies[:1]))
 	}
 
-	jpMediaGroup := groupMap["日区流媒体与游戏"]
-	if len(jpMediaGroup.Proxies) > 0 && jpMediaGroup.Proxies[0] == "自建-日本家宽分组" {
-		report.Pass("【日区流媒体与游戏】已按最高优先级硬绑定【自建-日本家宽分组】 (搞定DMM/日服手游)")
-	} else {
-		report.Fail(fmt.Sprintf("【日区流媒体与游戏】首选未指向【自建-日本家宽分组】"))
+	// 核心业务组隔离送中校验 (铁律: 选择代理、谷歌服务、Youtube 绝不包含自建-送中)
+	for _, grpName := range []string{"选择代理", "谷歌服务", "Youtube"} {
+		if grp, ok := groupMap[grpName]; ok {
+			hasLeak := false
+			for _, px := range grp.Proxies {
+				if px == "自建-送中" || px == "自建-送中分组" || px == "ashan-china-leak" {
+					hasLeak = true
+					break
+				}
+			}
+			if hasLeak {
+				report.Fail(fmt.Sprintf("核心分组【%s】违规混入送中隔离箱 (违反铁律 #19)", grpName))
+			} else {
+				report.Pass(fmt.Sprintf("核心分组【%s】送中隔离核验通过 (未混入送中节点)", grpName))
+			}
+		}
 	}
 
 	bahaGroup := groupMap["巴哈姆特"]
-	if len(bahaGroup.Proxies) > 0 && bahaGroup.Proxies[0] == "自建-台湾家宽分组" {
-		report.Pass("【巴哈姆特】业务分流已成功硬绑定【自建-台湾家宽分组】 (台湾原生落地)")
-	} else {
+	if len(bahaGroup.Proxies) > 0 && (bahaGroup.Proxies[0] == "自建-台湾家宽分组" || bahaGroup.Proxies[0] == "自建-其他" || bahaGroup.Proxies[0] == "自建-其他家宽分组") {
+		report.Pass("【巴哈姆特】业务分流已成功硬绑定台湾原生落地分组")
+	} else if len(bahaGroup.Proxies) > 0 {
 		report.Warn(fmt.Sprintf("【巴哈姆特】首选为: %v (建议首选【自建-台湾家宽分组】)", bahaGroup.Proxies[:1]))
 	}
 

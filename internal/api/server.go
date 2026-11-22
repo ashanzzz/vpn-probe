@@ -202,7 +202,7 @@ func (s *APIServer) setupRoutes() {
 		}
 		reveal := c.QueryBool("reveal", false)
 		allStates := s.scheduler.GetStatus()
-		var blockedList []fiber.Map
+		blockedList := make([]fiber.Map, 0)
 		for _, st := range allStates {
 			if st.LastResult != nil && st.LastResult.Diagnostic != nil {
 				if st.LastResult.Diagnostic.FaultType == model.FaultPortBlocked {
@@ -236,7 +236,7 @@ func (s *APIServer) setupRoutes() {
 		}
 		reveal := c.QueryBool("reveal", false)
 		allStates := s.scheduler.GetStatus()
-		var offlineList []fiber.Map
+		offlineList := make([]fiber.Map, 0)
 		for _, st := range allStates {
 			if st.LastResult != nil && st.LastResult.Diagnostic != nil {
 				if st.LastResult.Diagnostic.FaultType == model.FaultMachineDown {
@@ -457,6 +457,28 @@ func (s *APIServer) setupRoutes() {
 		}
 		customlog.Audit("cleanup_dead_socks", c.IP(), fmt.Sprintf("sub/%s", subName), "success", fmt.Sprintf("Removed %d dead socks nodes", res.RemovedCount))
 		return c.JSON(res)
+	})
+
+	// 5.1.4.1 平退并删除 SubStore 中历史残留的旧三层独立订阅 (ashan-transit-direct, ashan-resi-direct, ashan-chain, ashan-tw-resi)
+	s.app.Post("/api/substore/purge-legacy", func(c *fiber.Ctx) error {
+		if s.substoreClient == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
+		}
+		purged, err := s.substoreClient.PurgeLegacyThreeTierSubs(c.Context())
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error":        err.Error(),
+				"purged_count": purged,
+				"purged_subs":  substore.LegacyThreeTierSubNames,
+			})
+		}
+		customlog.Audit("purge_legacy_subs", c.IP(), "substore/legacy", "success", fmt.Sprintf("Purged %d legacy subscriptions", purged))
+		return c.JSON(fiber.Map{
+			"status":       "ok",
+			"purged_count": purged,
+			"purged_subs":  substore.LegacyThreeTierSubNames,
+			"message":      "Successfully purged legacy 3-tier subscriptions from SubStore",
+		})
 	})
 
 	// 5.1.5 审计指定 File 生成配置的策略组引用完整性 (检查空引用与双域名连通性)
@@ -1267,8 +1289,8 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 	reveal := c.QueryBool("reveal", false)
 	allStates := s.scheduler.GetStatus()
 
-	var healthyList []fiber.Map
-	var actionList []fiber.Map
+	healthyList := make([]fiber.Map, 0)
+	actionList := make([]fiber.Map, 0)
 
 	total := len(allStates)
 	healthyCount := 0
@@ -1419,7 +1441,7 @@ func (s *APIServer) handleAlerts(c *fiber.Ctx) error {
 	}
 	reveal := c.QueryBool("reveal", false)
 	allStates := s.scheduler.GetStatus()
-	var alertList []fiber.Map
+	alertList := make([]fiber.Map, 0)
 	for _, st := range allStates {
 		if st.LastResult != nil && !st.LastResult.Online {
 			nodeURL := st.Config.URL
@@ -1499,7 +1521,7 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 	}
 
 	// 3. 提取所有自建连接的延迟、送中、分流检测报告 (核心原则：外部连接不检测)
-	var selfNodes []fiber.Map
+	selfNodes := make([]fiber.Map, 0)
 	selfNodesHealthy := true
 	selfNodesCount := 0
 	selfNodesOnlineCount := 0

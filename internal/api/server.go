@@ -1123,6 +1123,14 @@ func (s *APIServer) Start(addr string) error {
 	return s.app.Listen(addr)
 }
 
+// Shutdown 优雅关闭 HTTP 服务与关联后台资源 (支持带超时控制，等待在途请求处理完毕)
+func (s *APIServer) Shutdown(timeout time.Duration) error {
+	if s.snapshotMgr != nil {
+		s.snapshotMgr.Stop()
+	}
+	return s.app.ShutdownWithTimeout(timeout)
+}
+
 func (s *APIServer) handleProbe(c *fiber.Ctx) error {
 	var req model.BatchProbeRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -1667,12 +1675,18 @@ func (s *APIServer) handleGetSnapshotFile(c *fiber.Ctx) error {
 		data, _, _ = s.snapshotMgr.GetSnapshot(fileName)
 	}
 
-	// 支持客户端 If-None-Match ETag 304 极速协商 (RFC 7232 标准，支持弱 ETag 与多重匹配)
+	// 支持客户端 If-None-Match ETag 304 极速协商 (RFC 7232 标准，支持通配符、弱 ETag 与多重逗号匹配)
 	if match := c.Get("If-None-Match"); match != "" && meta != nil {
-		cleanETag := strings.TrimPrefix(strings.TrimSpace(match), "W/")
-		cleanETag = strings.Trim(cleanETag, "\"")
-		if cleanETag == meta.SHA256 {
+		if strings.TrimSpace(match) == "*" {
 			return c.SendStatus(fiber.StatusNotModified)
+		}
+		for _, tag := range strings.Split(match, ",") {
+			cleanETag := strings.TrimSpace(tag)
+			cleanETag = strings.TrimPrefix(cleanETag, "W/")
+			cleanETag = strings.Trim(cleanETag, "\"")
+			if cleanETag == meta.SHA256 {
+				return c.SendStatus(fiber.StatusNotModified)
+			}
 		}
 	}
 

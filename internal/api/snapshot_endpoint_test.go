@@ -79,7 +79,7 @@ func TestSnapshotEndpoints(t *testing.T) {
 		t.Fatalf("expected ETag header to be present")
 	}
 
-	// 4. 测试 ETag 304 极速协商
+	// 4. 测试 ETag 304 极速协商 (精确 ETag、弱 ETag、通配符 * 及多重 ETag 列表)
 	req = httptest.NewRequest("GET", "/api/sub/file/Q?token=test-token", nil)
 	req.RemoteAddr = "192.168.1.100:12345"
 	req.Header.Set("If-None-Match", etag)
@@ -89,6 +89,24 @@ func TestSnapshotEndpoints(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusNotModified {
 		t.Fatalf("expected 304 Not Modified, got %d", resp.StatusCode)
+	}
+
+	// 4.1 通配符 * 协商 304
+	req = httptest.NewRequest("GET", "/api/sub/file/Q?token=test-token", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	req.Header.Set("If-None-Match", "*")
+	resp, _ = server.app.Test(req)
+	if resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("expected 304 for wildcard ETag, got %d", resp.StatusCode)
+	}
+
+	// 4.2 多 ETag 列表协商 304
+	req = httptest.NewRequest("GET", "/api/sub/file/Q?token=test-token", nil)
+	req.RemoteAddr = "192.168.1.100:12345"
+	req.Header.Set("If-None-Match", "\"old-etag-1\", "+etag+", \"old-etag-2\"")
+	resp, _ = server.app.Test(req)
+	if resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("expected 304 for multi-ETag match, got %d", resp.StatusCode)
 	}
 
 	// 5. 测试无需 Token 时的鉴权拦截 (防未经授权窃取)

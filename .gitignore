@@ -12,9 +12,9 @@ secrets.yaml
 *.so
 *.dylib
 bin/
-vpn-probe
-vpn-probe.exe
-vpn-probe-linux
+/vpn-probe
+/vpn-probe.exe
+/vpn-probe-linux
 scratch/
 
 # Test artifacts and temporary files

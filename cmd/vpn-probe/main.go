@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/mark3labs/mcp-go/server"
 	"vpn-probe/internal/api"
@@ -130,9 +133,22 @@ func runServer(args []string) {
 	logger.Infof("MCP SSE listening on http://%s/mcp/sse", addr)
 	logger.Infof("Health check available at http://%s/health", addr)
 
+	// 注册信号监听，实现生产级容器优雅停机 (SIGINT/SIGTERM)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-sigChan
+		logger.Infof("Received termination signal %v, initiating graceful shutdown...", sig)
+		if sched != nil {
+			sched.Stop()
+		}
+		if err := apiSrv.Shutdown(10 * time.Second); err != nil {
+			logger.Warnf("Server graceful shutdown warning: %v", err)
+		}
+	}()
+
 	if err := apiSrv.Start(addr); err != nil {
-		logger.Errorf("Server stopped: %v", err)
-		os.Exit(1)
+		logger.Infof("Server stopped: %v", err)
 	}
 }
 

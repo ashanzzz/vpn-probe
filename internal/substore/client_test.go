@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"vpn-probe/internal/config"
 	"vpn-probe/internal/model"
@@ -146,4 +147,52 @@ func TestClient_SetAuth(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsLocalOrTestEndpoint(t *testing.T) {
+	localCases := []string{
+		"http://127.0.0.1:8080",
+		"http://127.0.0.1:3000/api",
+		"http://localhost:3001",
+		"http://[::1]:3001",
+		"http://test.example.com",
+		"https://example.com/api/file",
+	}
+	for _, u := range localCases {
+		if !isLocalOrTestEndpoint(u) {
+			t.Errorf("expected %s to be recognized as local/test endpoint", u)
+		}
+	}
+
+	remoteCases := []string{
+		"https://free.1992004.xyz",
+		"https://sub.ashanzzz.com/share",
+		"http://156.231.113.91:3001",
+	}
+	for _, u := range remoteCases {
+		if isLocalOrTestEndpoint(u) {
+			t.Errorf("expected %s to be recognized as remote non-test endpoint", u)
+		}
+	}
+}
+
+func TestClientAndSnapshot_SetHTTPClient(t *testing.T) {
+	c := NewClient(&config.SubStoreConfig{Enabled: true})
+	customClient := &http.Client{Timeout: 5 * time.Second}
+	c.SetHTTPClient(customClient)
+
+	c.mu.RLock()
+	if c.httpClient != customClient {
+		t.Errorf("SetHTTPClient did not set custom client on Client")
+	}
+	c.mu.RUnlock()
+
+	sm := NewSnapshotManager(c, t.TempDir())
+	sm.SetHTTPClient(customClient)
+
+	sm.mu.RLock()
+	if sm.httpClient != customClient {
+		t.Errorf("SetHTTPClient did not set custom client on SnapshotManager")
+	}
+	sm.mu.RUnlock()
 }

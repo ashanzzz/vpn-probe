@@ -533,7 +533,15 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 
 	urlsToTry := []string{
 		strings.TrimRight(cfg.URL, "/"),
-		"http://156.231.113.91:3001/Woo@@@204317", // 源站直连兜底 (避开 Cloudflare 30s 504 限制)
+	}
+	if !isLocalOrTestEndpoint(cfg.URL) {
+		fallbackURL := "http://156.231.113.91:3001"
+		if cfg.Token != "" {
+			fallbackURL = fmt.Sprintf("http://156.231.113.91:3001/%s", strings.TrimLeft(cfg.Token, "/"))
+		}
+		if !strings.Contains(cfg.URL, "156.231.113.91") {
+			urlsToTry = append(urlsToTry, fallbackURL)
+		}
 	}
 
 	var lastErr error

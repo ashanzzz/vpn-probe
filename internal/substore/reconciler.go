@@ -49,7 +49,11 @@ type TopologyAudit struct {
 
 // GetSubscriptions 获取所有订阅列表
 func (c *Client) GetSubscriptions(ctx context.Context) ([]SubscriptionItem, error) {
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	cfg := c.GetConfig()
+	if cfg == nil || cfg.URL == "" {
+		return nil, fmt.Errorf("substore URL is empty")
+	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/subs", baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -81,7 +85,11 @@ func (c *Client) GetSubscriptions(ctx context.Context) ([]SubscriptionItem, erro
 
 // GetCollections 获取所有集合定义
 func (c *Client) GetCollections(ctx context.Context) ([]CollectionItem, error) {
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	cfg := c.GetConfig()
+	if cfg == nil || cfg.URL == "" {
+		return nil, fmt.Errorf("substore URL is empty")
+	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/collections", baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -113,7 +121,11 @@ func (c *Client) GetCollections(ctx context.Context) ([]CollectionItem, error) {
 
 // GetFiles 获取所有文件输出配置
 func (c *Client) GetFiles(ctx context.Context) ([]FileItem, error) {
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	cfg := c.GetConfig()
+	if cfg == nil || cfg.URL == "" {
+		return nil, fmt.Errorf("substore URL is empty")
+	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/files", baseURL)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -145,7 +157,11 @@ func (c *Client) GetFiles(ctx context.Context) ([]FileItem, error) {
 
 // UpdateCollection 更新指定集合的配置
 func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[string]any) error {
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	cfg := c.GetConfig()
+	if cfg == nil || cfg.URL == "" {
+		return fmt.Errorf("substore URL is empty")
+	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/collection/%s", baseURL, url.PathEscape(name))
 
 	bodyBytes, err := json.Marshal(payload)
@@ -205,7 +221,11 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 
 // UpdateFile 更新指定输出文件的配置
 func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string]any) error {
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	cfg := c.GetConfig()
+	if cfg == nil || cfg.URL == "" {
+		return fmt.Errorf("substore URL is empty")
+	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/file/%s", baseURL, url.PathEscape(name))
 
 	bodyBytes, err := json.Marshal(payload)
@@ -439,7 +459,11 @@ func (c *Client) DeleteItem(ctx context.Context, itemType, name string) error {
 	if itemType != "subs" && itemType != "collections" && itemType != "files" {
 		return fmt.Errorf("invalid item type '%s', must be subs, collections, or files", itemType)
 	}
-	baseURL := strings.TrimRight(c.cfg.URL, "/")
+	cfg := c.GetConfig()
+	if cfg == nil || cfg.URL == "" {
+		return fmt.Errorf("substore URL is empty")
+	}
+	baseURL := strings.TrimRight(cfg.URL, "/")
 	// SubStore 单个资源路径通常为 /api/sub/:name, /api/collection/:name, /api/file/:name
 	singleType := itemType
 	switch itemType {

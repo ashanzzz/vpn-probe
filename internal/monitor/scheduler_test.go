@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -223,4 +224,56 @@ func TestCFRescueStandbyAndFailover(t *testing.T) {
 	if len(activeLinks) != 3 {
 		t.Fatalf("expected exactly 3 active links, got %d: %v", len(activeLinks), activeLinks)
 	}
+}
+
+func TestScheduler_RefreshNodes_ConcurrentRace(t *testing.T) {
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			Enabled: true,
+			Nodes: []config.MonitoredNode{
+				{Name: "US-Node", URL: "vless://u@1.1.1.1:443#US-Node", IsSelf: true},
+			},
+			ResidentialNodes: []config.MonitoredNode{
+				{Name: "LZ-Resi-01", URL: "socks5://u:p@1.1.1.1:1000#LZ-Resi-01", IsSelf: true},
+			},
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     "http://mock.example.com",
+		},
+	}
+
+	sc := substore.NewClient(&cfg.SubStore)
+	s := NewScheduler(cfg, nil, nil, sc)
+
+	var wg sync.WaitGroup
+
+	// 并发写者：模拟 RunAllChecks 频繁更新 nodeStates
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			s.InjectNodeStateForTest("LZ-Resi-01", &model.NodeProbeResult{
+				Name:        "LZ-Resi-01",
+				OriginalURL: "socks5://u:p@1.1.1.1:1000#LZ-Resi-01",
+				NodeType:    "residential",
+				Online:      i%2 == 0,
+			})
+			time.Sleep(100 * time.Microsecond)
+		}
+	}()
+
+	// 并发读者：高频调用 GetStatus
+	for w := 0; w < 5; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 100; i++ {
+				_ = s.GetStatus()
+				time.Sleep(200 * time.Microsecond)
+			}
+		}()
+	}
+
+	wg.Wait()
 }

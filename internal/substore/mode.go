@@ -85,8 +85,9 @@ func (c *Client) GetExternalSources() []string {
 			}
 		}
 	}
-	if c.cfg != nil && len(c.cfg.ExternalSources) > 0 {
-		return c.cfg.ExternalSources
+	cfg := c.GetConfig()
+	if cfg != nil && len(cfg.ExternalSources) > 0 {
+		return cfg.ExternalSources
 	}
 	return []string{"蜂窝云"}
 }
@@ -185,7 +186,8 @@ func (c *Client) UpsertExternalSource(ctx context.Context, item ExternalSourceIt
 	}
 
 	// 1. 若提供了 remoteURL，联动 SubStore 自动创建或更新远端订阅
-	if item.URL != "" && c.cfg != nil && c.cfg.Enabled && c.cfg.URL != "" {
+	subCfg := c.GetConfig()
+	if item.URL != "" && subCfg != nil && subCfg.Enabled && subCfg.URL != "" {
 		if err := c.CreateOrUpdateRemoteSub(ctx, item.Name, item.DisplayName, item.URL); err != nil {
 			logger.Warnf("[SUBSTORE] Auto create/update remote sub in SubStore: %v", err)
 			return fmt.Errorf("create/update in SubStore failed: %w", err)
@@ -248,7 +250,8 @@ func (c *Client) DeleteExternalSource(ctx context.Context, name string, purgeRem
 	}
 
 	// 1. 若开启 purgeRemote，调用 SubStore 物理删除
-	if purgeRemote && c.cfg != nil && c.cfg.Enabled && c.cfg.URL != "" {
+	subCfg := c.GetConfig()
+	if purgeRemote && subCfg != nil && subCfg.Enabled && subCfg.URL != "" {
 		if err := c.DeleteItem(ctx, "subs", name); err != nil {
 			logger.Warnf("[SUBSTORE] Purge remote sub '%s' from SubStore failed: %v", name, err)
 		} else {
@@ -345,11 +348,12 @@ func (c *Client) SetMode(ctx context.Context, mode SubStoreMode) (*ModeState, er
 	modeMutex.Lock()
 	defer modeMutex.Unlock()
 
-	if c.cfg == nil || !c.cfg.Enabled || c.cfg.URL == "" {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		return nil, fmt.Errorf("substore is not configured or disabled")
 	}
 
-	base := strings.TrimRight(c.cfg.URL, "/")
+	base := strings.TrimRight(cfg.URL, "/")
 
 	// 1. 确保集合 ashan-mode 存在并更新成员
 	colPayload := map[string]any{
@@ -432,7 +436,8 @@ type CleanupResult struct {
 
 // CleanupDeadSocks 从指定订阅中清理失效的 socks5 节点（带前置快照落盘备份）
 func (c *Client) CleanupDeadSocks(ctx context.Context, subName string) (*CleanupResult, error) {
-	if c.cfg == nil || !c.cfg.Enabled || c.cfg.URL == "" {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		return nil, fmt.Errorf("substore is not configured or disabled")
 	}
 
@@ -465,7 +470,7 @@ func (c *Client) CleanupDeadSocks(ctx context.Context, subName string) (*Cleanup
 
 	if len(removed) > 0 {
 		newContent := strings.Join(cleanedLines, "\n")
-		base := strings.TrimRight(c.cfg.URL, "/")
+		base := strings.TrimRight(cfg.URL, "/")
 		bodyBytes, _ := json.Marshal(map[string]string{"content": newContent})
 		req, _ := http.NewRequestWithContext(ctx, "PATCH", fmt.Sprintf("%s/api/sub/%s", base, subName), strings.NewReader(string(bodyBytes)))
 		req.Header.Set("Content-Type", "application/json")
@@ -521,12 +526,13 @@ var (
 
 // AuditFileGroups 审计指定 File 的 Clash 配置是否存在悬空/不存在的节点引用
 func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAuditResult, error) {
-	if c.cfg == nil || !c.cfg.Enabled || c.cfg.URL == "" {
+	cfg := c.GetConfig()
+	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		return nil, fmt.Errorf("substore is not configured or disabled")
 	}
 
 	urlsToTry := []string{
-		strings.TrimRight(c.cfg.URL, "/"),
+		strings.TrimRight(cfg.URL, "/"),
 		"http://156.231.113.91:3001/Woo@@@204317", // 源站直连兜底 (避开 Cloudflare 30s 504 限制)
 	}
 

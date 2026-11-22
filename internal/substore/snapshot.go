@@ -311,13 +311,17 @@ func (sm *SnapshotManager) Stop() {
 
 // fetchRenderedYAML 向 Sub-Store 源站拉取渲染后的真实 YAML 文本 (带直连与多域名自动重试)
 func (sm *SnapshotManager) fetchRenderedYAML(ctx context.Context, fileName string) ([]byte, error) {
-	if sm.client == nil || sm.client.cfg == nil || !sm.client.cfg.Enabled {
+	if sm.client == nil {
+		return nil, fmt.Errorf("substore client is not configured or disabled")
+	}
+	cfg := sm.client.GetConfig()
+	if cfg == nil || !cfg.Enabled {
 		return nil, fmt.Errorf("substore client is not configured or disabled")
 	}
 
 	var urlsToTry []string
-	if sm.client.cfg.URL != "" {
-		urlsToTry = append(urlsToTry, strings.TrimRight(sm.client.cfg.URL, "/"))
+	if cfg.URL != "" {
+		urlsToTry = append(urlsToTry, strings.TrimRight(cfg.URL, "/"))
 	}
 	// 直连兜底端点
 	directEndpoint := "http://156.231.113.91:3001/Woo@@@204317"

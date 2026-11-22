@@ -154,7 +154,7 @@ func (s *Store) GetRecentResults(ctx context.Context, limit int) ([]*model.NodeP
 	}
 	defer rows.Close()
 
-	var list []*model.NodeProbeResult
+	list := make([]*model.NodeProbeResult, 0)
 	for rows.Next() {
 		var r model.NodeProbeResult
 		var isSelfInt, onlineInt, chinaExitInt int

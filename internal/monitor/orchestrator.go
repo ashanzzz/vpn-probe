@@ -388,9 +388,12 @@ func LoadCustomGroups() ([]model.CustomGroupDef, error) {
 		return nil, err
 	}
 
-	var groups []model.CustomGroupDef
+	groups := make([]model.CustomGroupDef, 0)
 	if err := json.Unmarshal(data, &groups); err != nil {
 		return []model.CustomGroupDef{}, nil
+	}
+	if groups == nil {
+		groups = make([]model.CustomGroupDef, 0)
 	}
 
 	return groups, nil
@@ -517,9 +520,12 @@ func LoadCustomChains() ([]CustomChainBind, error) {
 		return nil, err
 	}
 
-	var chains []CustomChainBind
+	chains := make([]CustomChainBind, 0)
 	if err := json.Unmarshal(data, &chains); err != nil {
 		return []CustomChainBind{}, nil
+	}
+	if chains == nil {
+		chains = make([]CustomChainBind, 0)
 	}
 
 	return chains, nil

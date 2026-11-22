@@ -350,7 +350,7 @@ func (s *APIServer) setupRoutes() {
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
-		var lines []string
+		lines := make([]string, 0)
 		for _, l := range strings.Split(content, "\n") {
 			l = strings.TrimSpace(l)
 			if l != "" {
@@ -1721,6 +1721,9 @@ func (s *APIServer) handleBlockedAnalysis(c *fiber.Ctx) error {
 		}
 	}
 	analysis := s.vpsMgr.GetBlockedAnalysis(probeResults)
+	if analysis == nil {
+		analysis = make([]*vpsmgr.BlockedAnalysisResult, 0)
+	}
 	return c.JSON(fiber.Map{
 		"status":   "ok",
 		"total":    len(analysis),

@@ -262,7 +262,7 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 	atoms := o.CollectAtoms()
 
 	type CategoryStat struct {
-		Country          string           `json:"country"`
+		Country          string           `json:"country,omitempty"`
 		DisplayName      string           `json:"display_name"`
 		TransitCount     int              `json:"transit_count"`
 		ResidentialCount int              `json:"residential_count"`
@@ -271,11 +271,30 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 		Nodes            []model.AtomNode `json:"nodes"`
 	}
 
-	transitStat := &CategoryStat{DisplayName: "自建-线路机 (纯骨干)"}
-	usStat := &CategoryStat{Country: "US", DisplayName: "自建-美国和美国家宽 (美区全家桶)"}
-	jpStat := &CategoryStat{Country: "JP", DisplayName: "自建-日本和日本家宽 (日区全家桶)"}
-	otherStat := &CategoryStat{Country: "OTHER", DisplayName: "自建-其他 (其他全家桶)"}
+	transitStat := &CategoryStat{DisplayName: "自建-线路分组 (纯骨干)"}
+	allResiStat := &CategoryStat{DisplayName: "自建-家宽分组 (全量自建家宽池)"}
+	usStat := &CategoryStat{Country: "US", DisplayName: "自建-美国家宽分组"}
+	jpStat := &CategoryStat{Country: "JP", DisplayName: "自建-日本家宽分组"}
+	otherStat := &CategoryStat{Country: "OTHER", DisplayName: "自建-其他家宽分组"}
 	var chinaLeaks []model.AtomNode
+
+	// 获取外部分组信息 (外部商业机场订阅池)
+	var extSources []string
+	if o.scheduler != nil && o.scheduler.substoreClient != nil {
+		extSources = o.scheduler.substoreClient.GetExternalSources()
+	} else if o.scheduler != nil && o.scheduler.cfg != nil {
+		extSources = o.scheduler.cfg.SubStore.ExternalSources
+	}
+	if len(extSources) == 0 {
+		extSources = []string{"蜂窝云"}
+	}
+
+	externalStat := map[string]any{
+		"display_name": "外部分组 (外部机场池)",
+		"sources":      extSources,
+		"source_count": len(extSources),
+		"description":  "独立的外部机场订阅池，随时插拔，参与 Q-汇总 与外部组合分发",
+	}
 
 	for _, a := range atoms {
 		if a.ChinaExit {
@@ -287,6 +306,14 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 			transitStat.TotalCleanCount++
 			transitStat.TransitCount++
 			transitStat.Nodes = append(transitStat.Nodes, a)
+		} else if a.Kind == "residential" || a.Kind == "chain" {
+			allResiStat.TotalCleanCount++
+			if a.Kind == "residential" {
+				allResiStat.ResidentialCount++
+			} else {
+				allResiStat.ChainCount++
+			}
+			allResiStat.Nodes = append(allResiStat.Nodes, a)
 		}
 
 		var target *CategoryStat
@@ -311,16 +338,39 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 		target.Nodes = append(target.Nodes, a)
 	}
 
+	// 动态自定义分组加载
+	customGroups, _ := LoadCustomGroups()
+	var customSummary []map[string]any
+	for _, cg := range customGroups {
+		matched := o.EvaluateGroup(cg.Filter)
+		customSummary = append(customSummary, map[string]any{
+			"name":         cg.Name,
+			"display_name": cg.DisplayName,
+			"enabled":      cg.Enabled,
+			"filter":       cg.Filter,
+			"count":        len(matched),
+			"created_at":   cg.CreatedAt,
+			"updated_at":   cg.UpdatedAt,
+		})
+	}
+
 	return map[string]any{
-		"status": "ok",
+		"status":      "ok",
 		"total_atoms": len(atoms),
 		"categories": map[string]any{
-			"transit":     transitStat,
-			"us":          usStat,
-			"jp":          jpStat,
-			"other":       otherStat,
-			"china_leaks": chinaLeaks,
+			"external":    externalStat, // 外部分组
+			"residential": allResiStat,  // 自建-家宽分组 (全量自建家宽池)
+			"us_resi":     usStat,       // 自建-美国家宽分组
+			"jp_resi":     jpStat,       // 自建-日本家宽分组
+			"other_resi":  otherStat,    // 自建-其他家宽分组
+			"transit":     transitStat,  // 自建-线路分组
+			"china_leaks": chinaLeaks,   // 自建-送中分组 (严禁中继分流)
+			// 兼容旧字段
+			"us":    usStat,
+			"jp":    jpStat,
+			"other": otherStat,
 		},
+		"custom_groups": customSummary,
 	}
 }
 

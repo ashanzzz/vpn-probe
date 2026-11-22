@@ -128,8 +128,8 @@ func TestDiagnosisLogic(t *testing.T) {
 			pingOK:         true,
 			isResi:         true,
 			wantFault:      model.FaultResidentialTunnelOffline,
-			wantStatusText: "【家宽穿透掉线】家庭设备离线或反向穿透隧道中断",
-			wantActionType: "CHECK_RESIDENTIAL_DEVICE_OR_TUNNEL",
+			wantStatusText: "【家庭端掉线】家庭设备离线或连接中断",
+			wantActionType: "CHECK_RESIDENTIAL_DEVICE",
 		},
 		{
 			name:           "家宽中转宿主机宕机: 宿主机Ping与内外端口全灭",
@@ -140,8 +140,20 @@ func TestDiagnosisLogic(t *testing.T) {
 			pingOK:         false,
 			isResi:         true,
 			wantFault:      model.FaultTransitRelayDown,
-			wantStatusText: "【中转离线】家宽中转宿主机宕机或网络中断",
-			wantActionType: "CHECK_TRANSIT_RELAY_HOST",
+			wantStatusText: "【中转离线】家宽中转服务器宕机或网络中断",
+			wantActionType: "CHECK_TRANSIT_SERVER",
+		},
+		{
+			name:           "家宽VLESS Reality直连配置错误: 境内外TCP均通，但Reality握手失败 (不误判为仅境外通)",
+			port:           40981,
+			protocol:       "vless-reality",
+			domesticTCPOK:  true,
+			abroadOK:       true,
+			pingOK:         true,
+			isResi:         true,
+			wantFault:      model.FaultProtocolMismatch,
+			wantStatusText: "【配置错误】Reality公钥(pbk)、ShortID校验失败或缺少flow参数",
+			wantActionType: "CHECK_REALITY_KEYS",
 		},
 	}
 

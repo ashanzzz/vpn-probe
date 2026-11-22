@@ -210,7 +210,10 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 			if postResp.StatusCode >= 200 && postResp.StatusCode < 300 {
 				return nil
 			}
+			postBody, _ := io.ReadAll(postResp.Body)
+			return fmt.Errorf("collection patch 404, fallback create returned %d: %s", postResp.StatusCode, string(postBody))
 		}
+		return fmt.Errorf("collection patch 404, fallback create failed: %w", postErr)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -274,7 +277,10 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 			if postResp.StatusCode >= 200 && postResp.StatusCode < 300 {
 				return nil
 			}
+			postBody, _ := io.ReadAll(postResp.Body)
+			return fmt.Errorf("file patch 404, fallback create returned %d: %s", postResp.StatusCode, string(postBody))
 		}
+		return fmt.Errorf("file patch 404, fallback create failed: %w", postErr)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

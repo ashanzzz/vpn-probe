@@ -63,6 +63,7 @@ func TestVPS10M(ctx context.Context, port int, targetURL string, latencyMs int) 
 	if err != nil {
 		return nil, err
 	}
+	defer client.CloseIdleConnections()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
@@ -151,6 +152,7 @@ func TestVPS30M(ctx context.Context, port int, targetURL string, latencyMs int) 
 	if err != nil {
 		return nil, err
 	}
+	defer client.CloseIdleConnections()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
@@ -239,10 +241,11 @@ func TestStream30S(ctx context.Context, port int, streamURL string, durationSec 
 		durationSec = 30
 	}
 
-	client, err := MakeProxyHTTPClient(port, time.Duration(durationSec+15)*time.Second)
+	client, err := MakeProxyHTTPClient(port, time.Duration(durationSec)*time.Second+10*time.Second)
 	if err != nil {
 		return nil, err
 	}
+	defer client.CloseIdleConnections()
 
 	reqCtx, cancel := context.WithTimeout(ctx, time.Duration(durationSec)*time.Second+5*time.Second)
 	defer cancel()

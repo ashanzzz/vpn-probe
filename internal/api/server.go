@@ -265,7 +265,11 @@ func (s *APIServer) setupRoutes() {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
 		}
 		checkSplit := c.QueryBool("split", false)
-		go s.scheduler.RunAllChecks(context.Background(), checkSplit)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		go func() {
+			defer cancel()
+			s.scheduler.RunAllChecks(ctx, checkSplit)
+		}()
 		return c.JSON(fiber.Map{"status": "ok", "message": "inspection round triggered"})
 	})
 
@@ -1295,8 +1299,10 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 	total := len(allStates)
 	healthyCount := 0
 	portBlockedCount := 0
+	ipBlockedCount := 0
 	protocolErrorCount := 0
 	offlineCount := 0
+	residentialChainCount := 0
 
 	for _, st := range allStates {
 		v2rayLink := st.Config.URL
@@ -1359,9 +1365,15 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 			switch faultType {
 			case model.FaultPortBlocked:
 				portBlockedCount++
+			case model.FaultIPBlocked:
+				ipBlockedCount++
 			case model.FaultProtocolMismatch:
 				protocolErrorCount++
-			case model.FaultMachineDown:
+			case model.FaultMachineDown, model.FaultResidentialTunnelOffline, model.FaultTransitRelayDown:
+				offlineCount++
+			case model.FaultResidentialDirectBlocked:
+				residentialChainCount++
+			default:
 				offlineCount++
 			}
 
@@ -1380,6 +1392,12 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 				aiInstruction = fmt.Sprintf("【IP被墙处置】海外可通但国内全黑洞丢包，换端口无效。请更换VPS(%s)的IP，或者将该节点配置Cloudflare CDN反代救活。", targetIP)
 			case model.FaultMachineDown:
 				aiInstruction = fmt.Sprintf("【机器离线处置】全球均无法连接该端口，换端口无效！请单独排查VPS(%s)是否关机欠费、机房线路故障或sing-box守护进程崩溃退出。", targetIP)
+			case model.FaultResidentialTunnelOffline:
+				aiInstruction = fmt.Sprintf("【家宽隧道离线】中转机(%s)正常但家庭端隧道断开或连接被拒。严禁更换端口，请核查家庭光猫/穿透客户端或稍候自动恢复。", targetIP)
+			case model.FaultTransitRelayDown:
+				aiInstruction = fmt.Sprintf("【中转宿主机故障】中转跳板机(%s)网络中断或宕机。请排查懒猫云宿主机网络与容器运行状态。", targetIP)
+			case model.FaultResidentialDirectBlocked:
+				aiInstruction = "【家宽直连受阻】国内直连受阻但海外隧道正常。系统已自动合成全网状链式中继(ashan-chain)，无需换端口或人工干预。"
 			default:
 				aiInstruction = fmt.Sprintf("请根据排查指引处理: %s", tip)
 			}
@@ -1406,13 +1424,26 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 		}
 	}
 
-	requiresHealing := portBlockedCount > 0 || protocolErrorCount > 0 || offlineCount > 0
+	requiresHealing := portBlockedCount > 0 || ipBlockedCount > 0 || protocolErrorCount > 0 || offlineCount > 0
 	var overallPrompt string
 	if requiresHealing {
-		overallPrompt = fmt.Sprintf("检测到 %d 个节点需要自愈或人工排查 (其中 %d 个端口被墙需换端口, %d 个协议配置需核对, %d 个真正离线)。请按 nodes_requiring_action 中的 v2ray_link 与 ai_heal_instruction 执行处置。",
-			len(actionList), portBlockedCount, protocolErrorCount, offlineCount)
-	} else if len(actionList) > 0 {
-		overallPrompt = fmt.Sprintf("全网自建专线与核心节点健康，检测到 %d 个住宅家宽节点国内直连受阻但境外隧道正常，系统已自动全网状建立链式中继 (ashan-chain)，无需人工换端口或干预。", len(actionList))
+		var parts []string
+		if portBlockedCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个端口被墙需换端口", portBlockedCount))
+		}
+		if ipBlockedCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个IP被墙需换IP或CDN中继", ipBlockedCount))
+		}
+		if protocolErrorCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个协议配置需核对", protocolErrorCount))
+		}
+		if offlineCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个真正离线", offlineCount))
+		}
+		overallPrompt = fmt.Sprintf("检测到 %d 个节点需要自愈或人工排查 (其中 %s)。请按 nodes_requiring_action 中的 v2ray_link 与 ai_heal_instruction 执行处置。",
+			len(actionList), strings.Join(parts, ", "))
+	} else if residentialChainCount > 0 {
+		overallPrompt = fmt.Sprintf("全网自建专线与核心节点健康，检测到 %d 个住宅家宽节点国内直连受阻但境外隧道正常，系统已自动全网状建立链式中继 (ashan-chain)，无需人工换端口或干预。", residentialChainCount)
 	} else {
 		overallPrompt = "所有监控节点均正常在线，无需执行自愈操作。"
 	}
@@ -1423,9 +1454,10 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 			"healthy_nodes":           healthyCount,
 			"nodes_requiring_action":  len(actionList),
 			"port_blocked_nodes":      portBlockedCount,
+			"ip_blocked_nodes":        ipBlockedCount,
 			"protocol_error_nodes":    protocolErrorCount,
 			"offline_nodes":           offlineCount,
-			"residential_chain_nodes": len(actionList) - portBlockedCount - protocolErrorCount - offlineCount,
+			"residential_chain_nodes": residentialChainCount,
 			"requires_healing_action": requiresHealing,
 			"ai_instruction":          overallPrompt,
 		},

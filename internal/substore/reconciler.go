@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"vpn-probe/internal/logger"
@@ -285,17 +286,39 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 
 // AuditTopology 审计当前 SubStore 的订阅、集合与文件引用拓扑，诊断错配与孤儿节点
 func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
-	subs, err := c.GetSubscriptions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch subscriptions: %w", err)
+	var (
+		subs     []SubscriptionItem
+		cols     []CollectionItem
+		files    []FileItem
+		subsErr  error
+		colsErr  error
+		filesErr error
+		wg       sync.WaitGroup
+	)
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		subs, subsErr = c.GetSubscriptions(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		cols, colsErr = c.GetCollections(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		files, filesErr = c.GetFiles(ctx)
+	}()
+	wg.Wait()
+
+	if subsErr != nil {
+		return nil, fmt.Errorf("fetch subscriptions: %w", subsErr)
 	}
-	cols, err := c.GetCollections(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch collections: %w", err)
+	if colsErr != nil {
+		return nil, fmt.Errorf("fetch collections: %w", colsErr)
 	}
-	files, err := c.GetFiles(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("fetch files: %w", err)
+	if filesErr != nil {
+		return nil, fmt.Errorf("fetch files: %w", filesErr)
 	}
 
 	audit := &TopologyAudit{
@@ -344,17 +367,18 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 
 	// 2. 检查 Q-汇总 是否缺少自建 VPS / Q 订阅
 	if qSummary, exists := audit.Collections["Q-汇总"]; exists {
-		hasQ := false
+		hasSelfHosted := false
 		for _, s := range qSummary {
-			if s == "Q" {
-				hasQ = true
+			if s == "Q" || s == "ashan-transit" || strings.HasPrefix(s, "ashan-") {
+				hasSelfHosted = true
+				break
 			}
 		}
-		if !hasQ {
+		if !hasSelfHosted {
 			audit.Healthy = false
-			msg := "集合 'Q-汇总' (标称蜂窝云+自建VPS) 未包含自有容灾订阅 'Q'，导致自建节点在组合输出中完全缺席"
+			msg := "集合 'Q-汇总' (标称蜂窝云+自建VPS) 未包含自建节点订阅，导致自建节点在组合输出中完全缺席"
 			audit.Discrepancies = append(audit.Discrepancies, msg)
-			audit.RecommendedFixes = append(audit.RecommendedFixes, "为 'Q-汇总' 补充勾选订阅 'Q'，形成 [\"Q\", \"蜂窝云\"] 双轨融合")
+			audit.RecommendedFixes = append(audit.RecommendedFixes, "为 'Q-汇总' 补充勾选自建分组，形成双轨融合")
 		}
 	}
 
@@ -364,6 +388,7 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 			audit.Healthy = false
 			msg := fmt.Sprintf("订阅 '%s' 处于孤儿状态，未被任何集合引用 (导致其内部节点无法被任何下游分享产物使用)", s)
 			audit.Discrepancies = append(audit.Discrepancies, msg)
+			audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("将孤儿订阅 '%s' 纳入对应集合或在无需使用时清理", s))
 		}
 	}
 
@@ -422,6 +447,7 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 	if qSummary, exists := audit.Collections["Q-汇总"]; exists {
 		hasCloud := false
 		hasTransit := false
+		hasLegacyQ := false
 		for _, s := range qSummary {
 			if s == "蜂窝云" {
 				hasCloud = true
@@ -429,12 +455,28 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 			if s == "ashan-transit" {
 				hasTransit = true
 			}
+			if s == "Q" {
+				hasLegacyQ = true
+			}
 		}
-		if !hasTransit || !hasCloud {
+		qSubExists := false
+		for _, s := range audit.Subscriptions {
+			if s == "Q" {
+				qSubExists = true
+				break
+			}
+		}
+		needsReconcile := !hasTransit || !hasCloud || (qSubExists && !hasLegacyQ)
+		if needsReconcile {
+			qSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
+			if qSubExists {
+				qSubs = append(qSubs, "Q")
+			}
+			qSubs = append(qSubs, "蜂窝云")
 			payload := map[string]any{
 				"name":                  "Q-汇总",
 				"displayName":           "Q 组合订阅 (蜂窝云 + 自建VPS)",
-				"subscriptions":         []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak", "蜂窝云"},
+				"subscriptions":         qSubs,
 				"ignoreFailedRemoteSub": "quiet",
 			}
 			if err := c.UpdateCollection(ctx, "Q-汇总", payload); err != nil {
@@ -445,7 +487,38 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 		}
 	}
 
-	// 3. 再次执行复查，生成最终报告
+	// 3. 修复输出文件绑定：确保 ashan/Ashan 绑定 ashan-纯净，Q/q 绑定 Q-汇总
+	for fName, sourceName := range audit.Files {
+		if fName == "ashan" || fName == "Ashan" {
+			if sourceName != "ashan-纯净" {
+				payload := map[string]any{
+					"source":     "local",
+					"sourceType": "collection",
+					"sourceName": "ashan-纯净",
+				}
+				if err := c.UpdateFile(ctx, fName, payload); err != nil {
+					return nil, fmt.Errorf("reconcile file %s: %w", fName, err)
+				}
+				actions = append(actions, fmt.Sprintf("已将纯自建文件 '%s' 重新绑定至集合 'ashan-纯净'，恢复纯自建纯净性", fName))
+				logger.Sync("Reconciled file '%s' -> source 'ashan-纯净'", fName)
+			}
+		} else if fName == "Q" || fName == "q" {
+			if sourceName != "Q-汇总" {
+				payload := map[string]any{
+					"source":     "local",
+					"sourceType": "collection",
+					"sourceName": "Q-汇总",
+				}
+				if err := c.UpdateFile(ctx, fName, payload); err != nil {
+					return nil, fmt.Errorf("reconcile file %s: %w", fName, err)
+				}
+				actions = append(actions, fmt.Sprintf("已将组合订阅文件 '%s' 重新绑定至集合 'Q-汇总'", fName))
+				logger.Sync("Reconciled file '%s' -> source 'Q-汇总'", fName)
+			}
+		}
+	}
+
+	// 4. 再次执行复查，生成最终报告
 	finalAudit, err := c.AuditTopology(ctx)
 	if err != nil {
 		return nil, err

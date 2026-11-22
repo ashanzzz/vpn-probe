@@ -82,6 +82,10 @@ func TestVPS10M(ctx context.Context, port int, targetURL string, latencyMs int) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if targetURL == DefaultVPS10MURL {
+			logger.Warnf("[SPEED] VPS 10M endpoint returned status %d, falling back to Cloudflare 10M stream...", resp.StatusCode)
+			return TestVPS10M(ctx, port, DefaultFallback10M, latencyMs)
+		}
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
@@ -167,6 +171,10 @@ func TestVPS30M(ctx context.Context, port int, targetURL string, latencyMs int) 
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if targetURL == DefaultVPS30MURL {
+			logger.Warnf("[SPEED] VPS 30M endpoint returned status %d, falling back to Cloudflare 30M stream...", resp.StatusCode)
+			return TestVPS30M(ctx, port, DefaultFallback30M, latencyMs)
+		}
 		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 

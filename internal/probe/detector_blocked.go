@@ -128,15 +128,22 @@ func CheckAbroadPort(ctx context.Context, host string, port int) (bool, string, 
 	return isAbroadReachable, summary, nil
 }
 
-// CheckDomesticTCP 测试国内本地是否能通过 TCP 握手直连目标端口 (带 1 次瞬态丢包退避重试，抗跨境 SYN 丢包抖动)
-func CheckDomesticTCP(host string, port int) bool {
+// CheckDomesticTCPContext 测试国内本地是否能通过 TCP 握手直连目标端口 (感知 context 撤销，带 1 次瞬态丢包退避重试，抗跨境 SYN 丢包抖动)
+func CheckDomesticTCPContext(ctx context.Context, host string, port int) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	for attempt := 1; attempt <= 2; attempt++ {
+		if ctx.Err() != nil {
+			return false
+		}
 		timeout := 2500 * time.Millisecond
 		if attempt > 1 {
 			timeout = 3500 * time.Millisecond
 		}
-		conn, err := net.DialTimeout("tcp", target, timeout)
+		dialer := net.Dialer{Timeout: timeout}
+		conn, err := dialer.DialContext(ctx, "tcp", target)
 		if err == nil {
 			conn.Close()
 			return true
@@ -145,13 +152,24 @@ func CheckDomesticTCP(host string, port int) bool {
 	return false
 }
 
-// CheckDomesticPing 使用系统原生 ping 命令测试国内 ICMP 连通性
-func CheckDomesticPing(host string) bool {
+// CheckDomesticTCP 测试国内本地是否能通过 TCP 握手直连目标端口 (带 1 次瞬态丢包退避重试，抗跨境 SYN 丢包抖动)
+func CheckDomesticTCP(host string, port int) bool {
+	return CheckDomesticTCPContext(context.Background(), host, port)
+}
+
+// CheckDomesticPingContext 使用系统原生 ping 命令测试国内 ICMP 连通性 (带 context 撤销与超时保护，防止进程挂死)
+func CheckDomesticPingContext(ctx context.Context, host string) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("ping", "-n", "2", "-w", "1000", host)
+		cmd = exec.CommandContext(pingCtx, "ping", "-n", "2", "-w", "1000", host)
 	} else {
-		cmd = exec.Command("ping", "-c", "2", "-W", "1", host)
+		cmd = exec.CommandContext(pingCtx, "ping", "-c", "2", "-W", "1", host)
 	}
 
 	out, err := cmd.CombinedOutput()
@@ -164,6 +182,11 @@ func CheckDomesticPing(host string) bool {
 		return true
 	}
 	return false
+}
+
+// CheckDomesticPing 使用系统原生 ping 命令测试国内 ICMP 连通性
+func CheckDomesticPing(host string) bool {
+	return CheckDomesticPingContext(context.Background(), host)
 }
 
 // CheckAbroadViaProxy 通过本地健康代理沙箱端口，在海外向目标主机端口发起 TCP 握手
@@ -518,12 +541,12 @@ func DiagnoseNode(
 		host, port, abroadOK, abroadSource, abroadRTT, abroadDetail)
 
 	// 2. 境内本地 TCP 连通测试
-	domesticTCPOK := CheckDomesticTCP(host, port)
+	domesticTCPOK := CheckDomesticTCPContext(ctx, host, port)
 	diag.DomesticReachable = domesticTCPOK
 	logger.Probe("[%s:%d] Domestic TCP connect result: open=%v", host, port, domesticTCPOK)
 
 	// 3. 境内 ICMP Ping
-	pingOK := CheckDomesticPing(host)
+	pingOK := CheckDomesticPingContext(ctx, host)
 	diag.DomesticPing = pingOK
 	logger.Probe("[%s] Domestic ping result: pingable=%v", host, pingOK)
 

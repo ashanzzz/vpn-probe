@@ -561,7 +561,7 @@ func (c *Client) DeleteItem(ctx context.Context, itemType, name string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
 	}

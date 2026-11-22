@@ -208,3 +208,25 @@ func TestDiagnosisLogic(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckDomesticTCPContext_Cancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel context
+
+	// Should return false immediately without blocking
+	ok := CheckDomesticTCPContext(ctx, "127.0.0.1", 33333)
+	if ok {
+		t.Errorf("expected false for cancelled context, got true")
+	}
+}
+
+func TestCheckDomesticPingContext_Cancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel context
+
+	// Should return false immediately without running command
+	ok := CheckDomesticPingContext(ctx, "127.0.0.1")
+	if ok {
+		t.Errorf("expected false for cancelled context, got true")
+	}
+}

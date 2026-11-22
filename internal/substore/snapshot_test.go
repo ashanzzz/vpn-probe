@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"vpn-probe/internal/config"
@@ -116,5 +117,32 @@ proxy-groups:
 	metas := sm.GetMetas()
 	if len(metas) < 2 {
 		t.Fatalf("expected at least 2 metas, got %d", len(metas))
+	}
+}
+
+func TestSanitizeRenderedYAML(t *testing.T) {
+	input := []byte(`
+tun:
+  enable: false
+  stack: mips
+  device: mihomo
+proxies:
+  - name: 链式|US-LAX-ACCK-4837-Reality+➔+LZ-US-Pavlov-家宽-01
+    type: socks5
+`)
+	sanitized := SanitizeRenderedYAML(input)
+	res := string(sanitized)
+
+	if strings.Contains(res, "stack: mips") {
+		t.Errorf("expected 'stack: mips' to be replaced, got: %s", res)
+	}
+	if !strings.Contains(res, "stack: gvisor") {
+		t.Errorf("expected 'stack: gvisor' in output, got: %s", res)
+	}
+	if strings.Contains(res, "+➔+") {
+		t.Errorf("expected '+➔+' to be replaced, got: %s", res)
+	}
+	if !strings.Contains(res, " ➔ ") {
+		t.Errorf("expected ' ➔ ' in output, got: %s", res)
 	}
 }

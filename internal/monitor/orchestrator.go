@@ -608,7 +608,7 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 	}
 
 	chainName := fmt.Sprintf("链式|%s ➔ %s", transitNode.Name, resiLabel)
-	chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(transitNode.Name), url.QueryEscape(chainName))
+	chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(transitNode.Name), chainName)
 
 	bind := CustomChainBind{
 		ID:              fmt.Sprintf("bind-%d", time.Now().UnixNano()),

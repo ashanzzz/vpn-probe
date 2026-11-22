@@ -619,7 +619,7 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 	for _, g := range parsed.Groups {
 		groupCounts[g.Name] = len(g.Proxies)
 		for _, m := range g.Proxies {
-			if m == "DIRECT" || m == "REJECT" || m == "REJECT-DROP" {
+			if m == "DIRECT" || m == "REJECT" || m == "REJECT-DROP" || m == "PASS" || m == "COMPATIBLE" {
 				continue
 			}
 			// 也可能是策略组嵌套引用

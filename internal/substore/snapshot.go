@@ -1,6 +1,7 @@
 package substore
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -96,6 +97,12 @@ func (sm *SnapshotManager) loadFromDisk() {
 			continue
 		}
 
+		sanitized := SanitizeRenderedYAML(data)
+		if !bytes.Equal(sanitized, data) {
+			data = sanitized
+			_ = os.WriteFile(filePath, data, 0644)
+		}
+
 		info, _ := f.Info()
 		modTime := time.Now()
 		if info != nil {
@@ -181,6 +188,8 @@ func (sm *SnapshotManager) WarmupOne(ctx context.Context, fileName string) (*Sna
 		sm.mu.Unlock()
 		return nil, err
 	}
+
+	data = SanitizeRenderedYAML(data)
 
 	proxyCount := countProxiesInYAML(data)
 	hash := sha256.Sum256(data)
@@ -375,4 +384,28 @@ func countProxiesInYAML(data []byte) int {
 		return len(parsed.Proxies)
 	}
 	return 0
+}
+
+// SanitizeRenderedYAML 对上游 Sub-Store 导出的 YAML 文本进行清洗与规范化：
+// 1. 修复 powerfullz/convert.min.js 等上游转换算子硬编码非标准 'stack: mips' 导致 Mihomo 内核校验失败的缺陷；
+// 2. 修复链式中继名称中可能夹带的 '+' 编码残留字符 (例如 '+➔+' 规范化为 ' ➔ ')。
+func SanitizeRenderedYAML(data []byte) []byte {
+	if len(data) == 0 {
+		return data
+	}
+	// 1. 修正 tun.stack
+	if bytes.Contains(data, []byte("stack: mips")) {
+		data = bytes.ReplaceAll(data, []byte("stack: mips"), []byte("stack: gvisor"))
+	}
+	// 2. 清除箭头两侧被误转义的加号残留
+	if bytes.Contains(data, []byte("+➔+")) {
+		data = bytes.ReplaceAll(data, []byte("+➔+"), []byte(" ➔ "))
+	}
+	if bytes.Contains(data, []byte("+➔")) {
+		data = bytes.ReplaceAll(data, []byte("+➔"), []byte(" ➔"))
+	}
+	if bytes.Contains(data, []byte("➔+")) {
+		data = bytes.ReplaceAll(data, []byte("➔+"), []byte("➔ "))
+	}
+	return data
 }

@@ -2,6 +2,7 @@ package substore
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 
@@ -62,5 +63,87 @@ func TestClient_ConcurrentConfigUpdate(t *testing.T) {
 	finalCfg := client.GetConfig()
 	if finalCfg == nil {
 		t.Fatal("expected non-nil final config")
+	}
+}
+
+func TestClient_SetAuth(t *testing.T) {
+	tests := []struct {
+		name          string
+		cfg           *config.SubStoreConfig
+		expectAuth    string
+		expectKey     string
+		expectNoAuth  bool
+	}{
+		{
+			name: "Basic Auth only",
+			cfg: &config.SubStoreConfig{
+				Username: "ashan",
+				Password: "password123",
+			},
+			expectAuth: "Basic YXNoYW46cGFzc3dvcmQxMjM=",
+			expectKey:  "",
+		},
+		{
+			name: "Token only",
+			cfg: &config.SubStoreConfig{
+				Token: "my-secret-token",
+			},
+			expectAuth: "Bearer my-secret-token",
+			expectKey:  "my-secret-token",
+		},
+		{
+			name: "Both Basic Auth and Token",
+			cfg: &config.SubStoreConfig{
+				Username: "ashan",
+				Password: "password123",
+				Token:    "my-secret-token",
+			},
+			expectAuth: "Basic YXNoYW46cGFzc3dvcmQxMjM=",
+			expectKey:  "my-secret-token",
+		},
+		{
+			name: "Username with empty password but valid token uses token",
+			cfg: &config.SubStoreConfig{
+				Username: "ashan",
+				Password: "",
+				Token:    "fallback-token",
+			},
+			expectAuth: "Bearer fallback-token",
+			expectKey:  "fallback-token",
+		},
+		{
+			name: "Empty credentials",
+			cfg: &config.SubStoreConfig{
+				Username: "",
+				Password: "",
+				Token:    "",
+			},
+			expectNoAuth: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewClient(tc.cfg)
+			req, _ := http.NewRequest("GET", "http://example.com/api", nil)
+			c.setAuth(req)
+
+			authHeader := req.Header.Get("Authorization")
+			apiKeyHeader := req.Header.Get("x-api-key")
+
+			if tc.expectNoAuth {
+				if authHeader != "" || apiKeyHeader != "" {
+					t.Errorf("expected no auth headers, got auth=%q key=%q", authHeader, apiKeyHeader)
+				}
+				return
+			}
+
+			if authHeader != tc.expectAuth {
+				t.Errorf("expected Authorization %q, got %q", tc.expectAuth, authHeader)
+			}
+			if apiKeyHeader != tc.expectKey {
+				t.Errorf("expected x-api-key %q, got %q", tc.expectKey, apiKeyHeader)
+			}
+		})
 	}
 }

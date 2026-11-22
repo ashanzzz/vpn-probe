@@ -133,6 +133,30 @@ func TestAuthMiddleware(t *testing.T) {
 	if err != nil || resp.StatusCode != fiber.StatusUnauthorized {
 		t.Fatalf("expected POST /rules/custom_patch.js without token to return 401, got %d", resp.StatusCode)
 	}
+
+	// 12. 测试 HTTP Basic Auth (ashan:writeToken) -> 200 OK
+	req = httptest.NewRequest("GET", "/api/protected", nil)
+	req.SetBasicAuth("ashan", authToken)
+	resp, err = app.Test(req)
+	if err != nil || resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("expected Basic Auth to return 200, got %d", resp.StatusCode)
+	}
+
+	// 13. 测试 HTTP Basic Auth (只传密码形式 :writeToken) -> 200 OK
+	req = httptest.NewRequest("GET", "/api/protected", nil)
+	req.SetBasicAuth("", authToken)
+	resp, err = app.Test(req)
+	if err != nil || resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("expected password-only Basic Auth to return 200, got %d", resp.StatusCode)
+	}
+
+	// 14. 测试 Header 携带其他/未匹配鉴权时，订阅端点回退至合法 Query Token -> 200 OK
+	req = httptest.NewRequest("GET", "/api/sub/online?token="+readToken, nil)
+	req.SetBasicAuth("other_user", "mismatched_password")
+	resp, err = app.Test(req)
+	if err != nil || resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("expected query token fallback on subscription endpoint to return 200, got %d", resp.StatusCode)
+	}
 }
 
 func TestIPLockout(t *testing.T) {

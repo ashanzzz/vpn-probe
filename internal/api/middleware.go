@@ -2,6 +2,7 @@ package api
 
 import (
 	"crypto/subtle"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"sync"
@@ -150,7 +151,7 @@ func NewAuthMiddleware(cfg AuthConfig) fiber.Handler {
 			})
 		}
 
-		// 4. 提取 Token
+		// 4. 提取 Token (支持 Bearer, Basic Auth, X-API-Key 及白名单 URL Query)
 		headerToken := ""
 		queryToken := ""
 
@@ -159,6 +160,21 @@ func NewAuthMiddleware(cfg AuthConfig) fiber.Handler {
 			parts := strings.SplitN(authHeader, " ", 2)
 			if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
 				headerToken = parts[1]
+			} else if len(parts) == 2 && strings.EqualFold(parts[0], "Basic") {
+				if decoded, err := base64.StdEncoding.DecodeString(parts[1]); err == nil {
+					userPass := string(decoded)
+					if idx := strings.Index(userPass, ":"); idx != -1 {
+						pass := userPass[idx+1:]
+						user := userPass[:idx]
+						if pass != "" {
+							headerToken = pass
+						} else {
+							headerToken = user
+						}
+					} else {
+						headerToken = userPass
+					}
+				}
 			} else {
 				headerToken = authHeader
 			}
@@ -173,7 +189,8 @@ func NewAuthMiddleware(cfg AuthConfig) fiber.Handler {
 		}
 
 		// 安全规则：URL Query 传参仅允许在 /api/sub/* 订阅拉取端点及 /rules/* 脚本引用端点使用
-		if queryToken != "" && !strings.HasPrefix(path, "/api/sub/") && !strings.HasPrefix(path, "/rules/") {
+		isQueryAllowed := strings.HasPrefix(path, "/api/sub/") || strings.HasPrefix(path, "/rules/")
+		if queryToken != "" && !isQueryAllowed {
 			customlog.Audit("auth_query_rejected", clientIP, path, "rejected", "Query param ?token= is only permitted for /api/sub/* and /rules/*")
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"error":   "unauthorized",
@@ -181,38 +198,39 @@ func NewAuthMiddleware(cfg AuthConfig) fiber.Handler {
 			})
 		}
 
-		providedToken := headerToken
-		if providedToken == "" {
-			providedToken = queryToken
-		}
-
-		if providedToken == "" {
-			justLocked := globalTracker.recordFailure(clientIP)
-			if justLocked {
-				customlog.Audit("ip_lockout", clientIP, path, "locked", "5 consecutive auth failures, locked for 60s")
+		// 5. 恒定时间比对判断角色权限 (优先 Header，Header 未命中且端点允许时回退 Query)
+		evaluateRole := func(tok string) Role {
+			if tok == "" {
+				return RoleNone
 			}
-			customlog.Event(customlog.LevelWarn, "auth", "token_missing", fmt.Sprintf("ip=%s path=%s method=%s", clientIP, path, c.Method()))
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error":   "unauthorized",
-				"message": "Authentication token required. Use 'Authorization: Bearer <token>' or 'X-API-Key: <token>'.",
-			})
+			if cfg.AdminToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(cfg.AdminToken)) == 1 {
+				return RoleAdmin
+			}
+			if cfg.AuthToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(cfg.AuthToken)) == 1 {
+				return RoleWrite
+			}
+			if cfg.ReadToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(cfg.ReadToken)) == 1 {
+				return RoleRead
+			}
+			return RoleNone
 		}
 
-		// 5. 恒定时间比对判断角色权限
-		var matchedRole Role = RoleNone
-
-		if cfg.AdminToken != "" && subtle.ConstantTimeCompare([]byte(providedToken), []byte(cfg.AdminToken)) == 1 {
-			matchedRole = RoleAdmin
-		} else if cfg.AuthToken != "" && subtle.ConstantTimeCompare([]byte(providedToken), []byte(cfg.AuthToken)) == 1 {
-			matchedRole = RoleWrite
-		} else if cfg.ReadToken != "" && subtle.ConstantTimeCompare([]byte(providedToken), []byte(cfg.ReadToken)) == 1 {
-			matchedRole = RoleRead
+		matchedRole := evaluateRole(headerToken)
+		if matchedRole == RoleNone && isQueryAllowed && queryToken != "" {
+			matchedRole = evaluateRole(queryToken)
 		}
 
 		if matchedRole == RoleNone {
 			justLocked := globalTracker.recordFailure(clientIP)
 			if justLocked {
 				customlog.Audit("ip_lockout", clientIP, path, "locked", "5 consecutive auth failures, locked for 60s")
+			}
+			if headerToken == "" && queryToken == "" {
+				customlog.Event(customlog.LevelWarn, "auth", "token_missing", fmt.Sprintf("ip=%s path=%s method=%s", clientIP, path, c.Method()))
+				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+					"error":   "unauthorized",
+					"message": "Authentication token required. Use 'Authorization: Bearer ***', 'Authorization: Basic ***', or 'X-API-Key: ***'.",
+				})
 			}
 			customlog.Event(customlog.LevelWarn, "auth", "token_invalid", fmt.Sprintf("ip=%s path=%s method=%s", clientIP, path, c.Method()))
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{

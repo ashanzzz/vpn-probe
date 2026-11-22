@@ -111,9 +111,13 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 
 	if !online {
 		// 校验是否属于本地临时沙箱进程/端口连接被拒 (探针引擎内部故障，而非远端节点故障)
+		// 严格校验是否针对本地环回端口自身的 dial 握手失败，排除远端节点经由 SOCKS 返回的连接拒绝 (如 "unknown error connection refused")
 		if err != nil {
 			errStr := strings.ToLower(err.Error())
-			if strings.Contains(errStr, "127.0.0.1") && (strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "connect: connection refused")) {
+			loopbackDialFail := strings.Contains(errStr, fmt.Sprintf("dial tcp 127.0.0.1:%d", inst.Port)) &&
+				(strings.Contains(errStr, "connect: connection refused") || strings.Contains(errStr, "connection refused")) &&
+				!strings.Contains(errStr, "unknown error")
+			if loopbackDialFail {
 				result.OfflineReason = "probe_engine_error"
 				result.Category = classifier.Classify(isSelf, false, false)
 				result.StatusText = "【引擎异常】本地沙箱端口连接被拒"
@@ -134,6 +138,11 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 			logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v | sing-box: %s)", parsed.Tag, err, sbLog)
 		} else {
 			logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v)", parsed.Tag, err)
+		}
+
+		// 提前释放无用的本地临时沙箱进程，避免后续深度诊断期间空占端口与文件句柄
+		if inst != nil {
+			inst.Close(e.sandboxMgr)
 		}
 
 		// 触发深度故障诊断：严格切分「离线」与「被墙」

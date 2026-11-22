@@ -234,4 +234,26 @@ func TestOrchestrationEndpoints(t *testing.T) {
 			t.Fatalf("expected 200, got %d", delResp.StatusCode)
 		}
 	})
+
+	t.Run("AI summary with residential chain nodes", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/ai/status", nil)
+		req.Header.Set("Authorization", "Bearer admin-token-123")
+		resp, err := server.app.Test(req)
+		if err != nil {
+			t.Fatalf("ai status request failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		var res map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&res)
+		summary, ok := res["summary"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected summary in response, got %v", res)
+		}
+		// Since transit is healthy and resi has fault none (or not failing port), requires_healing_action should be false
+		if reqHealing, _ := summary["requires_healing_action"].(bool); reqHealing {
+			t.Fatalf("expected requires_healing_action=false, got true")
+		}
+	})
 }

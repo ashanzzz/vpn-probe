@@ -1372,11 +1372,13 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 		}
 	}
 
-	requiresHealing := len(actionList) > 0
+	requiresHealing := portBlockedCount > 0 || protocolErrorCount > 0 || offlineCount > 0
 	var overallPrompt string
 	if requiresHealing {
 		overallPrompt = fmt.Sprintf("检测到 %d 个节点需要自愈或人工排查 (其中 %d 个端口被墙需换端口, %d 个协议配置需核对, %d 个真正离线)。请按 nodes_requiring_action 中的 v2ray_link 与 ai_heal_instruction 执行处置。",
 			len(actionList), portBlockedCount, protocolErrorCount, offlineCount)
+	} else if len(actionList) > 0 {
+		overallPrompt = fmt.Sprintf("全网自建专线与核心节点健康，检测到 %d 个住宅家宽节点国内直连受阻但境外隧道正常，系统已自动全网状建立链式中继 (ashan-chain)，无需人工换端口或干预。", len(actionList))
 	} else {
 		overallPrompt = "所有监控节点均正常在线，无需执行自愈操作。"
 	}
@@ -1389,6 +1391,7 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 			"port_blocked_nodes":      portBlockedCount,
 			"protocol_error_nodes":    protocolErrorCount,
 			"offline_nodes":           offlineCount,
+			"residential_chain_nodes": len(actionList) - portBlockedCount - protocolErrorCount - offlineCount,
 			"requires_healing_action": requiresHealing,
 			"ai_instruction":          overallPrompt,
 		},

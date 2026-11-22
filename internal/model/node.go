@@ -22,11 +22,14 @@ const (
 type FaultType string
 
 const (
-	FaultNone             FaultType = "none"              // 正常
-	FaultPortBlocked      FaultType = "port_blocked"      // 端口被墙 (机器软件正常，国内阻断)
-	FaultIPBlocked        FaultType = "ip_blocked"        // IP被墙 (机器软件正常，整机阻断)
-	FaultProtocolMismatch FaultType = "protocol_mismatch" // 协议认证失败 (端口通但UUID/Reality验证失败)
-	FaultMachineDown      FaultType = "machine_offline"   // 真正离线 (全球不通: 机子关机/软件坏了/线路断)
+	FaultNone                      FaultType = "none"                       // 正常
+	FaultPortBlocked               FaultType = "port_blocked"               // 端口被墙 (机器软件正常，国内阻断)
+	FaultIPBlocked                 FaultType = "ip_blocked"                 // IP被墙 (机器软件正常，整机阻断)
+	FaultProtocolMismatch          FaultType = "protocol_mismatch"          // 协议认证失败 (端口通但UUID/Reality验证失败)
+	FaultMachineDown               FaultType = "machine_offline"            // 真正离线 (全球不通: 机子关机/软件坏了/线路断)
+	FaultResidentialTunnelOffline  FaultType = "residential_tunnel_offline"  // 家宽穿透隧道掉线/家庭设备离线 (Issue #26)
+	FaultTransitRelayDown          FaultType = "transit_relay_down"          // 家宽中转宿主机宕机/网络中断 (Issue #26)
+	FaultResidentialDirectBlocked  FaultType = "residential_direct_blocked"  // 家宽国内直连受阻(境外隧道正常，需中继) (Issue #26)
 )
 
 // DiagnosticInfo 深度故障与被墙诊断信息

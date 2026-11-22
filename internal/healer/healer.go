@@ -32,7 +32,7 @@ func GenerateRandomHighPort() int {
 
 // HealPortBlocked 处理端口被墙换端口自愈逻辑 (生成候选端口，另存 healed_url，不单方面直接覆盖原 URL)
 func (h *Healer) HealPortBlocked(ctx context.Context, res *model.NodeProbeResult) (string, error) {
-	if res.Diagnostic == nil || res.Diagnostic.FaultType != model.FaultPortBlocked {
+	if res.Diagnostic == nil || res.Diagnostic.FaultType != model.FaultPortBlocked || res.NodeType == "residential" || strings.Contains(res.Name, "家宽") {
 		return res.OriginalURL, nil
 	}
 

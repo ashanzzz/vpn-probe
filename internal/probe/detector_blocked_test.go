@@ -13,6 +13,7 @@ func TestDiagnosisLogic(t *testing.T) {
 		domesticTCPOK  bool
 		abroadOK       bool
 		pingOK         bool
+		isResi         bool
 		wantFault      model.FaultType
 		wantStatusText string
 		wantActionType string
@@ -94,12 +95,48 @@ func TestDiagnosisLogic(t *testing.T) {
 			wantStatusText: "【离线】机子关机/软件崩溃/线路中断",
 			wantActionType: "CHECK_SERVER_AND_PROCESS",
 		},
+		{
+			name:           "家宽国内直连受阻: 境外隧道正常但国内直连受阻 (需专线中转，严禁换端口)",
+			port:           40981,
+			protocol:       "socks5",
+			domesticTCPOK:  false,
+			abroadOK:       true,
+			pingOK:         true,
+			isResi:         true,
+			wantFault:      model.FaultResidentialDirectBlocked,
+			wantStatusText: "【仅境外通】国内直连受阻/需经自建专线链式中继",
+			wantActionType: "CHAIN_VIA_TRANSIT",
+		},
+		{
+			name:           "家宽穿透掉线: 宿主机Ping通但内外端口不通 (家庭设备关机或反向穿透中断)",
+			port:           40985,
+			protocol:       "socks5",
+			domesticTCPOK:  false,
+			abroadOK:       false,
+			pingOK:         true,
+			isResi:         true,
+			wantFault:      model.FaultResidentialTunnelOffline,
+			wantStatusText: "【家宽穿透掉线】家庭设备离线或反向穿透隧道中断",
+			wantActionType: "CHECK_RESIDENTIAL_DEVICE_OR_TUNNEL",
+		},
+		{
+			name:           "家宽中转宿主机宕机: 宿主机Ping与内外端口全灭",
+			port:           40985,
+			protocol:       "socks5",
+			domesticTCPOK:  false,
+			abroadOK:       false,
+			pingOK:         false,
+			isResi:         true,
+			wantFault:      model.FaultTransitRelayDown,
+			wantStatusText: "【中转离线】家宽中转宿主机宕机或网络中断",
+			wantActionType: "CHECK_TRANSIT_RELAY_HOST",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			faultType, statusText, actionType, tip := EvaluateFault(
-				"156.231.113.91", tt.port, tt.protocol, tt.domesticTCPOK, tt.abroadOK, tt.pingOK, "peer:JP-Tokyo-Softbank",
+				"156.231.113.91", tt.port, tt.protocol, tt.domesticTCPOK, tt.abroadOK, tt.pingOK, "peer:JP-Tokyo-Softbank", tt.isResi,
 			)
 
 			if faultType != tt.wantFault {

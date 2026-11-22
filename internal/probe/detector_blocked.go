@@ -332,7 +332,7 @@ func CheckAbroadTiered(
 	return false, "none", 0, "无可用探针且已禁用公共API"
 }
 
-// EvaluateFault 根据四维探测结果与代理协议类型计算故障分类与诊断指引
+// EvaluateFault 根据四维探测结果、代理协议类型与节点角色计算故障分类与诊断指引
 func EvaluateFault(
 	host string,
 	port int,
@@ -341,9 +341,12 @@ func EvaluateFault(
 	abroadOK bool,
 	pingOK bool,
 	abroadSource string,
+	isResidential ...bool,
 ) (faultType model.FaultType, statusText string, actionType string, tip string) {
+	isResi := len(isResidential) > 0 && isResidential[0]
+
+	// 1. 协议认证失败判断 (境内外TCP端口握手均畅通，但应用层握手被服务端拒绝)
 	if domesticTCPOK && abroadOK {
-		// 端口双向畅通！但代理发起流量被拒绝，说明协议握手或认证失败
 		faultType = model.FaultProtocolMismatch
 		switch strings.ToLower(protocol) {
 		case "socks", "socks5":
@@ -371,7 +374,42 @@ func EvaluateFault(
 			actionType = "CHECK_PROXY_CREDENTIALS"
 			tip = fmt.Sprintf("【非被墙】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但代理握手失败，请核对凭据配置！", host, port, abroadSource)
 		}
-	} else if abroadOK && !domesticTCPOK {
+		return
+	}
+
+	// 2. 住宅家宽节点专属故障模型 (Issue #26: 根除“端口被墙/换端口”误判，识别家庭穿透隧道与宿主机状态)
+	if isResi {
+		if abroadOK && !domesticTCPOK {
+			// 海外探针正常 (穿透隧道在海外连通)，但国内直连受阻
+			faultType = model.FaultResidentialDirectBlocked
+			statusText = "【仅境外通】国内直连受阻/需经自建专线链式中继"
+			actionType = "CHAIN_VIA_TRANSIT"
+			tip = fmt.Sprintf("【家宽网络特征】住宅家宽目标 %s:%d 海外隧道正常(%s)，仅国内直连受阻。严禁更换端口（换端口无效），请通过自建专线中转（链式代理）接入使用！", host, port, abroadSource)
+		} else if !abroadOK && !domesticTCPOK {
+			if pingOK {
+				// 中转宿主机 Ping 通，但国内外端口都不通 -> 家庭端穿透掉线/设备关机
+				faultType = model.FaultResidentialTunnelOffline
+				statusText = "【家宽穿透掉线】家庭设备离线或反向穿透隧道中断"
+				actionType = "CHECK_RESIDENTIAL_DEVICE_OR_TUNNEL"
+				tip = fmt.Sprintf("【家宽穿透掉线】中转宿主机 %s 在线(Ping通)，但端口 %d 全球不通。通常为本地家庭端光猫重拨、断电或反向穿透(Rathole/FRP)服务中断，严禁换端口，请检查家庭端设备！", host, port)
+			} else {
+				// 中转宿主机连 Ping 都不通 -> 宿主机离线
+				faultType = model.FaultTransitRelayDown
+				statusText = "【中转离线】家宽中转宿主机宕机或网络中断"
+				actionType = "CHECK_TRANSIT_RELAY_HOST"
+				tip = fmt.Sprintf("【中转宿主宕机】家宽中转宿主机 %s 丢包不通，请检查日本中转宿主机或云服务商网络！", host)
+			}
+		} else {
+			faultType = model.FaultResidentialTunnelOffline
+			statusText = "【家宽异常】家庭设备或穿透服务异常"
+			actionType = "CHECK_RESIDENTIAL_DEVICE_OR_TUNNEL"
+			tip = fmt.Sprintf("目标 %s:%d 状态异常，请核查家庭穿透隧道与设备。", host, port)
+		}
+		return
+	}
+
+	// 3. 自建 VPS 基础设施被墙与离线诊断模型
+	if abroadOK && !domesticTCPOK {
 		// 海外通、国内TCP不通 -> 确认为 GFW 拦截
 		if pingOK {
 			faultType = model.FaultPortBlocked
@@ -394,7 +432,7 @@ func EvaluateFault(
 	return
 }
 
-// DiagnoseNode 深度故障诊断：严格切分「协议认证错误」、「端口被墙」、「IP被墙」与「真正离线」
+// DiagnoseNode 深度故障诊断：严格切分「协议认证错误」、「端口被墙」、「IP被墙」、「真正离线」与「家宽穿透模型」
 func DiagnoseNode(
 	ctx context.Context,
 	host string,
@@ -404,6 +442,7 @@ func DiagnoseNode(
 	sm *SandboxManager,
 	peers []PeerProxyCandidate,
 	cfg *config.Config,
+	isResidential ...bool,
 ) *model.DiagnosticInfo {
 	diag := &model.DiagnosticInfo{
 		TargetIP:          host,
@@ -431,9 +470,9 @@ func DiagnoseNode(
 	diag.DomesticPing = pingOK
 	logger.Probe("[%s] Domestic ping result: pingable=%v", host, pingOK)
 
-	// 4. 严格四维判定矩阵
+	// 4. 严格四维判定矩阵 (包含住宅家宽角色感知)
 	diag.FaultType, diag.StatusText, diag.ActionType, diag.TroubleshootTip = EvaluateFault(
-		host, port, protocol, domesticTCPOK, abroadOK, pingOK, abroadSource,
+		host, port, protocol, domesticTCPOK, abroadOK, pingOK, abroadSource, isResidential...,
 	)
 
 	logger.Probe("[%s:%d] Final diagnosis: %s (Action: %s)", host, port, diag.StatusText, diag.ActionType)

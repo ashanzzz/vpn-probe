@@ -444,7 +444,7 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 		}
 
 		// 自愈判定 1: 端口被墙 (设置诊断动作供具备权限的 VPS 执行方/MCP/AI处置，不单方面静默覆盖原生产URL)
-		if res.Diagnostic != nil && res.Diagnostic.FaultType == model.FaultPortBlocked {
+		if res.Diagnostic != nil && res.Diagnostic.FaultType == model.FaultPortBlocked && !isResi {
 			res.Diagnostic.ActionType = "AI_CHANGE_PORT"
 			res.StatusText = fmt.Sprintf("端口%d被墙(待自愈换端口)", res.Diagnostic.TargetPort)
 			if healedURL, err := s.healer.HealPortBlocked(ctx, res); err == nil && healedURL != "" {

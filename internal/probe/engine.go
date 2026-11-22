@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -135,7 +136,8 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 					protoDesc = parsed.Protocol + "-ws"
 				}
 			}
-			diag := DiagnoseNode(diagCtx, serverHost, serverPort, protoDesc, false, e.sandboxMgr, peers, e.cfg)
+			isResi := strings.Contains(parsed.Tag, "家宽") || strings.Contains(strings.ToLower(parsed.Tag), "resi") || parsed.Protocol == "socks5"
+			diag := DiagnoseNode(diagCtx, serverHost, serverPort, protoDesc, false, e.sandboxMgr, peers, e.cfg, isResi)
 			result.Diagnostic = diag
 			result.StatusText = diag.StatusText
 			result.ErrorMsg = fmt.Sprintf("离线 (%s)", diag.StatusText)

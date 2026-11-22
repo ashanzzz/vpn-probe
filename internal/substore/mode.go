@@ -400,12 +400,12 @@ func (c *Client) SetMode(ctx context.Context, mode SubStoreMode) (*ModeState, er
 		_ = c.UpdateFile(ctx, fname, patchPayload)
 	}
 
-	// - ashan 和 Ashan (纯自建专属订阅): 始终绑定 ashan-master 纯净三层自建集合，毫秒级极速响应，永不受外部机场拖累
+	// - ashan 和 Ashan (纯自建专属订阅): 始终绑定 ashan-纯净 自建干净集合，毫秒级极速响应，永不受外部机场拖累
 	for _, fname := range []string{"ashan", "Ashan"} {
 		patchPayload := map[string]any{
 			"source":     "local",
 			"sourceType": "collection",
-			"sourceName": "ashan-master",
+			"sourceName": "ashan-纯净",
 		}
 		_ = c.UpdateFile(ctx, fname, patchPayload)
 	}

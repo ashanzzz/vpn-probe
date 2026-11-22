@@ -128,13 +128,19 @@ func CheckAbroadPort(ctx context.Context, host string, port int) (bool, string, 
 	return isAbroadReachable, summary, nil
 }
 
-// CheckDomesticTCP 测试国内本地是否能通过 TCP 握手直连目标端口
+// CheckDomesticTCP 测试国内本地是否能通过 TCP 握手直连目标端口 (带 1 次瞬态丢包退避重试，抗跨境 SYN 丢包抖动)
 func CheckDomesticTCP(host string, port int) bool {
 	target := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := net.DialTimeout("tcp", target, 2500*time.Millisecond)
-	if err == nil {
-		conn.Close()
-		return true
+	for attempt := 1; attempt <= 2; attempt++ {
+		timeout := 2500 * time.Millisecond
+		if attempt > 1 {
+			timeout = 3500 * time.Millisecond
+		}
+		conn, err := net.DialTimeout("tcp", target, timeout)
+		if err == nil {
+			conn.Close()
+			return true
+		}
 	}
 	return false
 }

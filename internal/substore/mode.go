@@ -535,10 +535,7 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 		strings.TrimRight(cfg.URL, "/"),
 	}
 	if !isLocalOrTestEndpoint(cfg.URL) {
-		fallbackURL := "http://156.231.113.91:3001"
-		if cfg.Token != "" {
-			fallbackURL = fmt.Sprintf("http://156.231.113.91:3001/%s", strings.TrimLeft(cfg.Token, "/"))
-		}
+		fallbackURL := ResolveFallbackURL(cfg)
 		if !strings.Contains(cfg.URL, "156.231.113.91") {
 			urlsToTry = append(urlsToTry, fallbackURL)
 		}

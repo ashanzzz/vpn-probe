@@ -294,3 +294,58 @@ func TestClient_DeleteSubscription_Auth(t *testing.T) {
 		t.Errorf("expected x-api-key header 'admin-token', got %q", receivedAPIKey)
 	}
 }
+
+func TestResolveFallbackURL(t *testing.T) {
+	cases := []struct {
+		name     string
+		cfg      *config.SubStoreConfig
+		expected string
+	}{
+		{
+			name:     "nil config",
+			cfg:      nil,
+			expected: "http://156.231.113.91:3001",
+		},
+		{
+			name: "token explicitly set",
+			cfg: &config.SubStoreConfig{
+				URL:   "https://free.1992004.xyz",
+				Token: "mysecret",
+			},
+			expected: "http://156.231.113.91:3001/mysecret",
+		},
+		{
+			name: "token with leading slash",
+			cfg: &config.SubStoreConfig{
+				URL:   "https://free.1992004.xyz",
+				Token: "/mysecret/",
+			},
+			expected: "http://156.231.113.91:3001/mysecret",
+		},
+		{
+			name: "token empty but url path contains token (production pattern)",
+			cfg: &config.SubStoreConfig{
+				URL:   "https://free.1992004.xyz/Woo@@@204317",
+				Token: "",
+			},
+			expected: "http://156.231.113.91:3001/Woo@@@204317",
+		},
+		{
+			name: "token empty and url path is root",
+			cfg: &config.SubStoreConfig{
+				URL:   "https://free.1992004.xyz/",
+				Token: "",
+			},
+			expected: "http://156.231.113.91:3001",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ResolveFallbackURL(tc.cfg)
+			if got != tc.expected {
+				t.Errorf("ResolveFallbackURL() = %q; expected %q", got, tc.expected)
+			}
+		})
+	}
+}

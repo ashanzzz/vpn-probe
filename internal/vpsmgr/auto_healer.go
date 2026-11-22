@@ -80,6 +80,29 @@ func (h *AutoHealer) DiagnoseNode(res *model.NodeProbeResult) *BlockedAnalysisRe
 		return result
 	}
 
+	// 住宅家宽节点专属故障模型与安全防护（家宽物理上均为中转+家庭隧道链式代理，严禁触发换端口自愈）
+	isResi := res.NodeType == "residential" || strings.Contains(res.Name, "家宽")
+	if isResi {
+		result.CanAutoHealPort = false
+		result.CanRelayRescue = false
+		if result.AbroadTCP {
+			result.FaultType = "RESIDENTIAL_DIRECT_BLOCKED"
+			result.DiagnosticMessage = fmt.Sprintf("【仅境外通】住宅家宽目标 %s:%d 境外链路畅通，国内直连受阻。严禁更换端口，需通过自建专线链式中继！", result.ServerIP, result.ServerPort)
+			result.RecommendedAction = "通过自建专线中转接入（链式代理）"
+			return result
+		} else if result.DomesticPing {
+			result.FaultType = "RESIDENTIAL_TUNNEL_OFFLINE"
+			result.DiagnosticMessage = fmt.Sprintf("【家庭端离线】家宽中转机 %s 在线(Ping通)，但端口 %d 全球无响应。家庭设备离线或隧道未就绪，严禁换端口！", result.ServerIP, result.ServerPort)
+			result.RecommendedAction = "检查家庭端设备或穿透隧道"
+			return result
+		} else {
+			result.FaultType = "TRANSIT_RELAY_DOWN"
+			result.DiagnosticMessage = fmt.Sprintf("【中转离线】家宽中转服务器 %s 全球不可达，中转机宕机或网络中断。", result.ServerIP)
+			result.RecommendedAction = "检查中转服务器运行状态"
+			return result
+		}
+	}
+
 	if result.DomesticTCP && result.AbroadTCP {
 		result.FaultType = "PROTOCOL_MISMATCH"
 		result.DiagnosticMessage = "【配置/密钥错误】境内与境外TCP均可握手，端口未被墙！代理协议握手失败（Reality公钥/短ID不匹配或flow未配置）。"
@@ -115,6 +138,11 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 	resp := &PortHealResponse{
 		Success:  false,
 		NodeName: nodeName,
+	}
+
+	if strings.Contains(nodeName, "家宽") || (inst != nil && inst.ProviderID == "lazycat") {
+		resp.Message = "住宅家宽节点严禁执行换端口操作：家宽物理上为链式代理，请核查中转机或家庭端连通性"
+		return resp, fmt.Errorf("port heal is forbidden on residential nodes")
 	}
 
 	u, err := url.Parse(targetURL)

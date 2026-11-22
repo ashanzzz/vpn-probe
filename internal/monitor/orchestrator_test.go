@@ -1,13 +1,20 @@
 package monitor
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"vpn-probe/internal/config"
 	"vpn-probe/internal/healer"
 	"vpn-probe/internal/model"
+	"vpn-probe/internal/substore"
 )
 
 func TestOrchestratorEvaluationAndQuery(t *testing.T) {
@@ -159,5 +166,73 @@ func TestOrchestratorEvaluationAndQuery(t *testing.T) {
 	// 测试解绑
 	if err := orc.UnbindExplicitChain(bind.ID); err != nil {
 		t.Fatalf("UnbindExplicitChain failed: %v", err)
+	}
+}
+
+func TestOrchestrator_SyncAllCustomGroups_EmptyNodes(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "custom_groups.json")
+	restore := SetCustomGroupsFileForTest(tmpFile)
+	defer restore()
+
+	// 注入一个匹配不到任何节点的自定义分组
+	def := model.CustomGroupDef{
+		Name:        "ashan-fr-empty",
+		DisplayName: "自建-法国空分组",
+		Enabled:     true,
+		Filter: model.GroupFilter{
+			Countries: []string{"FR"}, // 无法国节点
+		},
+	}
+	if err := SaveCustomGroup(def); err != nil {
+		t.Fatalf("SaveCustomGroup failed: %v", err)
+	}
+
+	var syncedName string
+	var syncedContent string
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/sub/") {
+			mu.Lock()
+			syncedName = strings.TrimPrefix(r.URL.Path, "/api/sub/")
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if c, ok := body["content"].(string); ok {
+				syncedContent = c
+			}
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	subClient := substore.NewClient(&config.SubStoreConfig{
+		Enabled: true,
+		URL:     ts.URL,
+	})
+	subClient.SetHTTPClient(ts.Client())
+
+	sch := &Scheduler{
+		healer:         healer.NewHealer(nil, nil),
+		nodeStates:     make(map[string]*NodeState),
+		substoreClient: subClient,
+	}
+
+	orc := NewOrchestrator(sch)
+	err := orc.SyncAllCustomGroups(context.Background())
+	if err != nil {
+		t.Fatalf("SyncAllCustomGroups failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if syncedName != "ashan-fr-empty" {
+		t.Errorf("expected synced subscription 'ashan-fr-empty', got %q", syncedName)
+	}
+	if syncedContent != "" {
+		t.Errorf("expected empty string content for empty custom group, got %q", syncedContent)
 	}
 }

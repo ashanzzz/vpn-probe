@@ -1,8 +1,12 @@
 package substore
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -195,4 +199,98 @@ func TestClientAndSnapshot_SetHTTPClient(t *testing.T) {
 		t.Errorf("SetHTTPClient did not set custom client on SnapshotManager")
 	}
 	sm.mu.RUnlock()
+}
+
+func TestClient_SyncThreeTier_EmptyNodes(t *testing.T) {
+	patchedSubs := make(map[string]string)
+	var mu sync.Mutex
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/sub/") {
+			subName := strings.TrimPrefix(r.URL.Path, "/api/sub/")
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			if c, ok := body["content"].(string); ok {
+				patchedSubs[subName] = c
+			}
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/collection/") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled: true,
+		URL:     ts.URL,
+	}
+	c := NewClient(cfg)
+	c.SetHTTPClient(ts.Client())
+
+	payload := ThreeTierPayload{
+		TransitDirectNodes: []string{},
+		ResidentialNodes:   []string{},
+		ChainNodes:         []string{},
+	}
+
+	err := c.SyncThreeTier(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("SyncThreeTier failed: %v", err)
+	}
+
+	expectedSubs := []string{"ashan-transit-direct", "ashan-resi-direct", "ashan-chain"}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, sub := range expectedSubs {
+		content, ok := patchedSubs[sub]
+		if !ok {
+			t.Errorf("expected subscription %s to be patched, but was not", sub)
+			continue
+		}
+		if content != "" {
+			t.Errorf("expected empty string content for %s, got %q", sub, content)
+		}
+	}
+}
+
+func TestClient_DeleteSubscription_Auth(t *testing.T) {
+	var receivedAuth string
+	var receivedAPIKey string
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		receivedAPIKey = r.Header.Get("x-api-key")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled:  true,
+		URL:      ts.URL,
+		Username: "admin",
+		Password: "secretpassword",
+		Token:    "admin-token",
+	}
+	c := NewClient(cfg)
+	c.SetHTTPClient(ts.Client())
+
+	err := c.DeleteSubscription(context.Background(), "test-sub")
+	if err != nil {
+		t.Fatalf("DeleteSubscription failed: %v", err)
+	}
+
+	if !strings.HasPrefix(receivedAuth, "Basic ") {
+		t.Errorf("expected Basic auth header, got %q", receivedAuth)
+	}
+	if receivedAPIKey != "admin-token" {
+		t.Errorf("expected x-api-key header 'admin-token', got %q", receivedAPIKey)
+	}
 }

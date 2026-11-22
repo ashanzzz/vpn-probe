@@ -1086,7 +1086,7 @@ func (s *APIServer) setupRoutes() {
 		})
 	})
 
-	// 5.4 三层架构 Sub-Store 一键同步 API
+	// 5.4 历史三层架构 Sub-Store 一键同步 API (自动平滑重定向至方案B五维策略组同步)
 	s.app.Post("/api/substore/sync-threetier", func(c *fiber.Ctx) error {
 		if s.scheduler == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
@@ -1094,7 +1094,7 @@ func (s *APIServer) setupRoutes() {
 		if err := s.scheduler.SyncThreeTierNow(c.Context()); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
-		return c.JSON(fiber.Map{"status": "success", "message": "Three-tier subscriptions & collection synced successfully"})
+		return c.JSON(fiber.Map{"status": "success", "message": "Five-group subscriptions & collection synced successfully (redirected from legacy 3-tier)"})
 	})
 
 	// 5.5 方案B与动态规则编排 API (Issue #24: 五维策略、全量网状中继池、原子库与动态公式)

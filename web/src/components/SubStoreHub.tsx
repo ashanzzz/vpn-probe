@@ -204,20 +204,6 @@ export const SubStoreHub: React.FC = () => {
     }
   };
 
-  // Sync Three Tier
-  const handleSyncThreeTier = async () => {
-    setActionLoading('sync-threetier');
-    setStatusMsg(null);
-    try {
-      const res = await api.syncThreeTier();
-      setStatusMsg({ type: 'success', text: `三层拓扑自愈同步完成: ${res.message || 'OK'}` });
-      await fetchHubData();
-    } catch (err: any) {
-      setStatusMsg({ type: 'error', text: `同步失败: ${err.message}` });
-    } finally {
-      setActionLoading(null);
-    }
-  };
 
   // Trigger Snapshot Warmup (PR #22 / Issue #21)
   const handleWarmupSnapshots = async () => {
@@ -407,16 +393,16 @@ export const SubStoreHub: React.FC = () => {
 
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={handleSyncThreeTier}
+              onClick={handleSyncFiveGroups}
               disabled={!!actionLoading}
               className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition shadow-2xs"
             >
-              {actionLoading === 'sync-threetier' ? (
+              {actionLoading === 'sync-five' ? (
                 <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
               ) : (
                 <RotateCw className="w-3.5 h-3.5 mr-1.5" />
               )}
-              一键三层拓扑自愈同步
+              一键五维拓扑自愈同步
             </button>
           </div>
         </div>

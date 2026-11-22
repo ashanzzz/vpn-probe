@@ -348,6 +348,32 @@ func TestClient_PurgeLegacyThreeTierSubs(t *testing.T) {
 	}
 }
 
+func TestClient_PurgeLegacyThreeTierSubs_ResourceNotFoundOn500(t *testing.T) {
+	// 模拟 Sub-Store 在资源不存在时返回 500 内部错误，但附带 ResourceNotFoundError
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"status":"failed","error":{"code":"RESOURCE_NOT_FOUND","type":"ResourceNotFoundError","message":"Subscription does not exist!"}}`))
+	}))
+	defer ts.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled:  true,
+		URL:      ts.URL,
+		Username: "ashan",
+		Password: "password",
+	}
+	c := NewClient(cfg)
+	c.SetHTTPClient(ts.Client())
+
+	count, err := c.PurgeLegacyThreeTierSubs(context.Background())
+	if err != nil {
+		t.Fatalf("expected PurgeLegacyThreeTierSubs to succeed idempotently on 500 ResourceNotFoundError, got: %v", err)
+	}
+	if count != len(LegacyThreeTierSubNames) {
+		t.Errorf("expected count %d, got %d", len(LegacyThreeTierSubNames), count)
+	}
+}
+
 func TestResolveFallbackURL(t *testing.T) {
 	cases := []struct {
 		name     string

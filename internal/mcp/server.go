@@ -93,11 +93,16 @@ func (m *MCPServer) registerTools() {
 	)
 	m.server.AddTool(speedtestTool, m.handleSpeedtestNode)
 
-	// 7. substore_sync_threetier (三层独立架构 Sub-Store 一键同步)
-	threetierTool := mcp.NewTool("substore_sync_threetier",
-		mcp.WithDescription("触发 Sub-Store 三层架构订阅原子同步：更新【线路机-直连】、【家宽机-直连】、【线路➔家宽链式代理】3 个独立订阅并自动组装总合集 ashan-master。"),
+	// 7. substore_sync_fivegroups & substore_sync_threetier (Sub-Store 拓扑自愈与五维策略组同步)
+	fivegroupsTool := mcp.NewTool("substore_sync_fivegroups",
+		mcp.WithDescription("触发 Sub-Store 方案B自建五维策略组（线路机、美区全家桶、日区全家桶、其他、送中）原子同步与全量拓扑自愈整理。"),
 	)
-	m.server.AddTool(threetierTool, m.handleSyncThreeTier)
+	m.server.AddTool(fivegroupsTool, m.handleSyncFiveGroups)
+
+	threetierTool := mcp.NewTool("substore_sync_threetier",
+		mcp.WithDescription("【平滑兼容】触发 Sub-Store 拓扑自愈与五维策略组原子同步 (已升级取代历史三层架构)。"),
+	)
+	m.server.AddTool(threetierTool, m.handleSyncFiveGroups)
 }
 
 func (m *MCPServer) handleProbeLinks(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -361,7 +366,7 @@ func (m *MCPServer) handleSpeedtestNode(ctx context.Context, request mcp.CallToo
 	return mcp.NewToolResultText(string(b)), nil
 }
 
-func (m *MCPServer) handleSyncThreeTier(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (m *MCPServer) handleSyncFiveGroups(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if m.substoreClient == nil || !m.cfg.SubStore.Enabled {
 		return mcp.NewToolResultError("SubStore integration is disabled"), nil
 	}
@@ -373,5 +378,5 @@ func (m *MCPServer) handleSyncThreeTier(ctx context.Context, request mcp.CallToo
 	}
 
 	b, _ := json.MarshalIndent(audit, "", "  ")
-	return mcp.NewToolResultText(fmt.Sprintf("Sub-Store 3-Tier topology synchronized and organized successfully:\n%s", string(b))), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Sub-Store Five-Group topology synchronized and organized successfully:\n%s", string(b))), nil
 }

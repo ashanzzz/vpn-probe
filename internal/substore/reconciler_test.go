@@ -248,6 +248,9 @@ func TestDeleteItem_IdempotentOn404(t *testing.T) {
 		case "/api/sub/broken-sub":
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{"status":"error","message":"database crash"}`))
+		case "/api/sub/notfound-500-sub":
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"status":"failed","error":{"code":"RESOURCE_NOT_FOUND","type":"ResourceNotFoundError","message":"Subscription does not exist!"}}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -269,7 +272,12 @@ func TestDeleteItem_IdempotentOn404(t *testing.T) {
 		t.Fatalf("expected nil (idempotent) for 404 Not Found delete, got: %v", err)
 	}
 
-	// 3. 500 Internal Server Error should still return an error
+	// 3. 500 with ResourceNotFoundError should also be treated as success (idempotent delete)
+	if err := client.DeleteItem(context.Background(), "subs", "notfound-500-sub"); err != nil {
+		t.Fatalf("expected nil (idempotent) for 500 ResourceNotFoundError delete, got: %v", err)
+	}
+
+	// 4. 500 Internal Server Error with general crash should still return an error
 	if err := client.DeleteItem(context.Background(), "subs", "broken-sub"); err == nil {
 		t.Fatalf("expected error for 500 error, got nil")
 	}

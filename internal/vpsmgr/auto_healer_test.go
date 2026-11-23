@@ -2,6 +2,7 @@ package vpsmgr
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -211,7 +212,7 @@ func TestExecutePortHeal_DockerSingbox_Success(t *testing.T) {
 		if strings.Contains(cmd, "cp /opt/sb-mgr/config.json /opt/sb-mgr/config.json.bak") {
 			foundBackup = true
 		}
-		if strings.Contains(cmd, "sed -i 's/\"listen_port\": 30000/\"listen_port\": 45000/g' /opt/sb-mgr/config.json") {
+		if strings.Contains(cmd, `sed -i -E 's/"(listen_port|port)":\s*30000`) {
 			foundSed = true
 		}
 		if strings.Contains(cmd, "docker exec sb-mgr sing-box check -c /etc/sing-box/config.json") {
@@ -272,5 +273,56 @@ func TestExecutePortHeal_NativeSingbox_Success(t *testing.T) {
 	if !foundBackup || !foundCheck || !foundSystemctl {
 		t.Fatalf("missing expected native step: backup=%v check=%v systemctl=%v. Commands: %v",
 			foundBackup, foundCheck, foundSystemctl, executedCmds)
+	}
+}
+
+func TestExecutePortHeal_Xray_PortReplacementAndRollback(t *testing.T) {
+	var executedCmds []string
+	det := NewDetector(nil)
+	det.SetSSHRunner(func(inst *VPSInstance, cmd string) (string, error) {
+		executedCmds = append(executedCmds, cmd)
+		if strings.Contains(cmd, "docker ps") {
+			return "/usr/bin/xray\n", nil
+		}
+		if strings.Contains(cmd, "echo 'busy' || echo 'free'") {
+			return "free\n", nil
+		}
+		if strings.Contains(cmd, "xray -test") {
+			return "syntax error on line 42", fmt.Errorf("exit status 1")
+		}
+		return "", nil
+	})
+
+	healer := NewAutoHealer(det, nil, "")
+	inst := &VPSInstance{
+		ID:   "vps-xray",
+		Name: "Xray VPS",
+		IP:   "9.9.9.9",
+	}
+
+	ctx := context.Background()
+	resp, err := healer.ExecutePortHeal(ctx, inst, "Self-Xray-1", "vless://uuid@9.9.9.9:10000#Self-Xray-1", 20000)
+	if err == nil {
+		t.Fatalf("expected ExecutePortHeal to fail due to preflight check, got nil error")
+	}
+	if resp == nil || resp.Success {
+		t.Fatalf("expected resp.Success to be false")
+	}
+
+	// 验证包含针对 xray 的 "port" 正则替换，并在检测失败时执行了 cp .bak 还原
+	var foundXraySed, foundRollback bool
+	for _, cmd := range executedCmds {
+		if strings.Contains(cmd, `"port":\s*10000`) {
+			foundXraySed = true
+		}
+		if strings.Contains(cmd, "cp /etc/xray/config.json.bak /etc/xray/config.json") {
+			foundRollback = true
+		}
+	}
+	if !foundXraySed {
+		t.Errorf("expected xray sed command targeting 'port': %v", executedCmds)
+	}
+	if !foundRollback {
+		t.Errorf("expected atomic rollback cp .bak: %v", executedCmds)
 	}
 }

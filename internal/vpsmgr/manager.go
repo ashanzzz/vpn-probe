@@ -456,11 +456,11 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 				cfgDir = filepath.Dir(softInfo.ConfigPath)
 			}
 			updateCmd = fmt.Sprintf("docker pull ghcr.io/mhsanaei/3x-ui:latest && "+
-				"docker rename %s %s-old && docker stop %s-old && "+
+				"docker rm -f %s-old 2>/dev/null; docker rename %s %s-old && docker stop %s-old && "+
 				"(docker run -d --name %s --restart always --net=host -v %s:/etc/x-ui ghcr.io/mhsanaei/3x-ui:latest || "+
 				"(docker rm -f %s 2>/dev/null; docker rename %s-old %s; docker start %s; exit 1)) && "+
 				"docker rm -f %s-old",
-				cName, cName, cName,
+				cName, cName, cName, cName,
 				cName, cfgDir,
 				cName, cName, cName, cName,
 				cName)
@@ -470,11 +470,11 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 				cfgDir = filepath.Dir(softInfo.ConfigPath)
 			}
 			updateCmd = fmt.Sprintf("docker pull ghcr.io/xtls/xray-core:latest && "+
-				"docker rename %s %s-old && docker stop %s-old && "+
+				"docker rm -f %s-old 2>/dev/null; docker rename %s %s-old && docker stop %s-old && "+
 				"(docker run -d --name %s --restart always --net=host -v %s:/etc/xray ghcr.io/xtls/xray-core:latest run -c /etc/xray/config.json || "+
 				"(docker rm -f %s 2>/dev/null; docker rename %s-old %s; docker start %s; exit 1)) && "+
 				"docker rm -f %s-old",
-				cName, cName, cName,
+				cName, cName, cName, cName,
 				cName, cfgDir,
 				cName, cName, cName, cName,
 				cName)
@@ -485,11 +485,11 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 				cfgDir = filepath.Dir(softInfo.ConfigPath)
 			}
 			updateCmd = fmt.Sprintf("docker pull ghcr.io/sagernet/sing-box:latest && "+
-				"docker rename %s %s-old && docker stop %s-old && "+
+				"docker rm -f %s-old 2>/dev/null; docker rename %s %s-old && docker stop %s-old && "+
 				"(docker run -d --name %s --restart always --net=host -v %s:/etc/sing-box ghcr.io/sagernet/sing-box:latest run -c /etc/sing-box/config.json || "+
 				"(docker rm -f %s 2>/dev/null; docker rename %s-old %s; docker start %s; exit 1)) && "+
 				"docker rm -f %s-old",
-				cName, cName, cName,
+				cName, cName, cName, cName,
 				cName, cfgDir,
 				cName, cName, cName, cName,
 				cName)

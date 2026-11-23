@@ -221,14 +221,20 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 		}
 	} else {
 		// JSON 文本配置 (sing-box / xray)
-		replaceCmd := fmt.Sprintf("sed -i 's/\"listen_port\": %d/\"listen_port\": %d/g' %s", oldPort, newPort, activeFile)
+		// sing-box 使用 "listen_port": <int>，xray 入站使用 "port": <int>
+		var replaceCmd string
+		if softInfo.SoftwareType == "xray" {
+			replaceCmd = fmt.Sprintf("sed -i -E 's/\"port\":\\s*%d/\"port\": %d/g' %s", oldPort, newPort, activeFile)
+		} else {
+			replaceCmd = fmt.Sprintf("sed -i -E 's/\"(listen_port|port)\":\\s*%d/\"\\1\": %d/g' %s", oldPort, newPort, activeFile)
+		}
 		if _, err := h.detector.RunSSH(inst, replaceCmd); err != nil {
 			h.detector.RunSSH(inst, fmt.Sprintf("cp %s.bak %s", activeFile, activeFile))
 			resp.Message = fmt.Sprintf("failed to modify port in config: %v", err)
 			return resp, err
 		}
 
-		// 强校验预检 (Preflight Check)
+		// 强校验预检 (Preflight Check，真实检验语法状态，失败触发原子回滚)
 		var checkCmd string
 		if softInfo.DeployMode == "docker" {
 			cName := softInfo.ContainerName
@@ -236,13 +242,13 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 				cName = "sb-mgr"
 			}
 			if softInfo.SoftwareType == "xray" {
-				checkCmd = fmt.Sprintf("docker exec %s xray -test -config /etc/xray/config.json 2>/dev/null || true", cName)
+				checkCmd = fmt.Sprintf("docker exec %s xray -test -config /etc/xray/config.json", cName)
 			} else {
 				checkCmd = fmt.Sprintf("docker exec %s sing-box check -c /etc/sing-box/config.json", cName)
 			}
 		} else {
 			if softInfo.SoftwareType == "xray" {
-				checkCmd = fmt.Sprintf("xray -test -config %s 2>/dev/null || true", activeFile)
+				checkCmd = fmt.Sprintf("xray -test -config %s", activeFile)
 			} else {
 				checkCmd = fmt.Sprintf("sing-box check -c %s", activeFile)
 			}

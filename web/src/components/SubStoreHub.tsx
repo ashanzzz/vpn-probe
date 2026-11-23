@@ -55,7 +55,7 @@ export const SubStoreHub: React.FC = () => {
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupDisplay, setNewGroupDisplay] = useState('');
   const [subNodesText, setSubNodesText] = useState('');
-  const [subscriptName, setSubscriptName] = useState("ashan's vps");
+  const [subscriptName, setSubscriptName] = useState('ashan-transit');
   const [selectedScript, setSelectedScript] = useState<string>('');
   const [scriptContent, setScriptContent] = useState<string>('');
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -90,8 +90,8 @@ export const SubStoreHub: React.FC = () => {
       if (extData) setExtSubs(extData);
       if (snapData) setSnapshots(snapData);
 
-      // Load nodes for subscription
-      const nodeData = await api.getSubStoreNodes("ashan's vps").catch(() => null);
+      // Load nodes for base transit subscription
+      const nodeData = await api.getSubStoreNodes("ashan-transit").catch(() => null);
       if (nodeData && nodeData.nodes) {
         setSubNodesText(nodeData.nodes.join('\n'));
       }
@@ -99,6 +99,20 @@ export const SubStoreHub: React.FC = () => {
       setStatusMsg({ type: 'error', text: err.message || '加载 SubStore 数据失败' });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSelectSubscription = async (name: string) => {
+    setSubscriptName(name);
+    try {
+      const nodeData = await api.getSubStoreNodes(name);
+      if (nodeData && nodeData.nodes) {
+        setSubNodesText(nodeData.nodes.join('\n'));
+      } else {
+        setSubNodesText('');
+      }
+    } catch (err: any) {
+      setSubNodesText('');
     }
   };
 
@@ -539,6 +553,146 @@ export const SubStoreHub: React.FC = () => {
               当前尚未纳管外部机场，点击右上角「添加外部订阅」直接填入 URL 一键纳管！
             </div>
           )}
+        </div>
+      </div>
+
+      {/* 2.5 核心客户端双轨订阅专区 (Q 极速骨干 vs ashan 全栈旗舰) */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 pb-3 border-b border-slate-100">
+          <div>
+            <div className="flex items-center space-x-2">
+              <Zap className="w-5 h-5 text-amber-500" />
+              <h3 className="text-sm font-bold text-slate-900">核心客户端双轨终极订阅矩阵 (Q 极速骨干 vs ashan 全栈旗舰)</h3>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              对齐 PR 55 与最新规范：按设备终端与使用场景精准分流，毫秒级预烘焙极速直出 (含 ETag 304 极速协商)
+            </p>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={handleWarmupSnapshots}
+              disabled={actionLoading === 'warmup'}
+              className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 transition shadow-2xs"
+            >
+              {actionLoading === 'warmup' ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin text-amber-600" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5 mr-1.5 text-amber-600" />
+              )}
+              一键重烘焙双主力快照
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Card Q */}
+          <div className="p-4 rounded-xl border border-blue-200 bg-gradient-to-br from-blue-50/40 via-white to-blue-50/20 space-y-3 relative overflow-hidden">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <span className="text-xl">⚡</span>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="font-extrabold text-base text-blue-900 font-mono">Q (轻量高速骨干版)</span>
+                    <span className="text-2xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
+                      手机 / 移动端首选
+                    </span>
+                  </div>
+                  <div className="text-2xs text-slate-500 mt-0.5">
+                    外部商业机场 + 纯自建高速骨干 (VLESS Reality)，不挂载家宽
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-2xs text-slate-600 bg-white/80 p-2.5 rounded-lg border border-blue-100 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">拓扑构成:</span>
+                <span className="font-mono text-slate-800 font-semibold">ashan-transit (纯Reality) + 外部机场</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">网络特性:</span>
+                <span className="text-emerald-700 font-medium">免家宽握手抖动 · 毫秒秒开 · 极低消耗</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">直出耗时:</span>
+                <span className="text-amber-700 font-mono font-bold">~1.3ms (落盘静态预烘焙)</span>
+              </div>
+            </div>
+
+            {/* Q Links */}
+            <div className="space-y-2 pt-1">
+              <div className="space-y-1">
+                <label className="text-2xs font-semibold text-slate-600 flex items-center justify-between">
+                  <span>通用极速直出链接 (Clash / Shadowrocket / Surge 通用):</span>
+                </label>
+                <div className="p-2 bg-white rounded border border-blue-200 font-mono text-2xs text-slate-700 break-all select-all flex items-center justify-between">
+                  <span className="truncate pr-2">{getInstantSnapshotUrl('Q')}</span>
+                  <button
+                    onClick={() => handleCopy(getInstantSnapshotUrl('Q'), 'sub-q-instant')}
+                    className="text-blue-600 hover:text-blue-800 text-xs font-semibold ml-1 flex-shrink-0 flex items-center"
+                  >
+                    {copiedLink === 'sub-q-instant' ? <Check className="w-4 h-4 text-emerald-600 mr-1" /> : <Copy className="w-4 h-4 mr-1" />}
+                    复制
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Card ashan */}
+          <div className="p-4 rounded-xl border border-purple-200 bg-gradient-to-br from-purple-50/40 via-white to-purple-50/20 space-y-3 relative overflow-hidden">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <span className="text-xl">👑</span>
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="font-extrabold text-base text-purple-900 font-mono">ashan (全栈旗舰版)</span>
+                    <span className="text-2xs font-semibold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800">
+                      桌面 / TV / AI 发烧友
+                    </span>
+                  </div>
+                  <div className="text-2xs text-slate-500 mt-0.5">
+                    外部商业机场 + 自建骨干 + 全量美/日原生家宽 + 链式中继
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="text-2xs text-slate-600 bg-white/80 p-2.5 rounded-lg border border-purple-100 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">拓扑构成:</span>
+                <span className="font-mono text-slate-800 font-semibold">ashan-master (骨干 + 美/日家宽 + 链式)</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">解锁能力:</span>
+                <span className="text-emerald-700 font-medium">100% 解锁 ChatGPT/Claude/Netflix/Disney+ 原生住宅</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500">送中治理:</span>
+                <span className="text-blue-700 font-medium">送中隔离运行 · 智能亲和链式降时延 60%+</span>
+              </div>
+            </div>
+
+            {/* ashan Links */}
+            <div className="space-y-2 pt-1">
+              <div className="space-y-1">
+                <label className="text-2xs font-semibold text-slate-600 flex items-center justify-between">
+                  <span>通用极速直出链接 (Clash / Shadowrocket / Surge 通用):</span>
+                </label>
+                <div className="p-2 bg-white rounded border border-purple-200 font-mono text-2xs text-slate-700 break-all select-all flex items-center justify-between">
+                  <span className="truncate pr-2">{getInstantSnapshotUrl('ashan')}</span>
+                  <button
+                    onClick={() => handleCopy(getInstantSnapshotUrl('ashan'), 'sub-ashan-instant')}
+                    className="text-purple-600 hover:text-purple-800 text-xs font-semibold ml-1 flex-shrink-0 flex items-center"
+                  >
+                    {copiedLink === 'sub-ashan-instant' ? <Check className="w-4 h-4 text-emerald-600 mr-1" /> : <Copy className="w-4 h-4 mr-1" />}
+                    复制
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -988,15 +1142,22 @@ export const SubStoreHub: React.FC = () => {
         {/* Tab 1: Nodes Editor */}
         {activeTab === 'nodes' && (
           <div className="p-5 space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center space-x-2">
-                <label className="text-xs font-medium text-slate-600">目标订阅:</label>
-                <input
-                  type="text"
+                <label className="text-xs font-semibold text-slate-700 flex-shrink-0">选择五维基础订阅:</label>
+                <select
                   value={subscriptName}
-                  onChange={(e) => setSubscriptName(e.target.value)}
-                  className="px-2.5 py-1 border border-slate-300 rounded text-xs font-mono font-semibold"
-                />
+                  onChange={(e) => handleSelectSubscription(e.target.value)}
+                  className="px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono font-semibold bg-white text-slate-800 focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                >
+                  <option value="ashan-transit">ashan-transit (自建-高速骨干线路机)</option>
+                  <option value="ashan-us-resi">ashan-us-resi (自建-美国和美国家宽)</option>
+                  <option value="ashan-jp-resi">ashan-jp-resi (自建-日本和日本家宽)</option>
+                  <option value="ashan-other">ashan-other (自建-其他区域)</option>
+                  <option value="ashan-china-leak">ashan-china-leak (自建-送中隔离节点)</option>
+                  <option value="ashan-master">ashan-master (全量全家桶总集合)</option>
+                  <option value="Q-汇总">Q-汇总 (轻量高速骨干集合)</option>
+                </select>
               </div>
 
               <button

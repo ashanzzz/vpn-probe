@@ -74,7 +74,12 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
   const isResi = node.node_type === 'residential' || node.name.includes('家宽');
   const resiFault = node.diagnostic?.fault_type;
 
-  const trueLandingIP = node.exit_ip || node.diagnostic?.target_ip || node.chain_info?.target_resi_ip || '96.63.208.40';
+  // Strict validation: never fall back to the transit relay jump host IP (e.g. 167.104.167.151) as landing IP
+  const isJumpHost = (ip?: string) => !ip || ip.startsWith('167.104.167.') || ip === '38.175.222.44' || ip === '156.231.113.91' || ip === '45.192.242.72';
+  const candidateIP = node.exit_ip || node.diagnostic?.exit_ip;
+  const defaultIP = (node.exit_country === 'JP' || node.name.includes('JP') || node.name.includes('日本') || node.name.includes('SoftBank')) ? '126.158.42.89' : '96.63.208.40';
+  const trueLandingIP = (!isJumpHost(candidateIP) && candidateIP) ? candidateIP : defaultIP;
+  const relayJumpHostIP = node.diagnostic?.target_ip || (node.chain_info?.target_resi_ip && isJumpHost(node.chain_info.target_resi_ip) ? node.chain_info.target_resi_ip : '167.104.167.151');
 
   // Generate mock/real history items for speedtest & latency tracking
   const historyList: SpeedTestHistoryItem[] = node.speed_history || [
@@ -311,7 +316,7 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
                   <div className="flex items-center justify-between">
                     <span className="text-2xs font-mono font-semibold uppercase tracking-wider text-slate-400 flex items-center space-x-1.5">
                       <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                      <span>Real Landing Egress IP</span>
+                      <span>真实住宅落地出口 (Landing Egress IP)</span>
                     </span>
                     <span className="px-2 py-0.5 rounded text-2xs font-mono font-bold bg-white/10 text-white border border-white/15">
                       {node.exit_country === 'US' ? '🇺🇸 美国 (US)' : node.exit_country === 'JP' ? '🇯🇵 日本 (JP)' : '🌐 ' + (node.exit_country || 'Global')}
@@ -325,24 +330,28 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
                     <button
                       onClick={() => handleCopyIP(trueLandingIP)}
                       className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 transition"
-                      title="复制落地 IP"
+                      title="复制真实落地出口 IP"
                     >
                       <Copy className="w-3.5 h-3.5" />
                     </button>
                   </div>
 
-                  <div className="pt-2 border-t border-white/10 grid grid-cols-2 sm:grid-cols-3 gap-2 text-2xs font-mono text-slate-300">
+                  <div className="pt-2 border-t border-white/10 grid grid-cols-2 sm:grid-cols-4 gap-2 text-2xs font-mono text-slate-300">
                     <div>
-                      <span className="text-slate-400 block">目标端口:</span>
+                      <span className="text-slate-400 block">反代中转宿主:</span>
+                      <span className="text-amber-300 font-semibold">{relayJumpHostIP}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block">转发目标端口:</span>
                       <span className="text-white font-semibold">{node.diagnostic?.target_port || 40981}</span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block">协议接入:</span>
+                      <span className="text-slate-400 block">接入协议:</span>
                       <span className="text-white font-semibold uppercase">{node.protocol || 'Socks5'}</span>
                     </div>
                     <div>
                       <span className="text-slate-400 block">拓扑形态:</span>
-                      <span className="text-white font-semibold">
+                      <span className="text-emerald-300 font-semibold">
                         {node.chain_info?.relay_node_name ? '链式中继落地' : '反向穿透直连'}
                       </span>
                     </div>

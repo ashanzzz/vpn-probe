@@ -27,14 +27,23 @@ func (c *Client) SyncProfileToSubStore(ctx context.Context, p *model.Subscriptio
 		allSubs = append(allSubs, subs...)
 	}
 
-	// 2. 外部商业机场包含控制
+	// 2. 外部商业机场包含控制 (动态读取配置的外部源，对齐 Issue #18 & #19)
+	extSources := c.GetExternalSources()
+	if len(extSources) == 0 {
+		extSources = []string{"蜂窝云"}
+	}
+	extSet := make(map[string]bool)
+	for _, s := range extSources {
+		extSet[s] = true
+	}
+
 	if p.IncludeExternal {
-		allSubs = append(allSubs, "蜂窝云")
+		allSubs = append(allSubs, extSources...)
 	} else {
-		// 显式剔除外部机场
+		// 显式剔除所有外部机场
 		var filtered []string
 		for _, s := range allSubs {
-			if s != "蜂窝云" {
+			if !extSet[s] && s != "蜂窝云" {
 				filtered = append(filtered, s)
 			}
 		}

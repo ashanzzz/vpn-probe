@@ -2,11 +2,18 @@ package vpsmgr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"vpn-probe/internal/config"
 	"vpn-probe/internal/model"
+	"vpn-probe/internal/substore"
 )
 
 func TestDiagnoseNode_PortBlocked(t *testing.T) {
@@ -354,5 +361,242 @@ func TestExecutePortHeal_Xray_PortReplacementAndRollback(t *testing.T) {
 	}
 	if !foundRollback {
 		t.Errorf("expected atomic rollback cp .bak: %v", executedCmds)
+	}
+}
+
+func TestAutoHealer_UpdateLocalConfigYAML_AtomicAndBackup(t *testing.T) {
+	tmpDir := t.TempDir()
+	confPath := filepath.Join(tmpDir, "config.yaml")
+
+	initialYAML := `server:
+  port: 8080
+monitor:
+  nodes:
+    - name: US-Test
+      url: "vless://u@1.2.3.4:22222#US-Test"
+`
+	if err := os.WriteFile(confPath, []byte(initialYAML), 0644); err != nil {
+		t.Fatalf("failed to write initial config: %v", err)
+	}
+
+	healer := &AutoHealer{configPath: confPath}
+	oldURL := "vless://u@1.2.3.4:22222#US-Test"
+	newURL := "vless://u@1.2.3.4:33333#US-Test"
+
+	if err := healer.updateLocalConfigYAML(oldURL, newURL); err != nil {
+		t.Fatalf("updateLocalConfigYAML failed: %v", err)
+	}
+
+	// 验证内容已替换
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("read updated config: %v", err)
+	}
+	if !strings.Contains(string(data), newURL) || strings.Contains(string(data), oldURL) {
+		t.Errorf("config.yaml not updated properly: %s", string(data))
+	}
+
+	// 验证 .bak 备份已生成且包含 oldURL
+	bakData, err := os.ReadFile(confPath + ".bak")
+	if err != nil {
+		t.Fatalf("backup file not created: %v", err)
+	}
+	if !strings.Contains(string(bakData), oldURL) {
+		t.Errorf("backup file does not contain oldURL: %s", string(bakData))
+	}
+}
+
+func TestAutoHealer_UpdateSubStoreSubscription_TransitAndLegacy(t *testing.T) {
+	updatedSubs := make(map[string]string)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "GET" && r.URL.Path == "/api/subs" {
+			// 返回包含 ashan-transit 与 ashan's vps 的订阅列表
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success","data":[
+				{"name":"ashan-transit","content":"vless://u@1.2.3.4:20000#Transit-1"},
+				{"name":"ashan's vps","content":"vless://u@1.2.3.4:20000#Legacy-1"}
+			]}`))
+			return
+		}
+		if r.Method == "PATCH" && strings.HasPrefix(r.URL.Path, "/api/sub/") {
+			subName := strings.TrimPrefix(r.URL.Path, "/api/sub/")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success"}`))
+			updatedSubs[subName] = "updated"
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	sc := substore.NewClient(&config.SubStoreConfig{
+		Enabled: true,
+		URL:     server.URL,
+	})
+
+	healer := &AutoHealer{substoreClient: sc}
+	err := healer.updateSubStoreSubscription(context.Background(), 20000, 30000, "vless://u@1.2.3.4:20000#Transit-1", "vless://u@1.2.3.4:30000#Transit-1")
+	if err != nil {
+		t.Fatalf("updateSubStoreSubscription failed: %v", err)
+	}
+
+	if _, ok := updatedSubs["ashan-transit"]; !ok {
+		t.Errorf("expected ashan-transit to be updated, got: %v", updatedSubs)
+	}
+	if _, ok := updatedSubs["ashan's vps"]; !ok {
+		t.Errorf("expected ashan's vps to be updated, got: %v", updatedSubs)
+	}
+}
+
+func TestAutoHealer_UpdateSubStoreSubscription_DoNotOverwriteOtherNodesOnSamePort(t *testing.T) {
+	var finalContent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "GET" && r.URL.Path == "/api/subs" {
+			w.WriteHeader(http.StatusOK)
+			// Contains two nodes on port 443, plus another node on 1.2.3.4:4430!
+			w.Write([]byte(`{"status":"success","data":[
+				{"name":"ashan-transit","content":"vless://u@1.2.3.4:443#NodeA\nvless://u@5.6.7.8:443#NodeB\nvless://u@1.2.3.4:4430#NodeC"}
+			]}`))
+			return
+		}
+		if r.Method == "PATCH" && r.URL.Path == "/api/sub/ashan-transit" {
+			var body struct {
+				Content string `json:"content"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			finalContent = body.Content
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	sc := substore.NewClient(&config.SubStoreConfig{
+		Enabled: true,
+		URL:     server.URL,
+	})
+
+	healer := &AutoHealer{substoreClient: sc}
+	oldURL := "vless://u@1.2.3.4:443#NodeA"
+	newURL := "vless://u@1.2.3.4:34567#NodeA"
+
+	err := healer.updateSubStoreSubscription(context.Background(), 443, 34567, oldURL, newURL)
+	if err != nil {
+		t.Fatalf("updateSubStoreSubscription failed: %v", err)
+	}
+
+	// 验证 5.6.7.8:443 绝未被覆盖，1.2.3.4:443 成功替换为 34567，1.2.3.4:4430 绝未被覆盖
+	if !strings.Contains(finalContent, "vless://u@5.6.7.8:443#NodeB") {
+		t.Errorf("other node on 443 was overwritten! Content: %s", finalContent)
+	}
+	if !strings.Contains(finalContent, "vless://u@1.2.3.4:4430#NodeC") {
+		t.Errorf("node on 4430 was overwritten! Content: %s", finalContent)
+	}
+	if !strings.Contains(finalContent, newURL) {
+		t.Errorf("target node was not updated! Content: %s", finalContent)
+	}
+}
+
+func TestAutoHealer_RemoveNodeFromSubStore_PreciseHostMatch(t *testing.T) {
+	updatedContents := make(map[string]string)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "GET" && r.URL.Path == "/api/subs" {
+			w.WriteHeader(http.StatusOK)
+			// Contains target IP 1.2.3.4, prefix-sharing IP 1.2.3.45, and tag-referencing IP 9.9.9.9#Tag-1.2.3.4
+			content := "vless://u@1.2.3.4:443#TargetNode\n" +
+				"vless://u@1.2.3.45:443#PrefixNode\n" +
+				"vless://u@9.9.9.9:443#Relay-1.2.3.4"
+			w.Write([]byte(fmt.Sprintf(`{"status":"success","data":[{"name":"ashan-transit","content":%q}]}`, content)))
+			return
+		}
+		if r.Method == "PATCH" && r.URL.Path == "/api/sub/ashan-transit" {
+			var body struct {
+				Content string `json:"content"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			updatedContents["ashan-transit"] = body.Content
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	sc := substore.NewClient(&config.SubStoreConfig{
+		Enabled: true,
+		URL:     server.URL,
+	})
+
+	healer := &AutoHealer{substoreClient: sc}
+	removed, err := healer.RemoveNodeFromSubStore(context.Background(), "1.2.3.4")
+	if err != nil {
+		t.Fatalf("RemoveNodeFromSubStore failed: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected 1 removed, got %d", removed)
+	}
+
+	final := updatedContents["ashan-transit"]
+	if strings.Contains(final, "TargetNode") {
+		t.Errorf("expected TargetNode to be removed, got: %s", final)
+	}
+	if !strings.Contains(final, "1.2.3.45:443#PrefixNode") {
+		t.Errorf("PrefixNode was mistakenly removed! Content: %s", final)
+	}
+	if !strings.Contains(final, "9.9.9.9:443#Relay-1.2.3.4") {
+		t.Errorf("Relay with tag was mistakenly removed! Content: %s", final)
+	}
+}
+
+func TestAutoHealer_AddNodeToSubStore_PreventGhostSubCreation(t *testing.T) {
+	createdSubs := make(map[string]string)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "GET" && r.URL.Path == "/api/subs" {
+			// SubStore has NO subscriptions currently (both 404/empty)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success","data":[]}`))
+			return
+		}
+		if r.Method == "PATCH" && strings.HasPrefix(r.URL.Path, "/api/sub/") {
+			subName := strings.TrimPrefix(r.URL.Path, "/api/sub/")
+			var body struct {
+				Content string `json:"content"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			createdSubs[subName] = body.Content
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	sc := substore.NewClient(&config.SubStoreConfig{
+		Enabled: true,
+		URL:     server.URL,
+	})
+
+	healer := &AutoHealer{substoreClient: sc}
+	newNode := "vless://u@1.2.3.4:443#NewTransit"
+	err := healer.AddNodeToSubStore(context.Background(), newNode)
+	if err != nil {
+		t.Fatalf("AddNodeToSubStore failed: %v", err)
+	}
+
+	// 仅 ashan-transit 允许缺省创建
+	if _, ok := createdSubs["ashan-transit"]; !ok {
+		t.Errorf("expected ashan-transit to be created, got: %v", createdSubs)
+	}
+	// 历史废弃订阅 ashan's vps 绝不允许死灰复燃
+	if _, ok := createdSubs["ashan's vps"]; ok {
+		t.Errorf("ghost subscription ashan's vps must NOT be recreated! got: %v", createdSubs)
 	}
 }

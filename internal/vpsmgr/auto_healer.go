@@ -7,14 +7,15 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
 	"vpn-probe/internal/logger"
 	"vpn-probe/internal/model"
 	"vpn-probe/internal/substore"
-	"gopkg.in/yaml.v3"
 )
 
 type AutoHealer struct {
@@ -342,65 +343,133 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 	return resp, nil
 }
 
-// updateSubStoreSubscription 将换端口后的新节点同步至 SubStore 主订阅
+// updateSubStoreSubscription 将换端口后的新节点同步至 SubStore 主订阅 (同时兼容 ashan-transit 与历史 ashan's vps)
 func (h *AutoHealer) updateSubStoreSubscription(ctx context.Context, oldPort, newPort int, oldURL, newURL string) error {
-	content, err := h.substoreClient.GetSubscriptionContent(ctx, "ashan's vps")
-	if err != nil {
-		return fmt.Errorf("get sub content: %w", err)
+	if h.substoreClient == nil {
+		return nil
+	}
+	targetSubs := []string{"ashan-transit", "ashan's vps"}
+	var updatedCount int
+	var lastErr error
+
+	var oldHost string
+	if u, err := url.Parse(oldURL); err == nil {
+		oldHost = u.Hostname()
 	}
 
-	lines := strings.Split(content, "\n")
-	var updatedLinks []string
-	var found bool
-	for _, line := range lines {
-		lineTrim := strings.TrimSpace(line)
-		if lineTrim == "" {
+	for _, subName := range targetSubs {
+		content, err := h.substoreClient.GetSubscriptionContent(ctx, subName)
+		if err != nil {
+			lastErr = err
 			continue
 		}
-		if lineTrim == oldURL || strings.Contains(lineTrim, fmt.Sprintf(":%d", oldPort)) {
+
+		lines := strings.Split(content, "\n")
+		var updatedLinks []string
+		var found bool
+		for _, line := range lines {
+			lineTrim := strings.TrimSpace(line)
+			if lineTrim == "" {
+				continue
+			}
+			isMatch := false
+			if lineTrim == oldURL {
+				isMatch = true
+			} else if oldHost != "" {
+				if u, err := url.Parse(lineTrim); err == nil && u.Host != "" {
+					if u.Hostname() == oldHost && u.Port() == strconv.Itoa(oldPort) {
+						isMatch = true
+					}
+				} else {
+					targetSubstrs := []string{
+						fmt.Sprintf("@%s:%d", oldHost, oldPort),
+						fmt.Sprintf("//%s:%d", oldHost, oldPort),
+					}
+					for _, targetSubstr := range targetSubstrs {
+						if idx := strings.Index(lineTrim, targetSubstr); idx != -1 {
+							rest := lineTrim[idx+len(targetSubstr):]
+							if len(rest) == 0 || rest[0] == '/' || rest[0] == '?' || rest[0] == '#' {
+								isMatch = true
+								break
+							}
+						}
+					}
+				}
+			}
+			if isMatch {
+				updatedLinks = append(updatedLinks, newURL)
+				found = true
+			} else {
+				updatedLinks = append(updatedLinks, lineTrim)
+			}
+		}
+
+		if !found {
 			updatedLinks = append(updatedLinks, newURL)
-			found = true
+		}
+
+		if err := h.substoreClient.UpdateSubscriptionNodes(ctx, subName, updatedLinks); err == nil {
+			updatedCount++
 		} else {
-			updatedLinks = append(updatedLinks, lineTrim)
+			lastErr = err
 		}
 	}
 
-	if !found {
-		updatedLinks = append(updatedLinks, newURL)
+	if updatedCount == 0 && lastErr != nil {
+		return fmt.Errorf("get/update sub content: %w", lastErr)
 	}
-
-	return h.substoreClient.UpdateSubscriptionNodes(ctx, "ashan's vps", updatedLinks)
+	return nil
 }
 
-// AddNodeToSubStore 将新安装节点追加同步至 SubStore 主订阅
+// AddNodeToSubStore 将新安装节点追加同步至 SubStore 主订阅 (同时维护 ashan-transit 与历史 ashan's vps)
 func (h *AutoHealer) AddNodeToSubStore(ctx context.Context, newURL string) error {
 	if h.substoreClient == nil || newURL == "" {
 		return nil
 	}
-	content, err := h.substoreClient.GetSubscriptionContent(ctx, "ashan's vps")
-	if err != nil {
-		// 若获取失败，直接新建列表并更新
-		return h.substoreClient.UpdateSubscriptionNodes(ctx, "ashan's vps", []string{newURL})
-	}
-
-	lines := strings.Split(content, "\n")
-	var updatedLinks []string
-	var found bool
-	for _, line := range lines {
-		lineTrim := strings.TrimSpace(line)
-		if lineTrim == "" {
+	targetSubs := []string{"ashan-transit", "ashan's vps"}
+	var successCount int
+	var lastErr error
+	for _, subName := range targetSubs {
+		content, err := h.substoreClient.GetSubscriptionContent(ctx, subName)
+		if err != nil {
+			// 若获取失败，仅主订阅 ashan-transit 尝试创建，避免幽灵历史订阅死灰复燃
+			if subName == "ashan-transit" {
+				if updateErr := h.substoreClient.UpdateSubscriptionNodes(ctx, subName, []string{newURL}); updateErr == nil {
+					successCount++
+				} else {
+					lastErr = updateErr
+				}
+			}
 			continue
 		}
-		if lineTrim == newURL {
-			found = true
-		}
-		updatedLinks = append(updatedLinks, lineTrim)
-	}
-	if !found {
-		updatedLinks = append(updatedLinks, newURL)
-	}
 
-	return h.substoreClient.UpdateSubscriptionNodes(ctx, "ashan's vps", updatedLinks)
+		lines := strings.Split(content, "\n")
+		var updatedLinks []string
+		var found bool
+		for _, line := range lines {
+			lineTrim := strings.TrimSpace(line)
+			if lineTrim == "" {
+				continue
+			}
+			if lineTrim == newURL {
+				found = true
+			}
+			updatedLinks = append(updatedLinks, lineTrim)
+		}
+		if !found {
+			updatedLinks = append(updatedLinks, newURL)
+		}
+
+		if updateErr := h.substoreClient.UpdateSubscriptionNodes(ctx, subName, updatedLinks); updateErr == nil {
+			successCount++
+		} else {
+			lastErr = updateErr
+		}
+	}
+	if successCount == 0 && lastErr != nil {
+		return fmt.Errorf("add node to substore: %w", lastErr)
+	}
+	return nil
 }
 
 // RemoveNodeFromSubStore 从 SubStore 订阅中下架属于指定 IP 的所有节点
@@ -408,38 +477,53 @@ func (h *AutoHealer) RemoveNodeFromSubStore(ctx context.Context, targetIP string
 	if h.substoreClient == nil || targetIP == "" {
 		return 0, nil
 	}
-	content, err := h.substoreClient.GetSubscriptionContent(ctx, "ashan's vps")
-	if err != nil {
-		return 0, fmt.Errorf("get sub content: %w", err)
-	}
-
-	lines := strings.Split(content, "\n")
-	var remainingLinks []string
-	var removedCount int
-
-	for _, line := range lines {
-		lineTrim := strings.TrimSpace(line)
-		if lineTrim == "" {
+	targetSubs := []string{"ashan-transit", "ashan's vps"}
+	var totalRemoved int
+	for _, subName := range targetSubs {
+		content, err := h.substoreClient.GetSubscriptionContent(ctx, subName)
+		if err != nil {
 			continue
 		}
-		if strings.Contains(lineTrim, targetIP) {
-			removedCount++
-		} else {
-			remainingLinks = append(remainingLinks, lineTrim)
+
+		lines := strings.Split(content, "\n")
+		var remainingLinks []string
+		var removedCount int
+
+		for _, line := range lines {
+			lineTrim := strings.TrimSpace(line)
+			if lineTrim == "" {
+				continue
+			}
+			isTarget := false
+			if u, err := url.Parse(lineTrim); err == nil && u.Host != "" {
+				if u.Hostname() == targetIP {
+					isTarget = true
+				}
+			} else if strings.Contains(lineTrim, "@"+targetIP+":") || strings.Contains(lineTrim, "//"+targetIP+":") || strings.Contains(lineTrim, "@"+targetIP+"?") {
+				isTarget = true
+			}
+			if isTarget {
+				removedCount++
+			} else {
+				remainingLinks = append(remainingLinks, lineTrim)
+			}
+		}
+
+		if removedCount > 0 {
+			if err := h.substoreClient.UpdateSubscriptionNodes(ctx, subName, remainingLinks); err == nil {
+				totalRemoved += removedCount
+			}
 		}
 	}
 
-	if removedCount > 0 {
-		if err := h.substoreClient.UpdateSubscriptionNodes(ctx, "ashan's vps", remainingLinks); err != nil {
-			return 0, fmt.Errorf("update sub after removing node: %w", err)
-		}
-	}
-
-	return removedCount, nil
+	return totalRemoved, nil
 }
 
 // updateLocalConfigYAML 更新本地 config.yaml 中的节点链接
 func (h *AutoHealer) updateLocalConfigYAML(oldURL, newURL string) error {
+	if h.configPath == "" {
+		return nil
+	}
 	data, err := os.ReadFile(h.configPath)
 	if err != nil {
 		return fmt.Errorf("read config file: %w", err)
@@ -454,7 +538,46 @@ func (h *AutoHealer) updateLocalConfigYAML(oldURL, newURL string) error {
 	content := string(data)
 	if strings.Contains(content, oldURL) {
 		newContent := strings.Replace(content, oldURL, newURL, 1)
-		return os.WriteFile(h.configPath, []byte(newContent), 0644)
+		bakPath := fmt.Sprintf("%s.bak", h.configPath)
+		_ = os.WriteFile(bakPath, data, 0600)
+		return atomicWriteFile(h.configPath, []byte(newContent), 0644)
+	}
+
+	return nil
+}
+
+func atomicWriteFile(filename string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	tmpFile, err := os.CreateTemp(dir, ".tmp-atomic-*")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmpFile.Name()
+	defer os.Remove(tmpName)
+	defer tmpFile.Close()
+
+	if err := tmpFile.Chmod(perm); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
+	if _, err := tmpFile.Write(data); err != nil {
+		return fmt.Errorf("write temp file: %w", err)
+	}
+
+	if err := tmpFile.Sync(); err != nil {
+		return fmt.Errorf("sync temp file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpName, filename); err != nil {
+		return fmt.Errorf("rename temp file to %s: %w", filename, err)
 	}
 
 	return nil

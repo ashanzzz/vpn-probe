@@ -444,13 +444,18 @@ func (c *Client) SyncFiveGroups(ctx context.Context, payload model.FiveGroupPayl
 		}
 	}
 
-	fiveSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak", "蜂窝云"}
+	masterSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
+	extSources := c.GetExternalSources()
+	if len(extSources) == 0 {
+		extSources = []string{"蜂窝云"}
+	}
+	masterSubs = deduplicate(append(masterSubs, extSources...))
 
 	// 1. 同步更新 ashan-master 总合集
 	masterPayload := map[string]any{
 		"name":                  "ashan-master",
 		"displayName":           "Ashan 总合集 (自建五维策略全景+外部机场)",
-		"subscriptions":         fiveSubs,
+		"subscriptions":         masterSubs,
 		"ignoreFailedRemoteSub": "quiet",
 	}
 	if err := c.UpdateCollection(ctx, "ashan-master", masterPayload); err != nil {
@@ -531,11 +536,16 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 	}
 
 	// 4. 确保总集合 ashan-master 存在并包含自建分组与外部机场
-	fiveSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak", "蜂窝云"}
+	masterSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
+	extSources := c.GetExternalSources()
+	if len(extSources) == 0 {
+		extSources = []string{"蜂窝云"}
+	}
+	masterSubs = deduplicate(append(masterSubs, extSources...))
 	masterPayload := map[string]any{
 		"name":                  "ashan-master",
 		"displayName":           "Ashan 总合集 (自建五维策略全景+外部机场)",
-		"subscriptions":         fiveSubs,
+		"subscriptions":         masterSubs,
 		"ignoreFailedRemoteSub": "quiet",
 	}
 	if err := c.UpdateCollection(ctx, "ashan-master", masterPayload); err != nil {

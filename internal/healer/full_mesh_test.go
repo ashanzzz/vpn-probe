@@ -121,3 +121,60 @@ func TestBuildFullMeshRegionalChains(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildFullMeshRegionalChains_ExcludeChinaExitAndMachineDown(t *testing.T) {
+	h := NewHealer(nil, nil)
+
+	transits := []*model.NodeProbeResult{
+		{
+			Name:        "Transit-Clean",
+			ExitCountry: "US",
+			Online:      true,
+		},
+		{
+			Name:        "Transit-ChinaExit",
+			ExitCountry: "US",
+			Online:      true,
+			ChinaExit:   true, // 送中，必须过滤
+		},
+	}
+
+	resis := []*model.NodeProbeResult{
+		{
+			Name:        "Resi-Clean",
+			OriginalURL: "socks5://u:***@1.2.3.4:1001#Resi-Clean",
+			ExitCountry: "US",
+			Online:      true,
+		},
+		{
+			Name:        "Resi-Dead",
+			OriginalURL: "socks5://u:***@1.2.3.4:1002#Resi-Dead",
+			ExitCountry: "US",
+			Online:      false,
+			Diagnostic:  &model.DiagnosticInfo{FaultType: model.FaultMachineDown}, // 宕机，必须过滤
+		},
+		{
+			Name:        "Resi-ChinaExit",
+			OriginalURL: "socks5://u:***@1.2.3.4:1003#Resi-ChinaExit",
+			ExitCountry: "US",
+			Online:      true,
+			ChinaExit:   true, // 送中，必须过滤
+		},
+	}
+
+	chains := h.BuildFullMeshRegionalChains(transits, resis)
+	// 只有 1 个 Clean Transit × 1 个 Clean Resi = 1 chain
+	if len(chains) != 1 {
+		t.Fatalf("expected 1 chain, got %d: %v", len(chains), chains)
+	}
+
+	if strings.Contains(chains[0], "Transit-ChinaExit") {
+		t.Errorf("chain contains ChinaExit transit: %s", chains[0])
+	}
+	if strings.Contains(chains[0], "Resi-Dead") {
+		t.Errorf("chain contains dead resi: %s", chains[0])
+	}
+	if strings.Contains(chains[0], "Resi-ChinaExit") {
+		t.Errorf("chain contains ChinaExit resi: %s", chains[0])
+	}
+}

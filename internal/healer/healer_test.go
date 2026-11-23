@@ -2,6 +2,7 @@ package healer
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 
 	"vpn-probe/internal/model"
@@ -117,4 +118,123 @@ func TestBuildSmartChains(t *testing.T) {
 
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && (s[0:len(substr)] == substr || contains(s[1:], substr)))
+}
+
+func TestBuildSmartChains_ExcludeChinaExitAndMachineDown(t *testing.T) {
+	h := NewHealer(nil, nil)
+
+	transits := []*model.NodeProbeResult{
+		{
+			Name:      "JP-Transit-Leaking",
+			Online:    true,
+			ChinaExit: true, // 送中，必须被过滤
+			ExitCountry: "JP",
+		},
+		{
+			Name:      "JP-Transit-Clean",
+			Online:    true,
+			ChinaExit: false, // 正常洁净节点
+			ExitCountry: "JP",
+		},
+	}
+
+	resis := []*model.NodeProbeResult{
+		{
+			Name:        "LZ-JP-Dead-Machine",
+			OriginalURL: "socks5://u:p@167.104.167.151:10001#LZ-JP-Dead-Machine",
+			Online:      false,
+			Diagnostic: &model.DiagnosticInfo{
+				FaultType: model.FaultMachineDown, // 宕机，必须被跳过
+			},
+		},
+		{
+			Name:        "LZ-JP-Working",
+			OriginalURL: "socks5://u:p@167.104.167.151:10002#LZ-JP-Working",
+			Online:      true,
+			ExitCountry: "JP",
+		},
+	}
+
+	chains := h.BuildSmartChains(transits, resis)
+	if len(chains) != 1 {
+		t.Fatalf("expected 1 chain, got %d: %v", len(chains), chains)
+	}
+
+	// 必须配对洁净中继，绝不包含送中中继
+	if strings.Contains(chains[0], "JP-Transit-Leaking") {
+		t.Errorf("chain must not pair with China-leaking transit: %s", chains[0])
+	}
+	if !strings.Contains(chains[0], "JP-Transit-Clean") {
+		t.Errorf("chain should pair with clean transit: %s", chains[0])
+	}
+}
+
+func TestHealIPBlocked_AvoidChinaExit(t *testing.T) {
+	h := NewHealer(nil, nil)
+
+	blockedNode := &model.NodeProbeResult{
+		Name:        "US-Blocked-Node",
+		OriginalURL: "vless://u@1.2.3.4:443#US-Blocked-Node",
+		ExitIP:      "1.2.3.4",
+		Online:      false,
+	}
+
+	relays := []*model.NodeProbeResult{
+		{
+			Name:      "Relay-Leaking",
+			ExitIP:    "5.6.7.8",
+			Online:    true,
+			ChinaExit: true, // 送中，不能优先选
+		},
+		{
+			Name:      "Relay-Clean",
+			ExitIP:    "9.10.11.12",
+			Online:    true,
+			ChinaExit: false, // 洁净
+		},
+	}
+
+	healedURL := h.HealIPBlocked(blockedNode, relays)
+	if strings.Contains(healedURL, "Relay-Leaking") {
+		t.Errorf("healed URL should not use China-leaking relay: %s", healedURL)
+	}
+	if !strings.Contains(healedURL, "Relay-Clean") {
+		t.Errorf("healed URL should select clean relay: %s", healedURL)
+	}
+}
+
+func TestBuildSmartChains_ExcludeResiChinaExit(t *testing.T) {
+	h := NewHealer(nil, nil)
+	transits := []*model.NodeProbeResult{
+		{Name: "Transit-1", Online: true, ExitCountry: "US"},
+	}
+	resis := []*model.NodeProbeResult{
+		{Name: "Resi-Normal", Online: true, ExitCountry: "US", OriginalURL: "socks5://u:p@1.1.1.1:10001#Resi-Normal"},
+		{Name: "Resi-Leaking", Online: true, ExitCountry: "US", ChinaExit: true, OriginalURL: "socks5://u:p@1.1.1.1:10002#Resi-Leaking"},
+	}
+	chains := h.BuildSmartChains(transits, resis)
+	if len(chains) != 1 {
+		t.Fatalf("expected 1 chain (excluding ChinaExit resi), got %d: %v", len(chains), chains)
+	}
+	if strings.Contains(chains[0], "Resi-Leaking") {
+		t.Errorf("chain should not include ChinaExit resi: %s", chains[0])
+	}
+}
+
+func TestHealIPBlocked_FragmentQuestionMark(t *testing.T) {
+	h := NewHealer(nil, nil)
+	blockedNode := &model.NodeProbeResult{
+		Name:        "US-Node",
+		OriginalURL: "vless://u@1.2.3.4:443#US-Node?query=1", // ? only in hash fragment
+		ExitIP:      "1.2.3.4",
+		Online:      false,
+	}
+	relays := []*model.NodeProbeResult{
+		{Name: "Relay-Clean", ExitIP: "9.10.11.12", Online: true, ChinaExit: false},
+	}
+	healedURL := h.HealIPBlocked(blockedNode, relays)
+	// base has no ?, so separator must be ? not &
+	if !strings.Contains(healedURL, "443?dialerProxy=") {
+		t.Errorf("expected 443?dialerProxy= in healed URL, got %s", healedURL)
+	}
 }

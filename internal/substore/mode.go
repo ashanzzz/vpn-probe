@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -176,7 +177,7 @@ func (c *Client) SetExternalSources(sources []string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(extSourcesFile, bytesData, 0644)
+	return atomicWriteFile(extSourcesFile, bytesData, 0644)
 }
 
 // UpsertExternalSource 动态添加或更新一个外部订阅，并自动联动 SubStore 创建/更新 (Issue #19)
@@ -236,7 +237,7 @@ func (c *Client) UpsertExternalSource(ctx context.Context, item ExternalSourceIt
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(extSourcesFile, bytesData, 0644); err != nil {
+	if err := atomicWriteFile(extSourcesFile, bytesData, 0644); err != nil {
 		return err
 	}
 
@@ -288,7 +289,7 @@ func (c *Client) DeleteExternalSource(ctx context.Context, name string, purgeRem
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(extSourcesFile, bytesData, 0644)
+	return atomicWriteFile(extSourcesFile, bytesData, 0644)
 }
 
 // GetModeSubscriptions 动态根据外部机场列表计算当前模式下的订阅成员
@@ -418,7 +419,7 @@ func (c *Client) SetMode(ctx context.Context, mode SubStoreMode) (*ModeState, er
 		Details:     fmt.Sprintf("Active subscriptions: %s", strings.Join(subs, ", ")),
 	}
 	bytesData, _ := json.MarshalIndent(state, "", "  ")
-	_ = os.WriteFile(modeFile, bytesData, 0644)
+	_ = atomicWriteFile(modeFile, bytesData, 0644)
 
 	logger.Sync("[SUBSTORE] Mode successfully switched to '%s' (active subs: %v)", mode, subs)
 	return state, nil
@@ -462,21 +463,31 @@ func (c *Client) CleanupDeadSocks(ctx context.Context, subName string) (*Cleanup
 		}
 	}
 
-	// 创建备份快照
+	// 创建备份快照 (防路径穿越处理)
 	snapDir := filepath.Join("data", "snapshots")
 	_ = os.MkdirAll(snapDir, 0755)
-	backupPath := filepath.Join(snapDir, fmt.Sprintf("%s_backup_%s.txt", subName, time.Now().Format("20060102_150405")))
-	_ = os.WriteFile(backupPath, []byte(rawContent), 0644)
+	safeSubName := strings.ReplaceAll(filepath.Clean(subName), "/", "_")
+	safeSubName = strings.ReplaceAll(safeSubName, "..", "_")
+	backupPath := filepath.Join(snapDir, fmt.Sprintf("%s_backup_%s.txt", safeSubName, time.Now().Format("20060102_150405")))
+	if err := atomicWriteFile(backupPath, []byte(rawContent), 0644); err != nil {
+		return nil, fmt.Errorf("create backup snapshot failed: %w", err)
+	}
 
 	if len(removed) > 0 {
 		newContent := strings.Join(cleanedLines, "\n")
 		base := strings.TrimRight(cfg.URL, "/")
 		bodyBytes, _ := json.Marshal(map[string]string{"content": newContent})
-		req, _ := http.NewRequestWithContext(ctx, "PATCH", fmt.Sprintf("%s/api/sub/%s", base, subName), strings.NewReader(string(bodyBytes)))
+		req, _ := http.NewRequestWithContext(ctx, "PATCH", fmt.Sprintf("%s/api/sub/%s", base, url.PathEscape(subName)), strings.NewReader(string(bodyBytes)))
 		req.Header.Set("Content-Type", "application/json")
 		c.setAuth(req)
 
-		resp, err := c.httpClient.Do(req)
+		c.mu.RLock()
+		client := c.httpClient
+		c.mu.RUnlock()
+		if client == nil {
+			client = http.DefaultClient
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to patch subscription: %w", err)
 		}

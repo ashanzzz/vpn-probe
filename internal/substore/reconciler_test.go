@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -292,5 +293,97 @@ func TestDeleteItem_IdempotentOn404(t *testing.T) {
 	// 4. 500 Internal Server Error with general crash should still return an error
 	if err := client.DeleteItem(context.Background(), "subs", "broken-sub"); err == nil {
 		t.Fatalf("expected error for 500 error, got nil")
+	}
+}
+
+func TestReconcileTopology_DynamicExternalAirports(t *testing.T) {
+	tmpDir := t.TempDir()
+	extFile := filepath.Join(tmpDir, "external_sources.json")
+	restore := SetExternalSourcesFileForTest(extFile)
+	defer restore()
+
+	updatedCollections := make(map[string]map[string]any)
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/subs":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success","data":[
+				{"name":"ashan-transit","content":"vless://1"},
+				{"name":"my-custom-airport","content":"vless://custom"}
+			]}`))
+		case r.URL.Path == "/api/collections":
+			w.WriteHeader(http.StatusOK)
+			// ashan-纯净 mistakenly has my-custom-airport
+			w.Write([]byte(`{"status":"success","data":[
+				{"name":"ashan-纯净","subscriptions":["ashan-transit","my-custom-airport"]},
+				{"name":"col-q","subscriptions":["ashan-transit","ashan-us-resi"]},
+				{"name":"col-ashan","subscriptions":["ashan-transit"]}
+			]}`))
+		case r.URL.Path == "/api/files":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success","data":[]}`))
+		case strings.HasPrefix(r.URL.Path, "/api/collection/"):
+			cName := strings.TrimPrefix(r.URL.Path, "/api/collection/")
+			var payload map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			updatedCollections[cName] = payload
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer mockServer.Close()
+
+	client := NewClient(&config.SubStoreConfig{
+		Enabled: true,
+		URL:     mockServer.URL,
+	})
+
+	// Configure dynamic external airport
+	if err := client.SetExternalSources([]string{"my-custom-airport"}); err != nil {
+		t.Fatalf("SetExternalSources failed: %v", err)
+	}
+
+	audit, err := client.AuditTopology(context.Background())
+	if err != nil {
+		t.Fatalf("AuditTopology failed: %v", err)
+	}
+	if audit.Healthy {
+		t.Errorf("expected audit to be unhealthy because ashan-纯净 contains my-custom-airport")
+	}
+
+	_, err = client.ReconcileTopology(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileTopology failed: %v", err)
+	}
+
+	// 1. ashan-纯净 must have my-custom-airport removed
+	pureCol := updatedCollections["ashan-纯净"]
+	if subs, ok := pureCol["subscriptions"].([]string); ok {
+		for _, s := range subs {
+			if s == "my-custom-airport" || s == "蜂窝云" {
+				t.Errorf("ashan-纯净 should not contain airport %s", s)
+			}
+		}
+	}
+
+	// 2. col-q should contain my-custom-airport and not resi
+	qCol := updatedCollections["col-q"]
+	if subs, ok := qCol["subscriptions"].([]string); ok {
+		hasCustom := false
+		for _, s := range subs {
+			if s == "my-custom-airport" {
+				hasCustom = true
+			}
+			if strings.Contains(s, "resi") {
+				t.Errorf("col-q should not contain resi %s", s)
+			}
+		}
+		if !hasCustom {
+			t.Errorf("col-q should contain dynamic airport my-custom-airport, got %v", subs)
+		}
 	}
 }

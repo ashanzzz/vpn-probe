@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"vpn-probe/internal/config"
@@ -94,9 +95,8 @@ func TestModePersistence(t *testing.T) {
 
 func TestDynamicExternalSourcesAndModes(t *testing.T) {
 	tmpDir := t.TempDir()
-	origExtFile := extSourcesFile
-	extSourcesFile = filepath.Join(tmpDir, "external_sources.json")
-	defer func() { extSourcesFile = origExtFile }()
+	restore := SetExternalSourcesFileForTest(filepath.Join(tmpDir, "external_sources.json"))
+	defer restore()
 
 	client := NewClient(&config.SubStoreConfig{
 		Enabled:         true,
@@ -153,9 +153,8 @@ func TestDynamicExternalSourcesAndModes(t *testing.T) {
 
 func TestUpsertAndDeleteExternalSource(t *testing.T) {
 	tmpDir := t.TempDir()
-	origExtFile := extSourcesFile
-	extSourcesFile = filepath.Join(tmpDir, "external_sources.json")
-	defer func() { extSourcesFile = origExtFile }()
+	restore := SetExternalSourcesFileForTest(filepath.Join(tmpDir, "external_sources.json"))
+	defer restore()
 
 	client := NewClient(&config.SubStoreConfig{
 		Enabled: false,
@@ -201,4 +200,44 @@ func TestUpsertAndDeleteExternalSource(t *testing.T) {
 	if len(items) != 0 {
 		t.Fatalf("expected 0 items after deletion, got %v", items)
 	}
+}
+
+func TestCleanupDeadSocks_PathEscapeAndAtomicWrite(t *testing.T) {
+	var requestedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "GET" && r.URL.Path == "/api/subs" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success","data":[{"name":"test sub with spaces","content":"socks5://1.2.3.4:1080\nvless://user@5.6.7.8:443"}]}`))
+			return
+		}
+		if r.Method == "PATCH" {
+			requestedPath = r.RequestURI
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := NewClient(&config.SubStoreConfig{
+		Enabled: true,
+		URL:     server.URL,
+	})
+
+	res, err := client.CleanupDeadSocks(context.Background(), "test sub with spaces")
+	if err != nil {
+		t.Fatalf("CleanupDeadSocks failed: %v", err)
+	}
+	if res.RemovedCount != 1 || res.RemainingCount != 1 {
+		t.Errorf("expected 1 removed and 1 remaining, got %+v", res)
+	}
+	if !strings.Contains(requestedPath, "test%20sub%20with%20spaces") {
+		t.Errorf("expected URL path to be escaped with test%%20sub%%20with%%20spaces, got %s", requestedPath)
+	}
+	if _, err := os.Stat(res.BackupPath); err != nil {
+		t.Errorf("expected backup file to exist at %s: %v", res.BackupPath, err)
+	}
+	defer os.Remove(res.BackupPath)
 }

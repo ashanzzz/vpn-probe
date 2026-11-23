@@ -73,32 +73,39 @@ func (h *Healer) HealIPBlocked(res *model.NodeProbeResult, healthyRelays []*mode
 		return res.OriginalURL
 	}
 
-	// 优选与当前被墙节点不同的健康中继
+	// 优选与当前被墙节点不同的健康且不送中的中继
 	var chosenRelay *model.NodeProbeResult
 	for _, r := range healthyRelays {
-		if r.ExitIP != res.ExitIP && r.Online {
+		if r != nil && r.ExitIP != res.ExitIP && r.Online && !r.ChinaExit {
 			chosenRelay = r
 			break
+		}
+	}
+	if chosenRelay == nil {
+		for _, r := range healthyRelays {
+			if r != nil && r.Online && !r.ChinaExit {
+				chosenRelay = r
+				break
+			}
 		}
 	}
 	if chosenRelay == nil {
 		chosenRelay = healthyRelays[0]
 	}
 
-	// 在原节点 URL 中注入 dialerProxy 参数
-	origURL := res.OriginalURL
-	separator := "?"
-	if strings.Contains(origURL, "?") {
-		separator = "&"
-	}
-
 	// 截取 # 后的备注名
+	origURL := res.OriginalURL
 	hashIdx := strings.Index(origURL, "#")
 	base := origURL
 	nameTag := res.Name
 	if hashIdx != -1 {
 		base = origURL[:hashIdx]
 		nameTag = origURL[hashIdx+1:]
+	}
+
+	separator := "?"
+	if strings.Contains(base, "?") {
+		separator = "&"
 	}
 
 	fallbackName := fmt.Sprintf("%s-借道%s扶持", nameTag, chosenRelay.Name)
@@ -122,7 +129,7 @@ func (h *Healer) BuildSmartChains(transitNodes []*model.NodeProbeResult, resiNod
 	var activeTransits []*model.NodeProbeResult
 
 	for _, t := range transitNodes {
-		if !t.Online {
+		if t == nil || !t.Online || t.ChinaExit {
 			continue
 		}
 		if strings.Contains(t.Name, "CF-WS") || strings.Contains(t.Name, "救活") || strings.Contains(t.Name, "Standby") {
@@ -140,6 +147,9 @@ func (h *Healer) BuildSmartChains(transitNodes []*model.NodeProbeResult, resiNod
 	defaultRelay := activeTransits[0]
 
 	for _, r := range resiNodes {
+		if r == nil || (!r.Online && r.Diagnostic != nil && r.Diagnostic.FaultType == model.FaultMachineDown) || r.ChinaExit {
+			continue
+		}
 		var pairedRelay *model.NodeProbeResult
 
 		resiCountry := model.ResolveCountry(r.ExitCountry, r.Name)
@@ -186,7 +196,7 @@ func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResu
 	// 1. 提取所有健康的线路机 (忽略静默待命的救活节点，排除送中节点)
 	var activeTransits []*model.NodeProbeResult
 	for _, t := range transitNodes {
-		if !t.Online || t.ChinaExit {
+		if t == nil || !t.Online || t.ChinaExit {
 			continue
 		}
 		// 忽略处于静默待命的救活节点
@@ -203,7 +213,7 @@ func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResu
 	// 2. 遍历家宽，每一个自有中转机全量把所有家宽链式代理
 	seen := make(map[string]bool)
 	for _, r := range resiNodes {
-		if !r.Online && r.Diagnostic != nil && r.Diagnostic.FaultType == model.FaultMachineDown {
+		if r == nil || (!r.Online && r.Diagnostic != nil && r.Diagnostic.FaultType == model.FaultMachineDown) || r.ChinaExit {
 			continue
 		}
 

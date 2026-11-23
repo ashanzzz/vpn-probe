@@ -304,6 +304,22 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 	return nil
 }
 
+// isExternalAirport 检查订阅名是否属于外部商业机场 (动态匹配配置的外部源或默认蜂窝云)
+func (c *Client) isExternalAirport(subName string, extSet map[string]bool) bool {
+	if subName == "蜂窝云" {
+		return true
+	}
+	if extSet != nil {
+		return extSet[subName]
+	}
+	for _, ext := range c.GetExternalSources() {
+		if ext == subName {
+			return true
+		}
+	}
+	return false
+}
+
 // AuditTopology 审计当前 SubStore 的订阅、集合与文件引用拓扑，诊断错配与孤儿节点
 func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 	var (
@@ -369,17 +385,24 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 		audit.Files[f.Name] = f.SourceName
 	}
 
+	extSources := c.GetExternalSources()
+	extSet := make(map[string]bool, len(extSources)+1)
+	extSet["蜂窝云"] = true
+	for _, ext := range extSources {
+		extSet[ext] = true
+	}
+
 	// 1. 检查 ashan-纯净 是否名实相符
 	if ashanPure, exists := audit.Collections["ashan-纯净"]; exists {
 		hasAirport := false
 		for _, s := range ashanPure {
-			if s == "蜂窝云" {
+			if c.isExternalAirport(s, extSet) {
 				hasAirport = true
 			}
 		}
 		if hasAirport {
 			audit.Healthy = false
-			msg := "集合 'ashan-纯净' (标称纯自建VPS) 混入了外部机场订阅 '蜂窝云'，破坏了纯净性"
+			msg := "集合 'ashan-纯净' (标称纯自建VPS) 混入了外部机场订阅，破坏了纯净性"
 			audit.Discrepancies = append(audit.Discrepancies, msg)
 			audit.RecommendedFixes = append(audit.RecommendedFixes, "将 'ashan-纯净' 净化为仅引用自建纯净分组 [\"ashan-transit\", \"ashan-us-resi\", \"ashan-jp-resi\", \"ashan-other\"]")
 		}
@@ -398,7 +421,7 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 				if s == "ashan-transit" || s == "Q" {
 					hasTransit = true
 				}
-				if s == "蜂窝云" {
+				if c.isExternalAirport(s, extSet) {
 					hasAirport = true
 				}
 			}
@@ -406,13 +429,13 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 				audit.Healthy = false
 				msg := fmt.Sprintf("集合 '%s' (标称外部+自建骨干专线) 混入了家宽节点，违反了 Q 排除所有家宽的标准规范", qColName)
 				audit.Discrepancies = append(audit.Discrepancies, msg)
-				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("从 '%s' 中剔除所有家宽分组，仅保留 [\"ashan-transit\", \"蜂窝云\"]", qColName))
+				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("从 '%s' 中剔除所有家宽分组，仅保留 [\"ashan-transit\", 外部机场]", qColName))
 			}
 			if !hasTransit || !hasAirport {
 				audit.Healthy = false
 				msg := fmt.Sprintf("集合 '%s' 缺少骨干专线或外部机场订阅，未达成双轨融合", qColName)
 				audit.Discrepancies = append(audit.Discrepancies, msg)
-				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("为 '%s' 补充 [\"ashan-transit\", \"蜂窝云\"]", qColName))
+				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("为 '%s' 补充 [\"ashan-transit\", 外部机场]", qColName))
 			}
 		}
 	}
@@ -423,7 +446,7 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 			hasAirport := false
 			hasResi := false
 			for _, s := range aSummary {
-				if s == "蜂窝云" {
+				if c.isExternalAirport(s, extSet) {
 					hasAirport = true
 				}
 				if strings.Contains(s, "resi") {
@@ -432,9 +455,9 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 			}
 			if !hasAirport {
 				audit.Healthy = false
-				msg := fmt.Sprintf("集合 '%s' (全量全家桶) 缺少外部机场订阅 '蜂窝云'，未达到外部连接+自建连接的全家桶标准", aColName)
+				msg := fmt.Sprintf("集合 '%s' (全量全家桶) 缺少外部机场订阅，未达到外部连接+自建连接的全家桶标准", aColName)
 				audit.Discrepancies = append(audit.Discrepancies, msg)
-				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("为 '%s' 补齐外部机场订阅 '蜂窝云'", aColName))
+				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("为 '%s' 补齐外部机场订阅", aColName))
 			}
 			if !hasResi {
 				audit.Healthy = false
@@ -497,11 +520,18 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 
 	actions := make([]string, 0)
 
+	extSources := c.GetExternalSources()
+	extSet := make(map[string]bool, len(extSources)+1)
+	extSet["蜂窝云"] = true
+	for _, ext := range extSources {
+		extSet[ext] = true
+	}
+
 	// 1. 修复 ashan-纯净：纯净自建
 	if ashanPure, exists := audit.Collections["ashan-纯净"]; exists {
 		hasAirport := false
 		for _, s := range ashanPure {
-			if s == "蜂窝云" {
+			if c.isExternalAirport(s, extSet) {
 				hasAirport = true
 			}
 		}
@@ -532,12 +562,16 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 				if s == "ashan-transit" || s == "Q" {
 					hasTransit = true
 				}
-				if s == "蜂窝云" {
+				if c.isExternalAirport(s, extSet) {
 					hasAirport = true
 				}
 			}
 			if hasResi || !hasTransit || !hasAirport {
-				cleanQSubs := []string{"ashan-transit", "蜂窝云"}
+				exts := c.GetExternalSources()
+				if len(exts) == 0 {
+					exts = []string{"蜂窝云"}
+				}
+				cleanQSubs := append([]string{"ashan-transit"}, exts...)
 				payload := map[string]any{
 					"name":                  qColName,
 					"displayName":           "Q 高速骨干轻量组 (外部+自建骨干专线)",
@@ -547,8 +581,8 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 				if err := c.UpdateCollection(ctx, qColName, payload); err != nil {
 					return nil, fmt.Errorf("reconcile %s: %w", qColName, err)
 				}
-				actions = append(actions, fmt.Sprintf("已将集合 '%s' 净化为 [\"ashan-transit\", \"蜂窝云\"]，100%% 排除所有家宽节点", qColName))
-				logger.Sync("Reconciled collection '%s' -> 纯骨干专线+蜂窝云 (0 家宽)", qColName)
+				actions = append(actions, fmt.Sprintf("已将集合 '%s' 净化为 %v，100%% 排除所有家宽节点", qColName, cleanQSubs))
+				logger.Sync("Reconciled collection '%s' -> 纯骨干专线+外部机场 (0 家宽)", qColName)
 			}
 		}
 	}
@@ -559,7 +593,7 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 			hasAirport := false
 			hasResi := false
 			for _, s := range aSummary {
-				if s == "蜂窝云" {
+				if c.isExternalAirport(s, extSet) {
 					hasAirport = true
 				}
 				if strings.Contains(s, "resi") {
@@ -567,7 +601,11 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 				}
 			}
 			if !hasAirport || !hasResi {
-				fullSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak", "蜂窝云"}
+				exts := c.GetExternalSources()
+				if len(exts) == 0 {
+					exts = []string{"蜂窝云"}
+				}
+				fullSubs := append([]string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}, exts...)
 				payload := map[string]any{
 					"name":                  aColName,
 					"displayName":           "Ashan 全量全家桶 (外部+自建全景)",

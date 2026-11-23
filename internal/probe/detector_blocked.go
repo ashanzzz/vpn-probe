@@ -36,6 +36,7 @@ type CheckHostInitResp struct {
 // CheckAbroadPort 通过 Check-Host.net 境外多节点 API 测试海外连通性
 func CheckAbroadPort(ctx context.Context, host string, port int) (bool, string, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
+	defer client.CloseIdleConnections()
 
 	initURL := fmt.Sprintf("https://check-host.net/check-tcp?host=%s:%d&max_nodes=3", host, port)
 	req, err := http.NewRequestWithContext(ctx, "GET", initURL, nil)
@@ -415,7 +416,20 @@ func EvaluateFault(
 			// 若错误为连接被拒、重置、管道破裂或 EOF (中转端口开放但家庭端反向隧道未就绪或断开)
 			if probeErr != nil {
 				errLower := strings.ToLower(probeErr.Error())
-				if strings.Contains(errLower, "connection refused") || strings.Contains(errLower, "connection reset") || strings.Contains(errLower, "broken pipe") || strings.Contains(errLower, "eof") {
+				if strings.Contains(errLower, "connection refused") ||
+					strings.Contains(errLower, "connection reset") ||
+					strings.Contains(errLower, "broken pipe") ||
+					strings.Contains(errLower, "eof") ||
+					strings.Contains(errLower, "socks server failure") ||
+					strings.Contains(errLower, "socks failure") {
+					faultType = model.FaultResidentialTunnelOffline
+					statusText = "【家庭端未就绪或断开】家宽反向隧道未建立或连接被拒"
+					actionType = "CHECK_RESIDENTIAL_DEVICE"
+					tip = fmt.Sprintf("【家宽链路特征】中转服务器 %s:%d 在线且端口开放，但家庭端反向隧道未建立或连接被拒(%v)。严禁更换端口，请检查家庭端设备反向连接状态！", host, port, probeErr)
+					return
+				}
+				// 针对家宽节点：若非明确 TLS/Reality 密钥证书失败，中转机端口可达下的所有代理失败均归因于家庭端隧道异常 (防止隧道抖动误判换端口或核验密钥)
+				if !strings.Contains(errLower, "reality verification failed") && !strings.Contains(errLower, "handshake failure") && !strings.Contains(errLower, "bad certificate") {
 					faultType = model.FaultResidentialTunnelOffline
 					statusText = "【家庭端未就绪或断开】家宽反向隧道未建立或连接被拒"
 					actionType = "CHECK_RESIDENTIAL_DEVICE"

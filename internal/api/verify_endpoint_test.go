@@ -115,6 +115,21 @@ func TestVerifyEndpoint_ResidentialAware(t *testing.T) {
 		t.Errorf("expected self_nodes_online == 1, got %v", onlineCount)
 	}
 
+	// 模拟家宽节点中转端口通但家庭端反向隧道断开 (AbroadReachable=true 但 FaultType=FaultResidentialTunnelOffline)
+	resiResult.Diagnostic.AbroadReachable = true
+	resiResult.Diagnostic.FaultType = model.FaultResidentialTunnelOffline
+
+	reqTunnelDown := httptest.NewRequest("GET", "/api/substore/verify?file=ashan", nil)
+	reqTunnelDown.Header.Set("Authorization", "Bearer admin-token-123")
+	respTunnelDown, _ := app.Test(reqTunnelDown, 5000)
+	var resTunnelDown map[string]any
+	_ = json.NewDecoder(respTunnelDown.Body).Decode(&resTunnelDown)
+
+	healthyTunnelDown, _ := resTunnelDown["self_nodes_healthy"].(bool)
+	if healthyTunnelDown {
+		t.Errorf("expected self_nodes_healthy to be false when residential home tunnel is offline even if relay port is open, got true")
+	}
+
 	// 模拟家宽节点彻底故障 (机器离线且海外隧道断)
 	resiResult.Diagnostic.AbroadReachable = false
 	resiResult.Diagnostic.FaultType = model.FaultMachineDown

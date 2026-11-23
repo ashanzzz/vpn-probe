@@ -211,6 +211,39 @@ export interface SoftwareInfo {
   status: string;
   error_message?: string;
   last_checked_at: string;
+  backups?: BackupSnapshot[];
+  last_smoke_test?: SmokeTestResult;
+}
+
+export interface BackupSnapshot {
+  id: string;
+  file_name: string;
+  file_path: string;
+  created_at: string;
+  size_bytes: number;
+}
+
+export interface SmokeTestResult {
+  success: boolean;
+  latency_ms: number;
+  tested_at: string;
+  exit_ip?: string;
+  message?: string;
+  error?: string;
+}
+
+export interface SafeUpgradeResponse {
+  success: boolean;
+  vps_id: string;
+  ip: string;
+  software_type: string;
+  previous_version: string;
+  current_version: string;
+  rolled_back: boolean;
+  rollback_reason?: string;
+  backup_created?: string;
+  smoke_test?: SmokeTestResult;
+  message: string;
 }
 
 export interface BlockedAnalysisResult {

@@ -22,14 +22,41 @@ func NewBackupManager(detector *Detector) *BackupManager {
 	return &BackupManager{detector: detector}
 }
 
-// CreateBackup 为指定 VPS 上的代理软件创建轻量原子时间戳快照并滚动保留最近 3 份
-func (bm *BackupManager) CreateBackup(inst *VPSInstance, softInfo *SoftwareInfo) (*BackupSnapshot, error) {
-	if inst == nil || softInfo == nil {
-		return nil, fmt.Errorf("instance or software info is nil")
+// resolveBackupPaths 统一解析指定代理软件与部署模式的配置路径、备份目录与重启指令
+func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt string, isSqlite bool, restartCmd string, err error) {
+	if softInfo == nil {
+		return "", "", "", false, "", fmt.Errorf("software info is nil")
 	}
 
-	ts := time.Now().Format("20060102_150405")
-	var backupDir, activeFile, snapFile string
+	if softInfo.SoftwareType == "3x-ui" {
+		backupDir = "/etc/x-ui/backups"
+		activeFile = "/etc/x-ui/x-ui.db"
+		if softInfo.ConfigPath != "" {
+			activeFile = softInfo.ConfigPath
+			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+		}
+		return backupDir, activeFile, ".db", true, "docker restart 3x-ui", nil
+	}
+
+	if softInfo.DeployMode == "native" {
+		if softInfo.SoftwareType == "sing-box" {
+			activeFile = "/etc/sing-box/config.json"
+			if softInfo.ConfigPath != "" {
+				activeFile = softInfo.ConfigPath
+			}
+			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+			restartCmd = "systemctl restart sing-box 2>/dev/null || service sing-box restart 2>/dev/null"
+			return backupDir, activeFile, ".json", false, restartCmd, nil
+		} else if softInfo.SoftwareType == "xray" {
+			activeFile = "/etc/xray/config.json"
+			if softInfo.ConfigPath != "" {
+				activeFile = softInfo.ConfigPath
+			}
+			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+			restartCmd = "systemctl restart xray 2>/dev/null || service xray restart 2>/dev/null"
+			return backupDir, activeFile, ".json", false, restartCmd, nil
+		}
+	}
 
 	switch softInfo.SoftwareType {
 	case "sing-box":
@@ -39,12 +66,12 @@ func (bm *BackupManager) CreateBackup(inst *VPSInstance, softInfo *SoftwareInfo)
 		}
 		backupDir = fmt.Sprintf("/opt/%s/backups", cName)
 		activeFile = fmt.Sprintf("/opt/%s/config.json", cName)
-		snapFile = fmt.Sprintf("%s/config_%s.json", backupDir, ts)
-
-	case "3x-ui":
-		backupDir = "/etc/x-ui/backups"
-		activeFile = "/etc/x-ui/x-ui.db"
-		snapFile = fmt.Sprintf("%s/x-ui_%s.db", backupDir, ts)
+		if softInfo.ConfigPath != "" {
+			activeFile = softInfo.ConfigPath
+			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+		}
+		restartCmd = fmt.Sprintf("docker restart %s", cName)
+		return backupDir, activeFile, ".json", false, restartCmd, nil
 
 	case "xray":
 		cName := softInfo.ContainerName
@@ -53,11 +80,35 @@ func (bm *BackupManager) CreateBackup(inst *VPSInstance, softInfo *SoftwareInfo)
 		}
 		backupDir = "/etc/v2ray-agent/backups"
 		activeFile = "/etc/v2ray-agent/docker/config.json"
-		snapFile = fmt.Sprintf("%s/config_%s.json", backupDir, ts)
+		if softInfo.ConfigPath != "" {
+			activeFile = softInfo.ConfigPath
+			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+		}
+		restartCmd = fmt.Sprintf("docker restart %s", cName)
+		return backupDir, activeFile, ".json", false, restartCmd, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported software type for backup: %s", softInfo.SoftwareType)
+		return "", "", "", false, "", fmt.Errorf("unsupported software type for backup: %s", softInfo.SoftwareType)
 	}
+}
+
+// CreateBackup 为指定 VPS 上的代理软件创建轻量原子时间戳快照并滚动保留最近 3 份
+func (bm *BackupManager) CreateBackup(inst *VPSInstance, softInfo *SoftwareInfo) (*BackupSnapshot, error) {
+	if inst == nil || softInfo == nil {
+		return nil, fmt.Errorf("instance or software info is nil")
+	}
+
+	backupDir, activeFile, fileExt, isSqlite, _, err := resolveBackupPaths(softInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	ts := time.Now().Format("20060102_150405")
+	snapPrefix := "config"
+	if softInfo.SoftwareType == "3x-ui" {
+		snapPrefix = "x-ui"
+	}
+	snapFile := fmt.Sprintf("%s/%s_%s%s", backupDir, snapPrefix, ts, fileExt)
 
 	// 1. 创建备份目录
 	mkdirCmd := fmt.Sprintf("mkdir -p %s", backupDir)
@@ -67,7 +118,7 @@ func (bm *BackupManager) CreateBackup(inst *VPSInstance, softInfo *SoftwareInfo)
 
 	// 2. 执行原子热备份
 	var copyCmd string
-	if softInfo.SoftwareType == "3x-ui" {
+	if isSqlite {
 		// 优先使用 sqlite3 在线热备保证事务一致性，若主机无 sqlite3 则使用普通 cp
 		copyCmd = fmt.Sprintf(
 			"if command -v sqlite3 >/dev/null 2>&1; then sqlite3 %s \".backup '%s'\"; elif docker ps | grep -q ' 3x-ui'; then docker exec 3x-ui sqlite3 %s \".backup '%s'\"; else cp %s %s; fi",
@@ -138,19 +189,8 @@ func (bm *BackupManager) ListBackups(inst *VPSInstance, softInfo *SoftwareInfo) 
 		return nil, fmt.Errorf("instance or software info is nil")
 	}
 
-	var backupDir string
-	switch softInfo.SoftwareType {
-	case "sing-box":
-		cName := softInfo.ContainerName
-		if cName == "" {
-			cName = "sb-mgr"
-		}
-		backupDir = fmt.Sprintf("/opt/%s/backups", cName)
-	case "3x-ui":
-		backupDir = "/etc/x-ui/backups"
-	case "xray":
-		backupDir = "/etc/v2ray-agent/backups"
-	default:
+	backupDir, _, _, _, _, err := resolveBackupPaths(softInfo)
+	if err != nil {
 		return []*BackupSnapshot{}, nil
 	}
 
@@ -180,13 +220,13 @@ func (bm *BackupManager) ListBackups(inst *VPSInstance, softInfo *SoftwareInfo) 
 			modTime = modTime[:19]
 		}
 
-		// 从文件名中提取 ID
+		// 从文件名中提取完整时间戳 ID (例如 config_20261123_101500.json -> 20261123_101500)
 		id := fName
 		if idx := strings.LastIndex(fName, "."); idx != -1 {
 			id = fName[:idx]
 		}
-		if partsID := strings.Split(id, "_"); len(partsID) >= 2 {
-			id = partsID[len(partsID)-1]
+		if idx := strings.Index(id, "_"); idx != -1 {
+			id = id[idx+1:]
 		}
 
 		snapshots = append(snapshots, &BackupSnapshot{
@@ -229,29 +269,9 @@ func (bm *BackupManager) RestoreBackup(inst *VPSInstance, softInfo *SoftwareInfo
 		return fmt.Errorf("snapshot '%s' not found on %s", snapshotID, inst.IP)
 	}
 
-	var activeFile string
-	var restartCmd string
-
-	switch softInfo.SoftwareType {
-	case "sing-box":
-		cName := softInfo.ContainerName
-		if cName == "" {
-			cName = "sb-mgr"
-		}
-		activeFile = fmt.Sprintf("/opt/%s/config.json", cName)
-		restartCmd = fmt.Sprintf("docker restart %s", cName)
-	case "3x-ui":
-		activeFile = "/etc/x-ui/x-ui.db"
-		restartCmd = "docker restart 3x-ui"
-	case "xray":
-		cName := softInfo.ContainerName
-		if cName == "" {
-			cName = "v2ray-agent-docker"
-		}
-		activeFile = "/etc/v2ray-agent/docker/config.json"
-		restartCmd = fmt.Sprintf("docker restart %s", cName)
-	default:
-		return fmt.Errorf("unsupported software type: %s", softInfo.SoftwareType)
+	_, activeFile, _, _, restartCmd, err := resolveBackupPaths(softInfo)
+	if err != nil {
+		return err
 	}
 
 	// 执行还原与重启

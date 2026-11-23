@@ -155,10 +155,15 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 				decodedCh = ch
 			}
 			targetPart := decodedCh
+			transitPart := ""
 			if idx := strings.Index(decodedCh, "➔"); idx != -1 {
-				targetPart = decodedCh[idx+len("➔"):]
+				transitPart = strings.TrimSpace(decodedCh[:idx])
+				targetPart = strings.TrimSpace(decodedCh[idx+len("➔"):])
 			} else if hashIdx := strings.Index(decodedCh, "#"); hashIdx != -1 {
-				targetPart = decodedCh[hashIdx+1:]
+				targetPart = strings.TrimSpace(decodedCh[hashIdx+1:])
+			}
+			if idx := strings.Index(transitPart, "|"); idx != -1 {
+				transitPart = strings.TrimSpace(transitPart[idx+1:])
 			}
 			country := model.ResolveCountry("", targetPart)
 			chainName := ch
@@ -169,6 +174,37 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 				chainName = uName
 			}
 
+			chainOnline := true
+			testedAt := time.Now()
+			chainLatency := 0
+
+			// 匹配关联中转专线延迟
+			for _, t := range transits {
+				if t.Name == transitPart || strings.Contains(transitPart, t.Name) || strings.Contains(t.Name, transitPart) {
+					chainLatency += t.LatencyMs
+					break
+				}
+			}
+
+			// 匹配关联目标家宽节点的真实反向隧道状态与延迟
+			for _, r := range uniqueResis {
+				if r.Name == targetPart || strings.Contains(targetPart, r.Name) || strings.Contains(r.Name, targetPart) {
+					testedAt = r.TestedAt
+					if r.Diagnostic != nil && r.Diagnostic.AbroadRTTMs > 0 {
+						chainLatency += r.Diagnostic.AbroadRTTMs
+					} else if r.LatencyMs > 0 {
+						chainLatency += r.LatencyMs
+					}
+					if !r.Online {
+						// 仅当住宅节点海外反向链路畅通且处于纯国内直连受阻时，链式中继才有效；家庭端掉线或中转宕机均判定为离线
+						if r.Diagnostic != nil && (r.Diagnostic.FaultType == model.FaultResidentialTunnelOffline || r.Diagnostic.FaultType == model.FaultTransitRelayDown || !r.Diagnostic.AbroadReachable) {
+							chainOnline = false
+						}
+					}
+					break
+				}
+			}
+
 			atoms = append(atoms, model.AtomNode{
 				ID:        fmt.Sprintf("chain-%s", chainName),
 				Name:      chainName,
@@ -177,8 +213,9 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 				Country:   country,
 				Kind:      "chain",
 				ChinaExit: false,
-				Online:    true,
-				TestedAt:  time.Now(),
+				LatencyMs: chainLatency,
+				Online:    chainOnline,
+				TestedAt:  testedAt,
 			})
 		}
 	}
@@ -223,7 +260,11 @@ func (o *Orchestrator) EvaluateGroup(filter model.GroupFilter) []string {
 
 	var matchRegex *regexp.Regexp
 	if filter.CustomMatchRegex != "" {
-		matchRegex, _ = regexp.Compile(filter.CustomMatchRegex)
+		if r, err := regexp.Compile(filter.CustomMatchRegex); err == nil {
+			matchRegex = r
+		} else {
+			logger.Warnf("[ORCHESTRATOR] Invalid custom match regex '%s': %v", filter.CustomMatchRegex, err)
+		}
 	}
 
 	for _, a := range atoms {

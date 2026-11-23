@@ -365,6 +365,9 @@ func (sm *SnapshotManager) fetchRenderedYAML(ctx context.Context, fileName strin
 
 		resp, err := httpClient.Do(req)
 		if err != nil {
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
 			lastErr = err
 			continue
 		}

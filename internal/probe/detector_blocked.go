@@ -50,16 +50,18 @@ func CheckAbroadPort(ctx context.Context, host string, port int) (bool, string, 
 	if err != nil {
 		return false, "", fmt.Errorf("check-host init failed: %w", err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		return false, "", fmt.Errorf("check-host init status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var initData CheckHostInitResp
-	if err := json.NewDecoder(resp.Body).Decode(&initData); err != nil {
-		return false, "", fmt.Errorf("decode check-host init: %w", err)
+	decodeErr := json.NewDecoder(resp.Body).Decode(&initData)
+	resp.Body.Close()
+	if decodeErr != nil {
+		return false, "", fmt.Errorf("decode check-host init: %w", decodeErr)
 	}
 
 	if initData.RequestID == "" {

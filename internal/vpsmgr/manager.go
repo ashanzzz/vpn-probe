@@ -46,7 +46,12 @@ func (m *Manager) SetProbeFunc(fn NodeProbeFunc) {
 func (m *Manager) SetInstancesForTest(insts []*VPSInstance) {
 	m.instancesMu.Lock()
 	defer m.instancesMu.Unlock()
-	m.instances = insts
+	cloned := make([]*VPSInstance, len(insts))
+	for idx, inst := range insts {
+		clone := *inst
+		cloned[idx] = &clone
+	}
+	m.instances = cloned
 }
 
 // SetDetectorForTest 注入单测探查器
@@ -226,18 +231,20 @@ func (m *Manager) refreshFromVPSHub() {
 			sshUser = "root"
 		}
 
-		// 更新或追加
+		// 更新或追加 (采用 Copy-on-Write 替换指针，避免与其他并发读取的 Goroutine 发生 Data Race)
 		var updated bool
-		for _, inst := range m.instances {
+		for idx, inst := range m.instances {
 			if inst.ID == hi.ID || inst.IP == hi.IP {
-				inst.Name = hi.Name
-				inst.SSHPort = sshPort
-				inst.SSHUser = sshUser
+				updatedInst := *inst
+				updatedInst.Name = hi.Name
+				updatedInst.SSHPort = sshPort
+				updatedInst.SSHUser = sshUser
 				if pass != "" {
-					inst.SSHPassword = pass
+					updatedInst.SSHPassword = pass
 				}
-				inst.Status = hi.Status
-				inst.Region = hi.Region
+				updatedInst.Status = hi.Status
+				updatedInst.Region = hi.Region
+				m.instances[idx] = &updatedInst
 				updated = true
 				break
 			}
@@ -262,7 +269,10 @@ func (m *Manager) refreshFromVPSHub() {
 func (m *Manager) ListVPSInstances(ctx context.Context) []*SoftwareInfo {
 	m.instancesMu.RLock()
 	insts := make([]*VPSInstance, len(m.instances))
-	copy(insts, m.instances)
+	for idx, inst := range m.instances {
+		clone := *inst
+		insts[idx] = &clone
+	}
 	m.instancesMu.RUnlock()
 
 	var wg sync.WaitGroup
@@ -318,7 +328,8 @@ func (m *Manager) HealPort(ctx context.Context, nodeName string, targetPort int,
 	var matchedInst *VPSInstance
 	for _, inst := range m.instances {
 		if inst.IP == targetIP {
-			matchedInst = inst
+			clone := *inst
+			matchedInst = &clone
 			break
 		}
 	}
@@ -331,13 +342,18 @@ func (m *Manager) HealPort(ctx context.Context, nodeName string, targetPort int,
 	return m.healer.ExecutePortHeal(ctx, matchedInst, targetRes.Name, targetRes.OriginalURL, targetPort)
 }
 
-// findInstance 统一根据 ID, IP 或 Name 查找 VPS 实例
+// findInstance 统一根据 ID, IP 或 Name 查找 VPS 实例 (返回独立 Clone 副本以保证跨 Goroutine 读写安全)
 func (m *Manager) findInstance(target string) *VPSInstance {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil
+	}
 	m.instancesMu.RLock()
 	defer m.instancesMu.RUnlock()
 	for _, i := range m.instances {
 		if i.ID == target || i.IP == target || strings.EqualFold(i.Name, target) || strings.Contains(strings.ToLower(i.Name), strings.ToLower(target)) {
-			return i
+			clone := *i
+			return &clone
 		}
 	}
 	return nil
@@ -491,6 +507,9 @@ func (m *Manager) PerformLifecycleAction(ctx context.Context, req *LifecycleActi
 		var cmd string
 		if softInfo.DeployMode == "native" {
 			svc := softInfo.SoftwareType
+			if svc == "3x-ui" {
+				svc = "x-ui"
+			}
 			cmd = fmt.Sprintf("systemctl %s %s 2>/dev/null || service %s %s 2>/dev/null", action, svc, svc, action)
 		} else {
 			cName := softInfo.ContainerName
@@ -558,8 +577,12 @@ func (m *Manager) PerformSafeUpgrade(ctx context.Context, req *SafeUpgradeReques
 
 	// 4. 执行出网冒烟测试 (Smoke Test)
 	probeFn := m.getProbeFunc()
-	if probeFn != nil && req.NodeName != "" {
-		smokeRes := probeFn(ctx, req.NodeName)
+	nodeTarget := req.NodeName
+	if nodeTarget == "" {
+		nodeTarget = inst.Name
+	}
+	if probeFn != nil && nodeTarget != "" {
+		smokeRes := probeFn(ctx, nodeTarget)
 		smoke := &SmokeTestResult{
 			Success:  smokeRes != nil && smokeRes.Online,
 			TestedAt: time.Now().Format("2006-01-02 15:04:05"),
@@ -578,20 +601,26 @@ func (m *Manager) PerformSafeUpgrade(ctx context.Context, req *SafeUpgradeReques
 		}
 		resp.SmokeTest = smoke
 
-		// 5. 若冒烟失败且先前成功创建了备份，执行自动故障回滚！
-		if !smoke.Success && snap != nil {
-			logger.Warnf("[SAFE-UPGRADE] ⚠️ Smoke test failed after upgrade on %s! Initiating automatic rollback to snapshot %s...", inst.IP, snap.FileName)
-			rollbackErr := m.backupMgr.RestoreBackup(inst, softInfo, snap.ID)
-			if rollbackErr != nil {
-				resp.RolledBack = false
-				resp.RollbackReason = fmt.Sprintf("Smoke test failed (%s), but rollback also failed: %v", smoke.Error, rollbackErr)
-				resp.Message = "Upgrade failed smoke test; automatic rollback failed!"
-			} else {
-				resp.RolledBack = true
-				resp.RollbackReason = fmt.Sprintf("Smoke test failed: %s. Successfully rolled back to %s.", smoke.Error, snap.FileName)
-				resp.Message = "Upgrade rolled back automatically due to failed smoke test."
-			}
+		// 5. 若冒烟失败，执行自动故障回滚或报告失败
+		if !smoke.Success {
 			resp.Success = false
+			if snap != nil {
+				logger.Warnf("[SAFE-UPGRADE] ⚠️ Smoke test failed after upgrade on %s! Initiating automatic rollback to snapshot %s...", inst.IP, snap.FileName)
+				rollbackErr := m.backupMgr.RestoreBackup(inst, softInfo, snap.ID)
+				if rollbackErr != nil {
+					resp.RolledBack = false
+					resp.RollbackReason = fmt.Sprintf("Smoke test failed (%s), but rollback also failed: %v", smoke.Error, rollbackErr)
+					resp.Message = "Upgrade failed smoke test; automatic rollback failed!"
+				} else {
+					resp.RolledBack = true
+					resp.RollbackReason = fmt.Sprintf("Smoke test failed: %s. Successfully rolled back to %s.", smoke.Error, snap.FileName)
+					resp.Message = "Upgrade rolled back automatically due to failed smoke test."
+				}
+			} else {
+				resp.RolledBack = false
+				resp.RollbackReason = fmt.Sprintf("Smoke test failed: %s (no pre-upgrade backup snapshot available)", smoke.Error)
+				resp.Message = "Upgrade failed smoke test and no snapshot was available for rollback!"
+			}
 			return resp, nil
 		}
 	}

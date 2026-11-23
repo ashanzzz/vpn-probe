@@ -28,16 +28,6 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 		return "", "", "", false, "", fmt.Errorf("software info is nil")
 	}
 
-	if softInfo.SoftwareType == "3x-ui" {
-		backupDir = "/etc/x-ui/backups"
-		activeFile = "/etc/x-ui/x-ui.db"
-		if softInfo.ConfigPath != "" {
-			activeFile = softInfo.ConfigPath
-			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
-		}
-		return backupDir, activeFile, ".db", true, "docker restart 3x-ui", nil
-	}
-
 	if softInfo.DeployMode == "native" {
 		if softInfo.SoftwareType == "sing-box" {
 			activeFile = "/etc/sing-box/config.json"
@@ -55,7 +45,25 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
 			restartCmd = "systemctl restart xray 2>/dev/null || service xray restart 2>/dev/null"
 			return backupDir, activeFile, ".json", false, restartCmd, nil
+		} else if softInfo.SoftwareType == "3x-ui" {
+			activeFile = "/etc/x-ui/x-ui.db"
+			if softInfo.ConfigPath != "" {
+				activeFile = softInfo.ConfigPath
+			}
+			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+			restartCmd = "systemctl restart x-ui 2>/dev/null || service x-ui restart 2>/dev/null"
+			return backupDir, activeFile, ".db", true, restartCmd, nil
 		}
+	}
+
+	if softInfo.SoftwareType == "3x-ui" {
+		backupDir = "/etc/x-ui/backups"
+		activeFile = "/etc/x-ui/x-ui.db"
+		if softInfo.ConfigPath != "" {
+			activeFile = softInfo.ConfigPath
+			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+		}
+		return backupDir, activeFile, ".db", true, "docker restart 3x-ui", nil
 	}
 
 	switch softInfo.SoftwareType {
@@ -250,6 +258,10 @@ func (bm *BackupManager) ListBackups(inst *VPSInstance, softInfo *SoftwareInfo) 
 func (bm *BackupManager) RestoreBackup(inst *VPSInstance, softInfo *SoftwareInfo, snapshotID string) error {
 	if inst == nil || softInfo == nil {
 		return fmt.Errorf("instance or software info is nil")
+	}
+	snapshotID = strings.TrimSpace(snapshotID)
+	if snapshotID == "" {
+		return fmt.Errorf("snapshot_id is required")
 	}
 
 	backups, err := bm.ListBackups(inst, softInfo)

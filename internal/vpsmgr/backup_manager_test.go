@@ -52,9 +52,9 @@ func (m *mockSSHFS) run(inst *VPSInstance, cmd string) (string, error) {
 			dst := parts[2]
 			if content, ok := m.files[src]; ok {
 				m.files[dst] = content
-			} else {
-				m.files[dst] = "copied-content"
+				return "", nil
 			}
+			return "", fmt.Errorf("cp: cannot stat '%s': No such file or directory", src)
 		}
 		return "", nil
 	}
@@ -253,15 +253,14 @@ func TestManager_LifecycleAndSafeUpgrade(t *testing.T) {
 
 	cfg := &config.Config{}
 	m := NewManager(cfg, nil, "")
-	m.detector = detector
-	m.backupMgr = NewBackupManager(detector)
+	m.SetDetectorForTest(detector)
 
 	inst := &VPSInstance{
 		ID:   "vps-lax",
 		Name: "美西 ACCK",
 		IP:   "38.175.222.44",
 	}
-	m.instances = []*VPSInstance{inst}
+	m.SetInstancesForTest([]*VPSInstance{inst})
 
 	ctx := context.Background()
 
@@ -337,5 +336,33 @@ func TestManager_LifecycleAndSafeUpgrade(t *testing.T) {
 	}
 	if !strings.Contains(upRespFail.RollbackReason, "Smoke test failed") {
 		t.Errorf("expected rollback reason to indicate smoke failure, got: %s", upRespFail.RollbackReason)
+	}
+
+	// 5. 安全升级测试 - 冒烟测试失败且无备份时，必须明确返回 Success=false 且 RolledBack=false
+	delete(fs.files, "/opt/sb-mgr/config.json") // 删除配置文件导致无法备份
+	upRespNoSnap, err := m.PerformSafeUpgrade(ctx, &SafeUpgradeRequest{
+		VPSID: "vps-lax",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if upRespNoSnap.Success {
+		t.Errorf("expected upgrade to report failure when smoke test fails without backup")
+	}
+	if upRespNoSnap.RolledBack {
+		t.Errorf("expected rolled_back to be false when no snapshot existed")
+	}
+
+	// 6. 验证 findInstance 空串防护
+	if instFound := m.findInstance(""); instFound != nil {
+		t.Errorf("expected findInstance(\"\") to return nil, got: %+v", instFound)
+	}
+	if instFound := m.findInstance("   "); instFound != nil {
+		t.Errorf("expected findInstance(\"   \") to return nil, got: %+v", instFound)
+	}
+
+	// 7. 验证 RestoreBackup 空快照 ID 防护
+	if err := m.RestoreBackup(ctx, "vps-lax", ""); err == nil {
+		t.Errorf("expected RestoreBackup with empty snapshot ID to return error")
 	}
 }

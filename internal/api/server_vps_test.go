@@ -41,6 +41,7 @@ func TestVPSAPIExtensions(t *testing.T) {
 	})
 
 	vm := vpsmgr.NewManager(cfg, nil, "")
+	vm.SetVPSHubConfig("", "", "")
 	vm.SetDetectorForTest(det)
 
 	inst := &vpsmgr.VPSInstance{

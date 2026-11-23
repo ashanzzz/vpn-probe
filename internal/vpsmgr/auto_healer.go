@@ -186,54 +186,82 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 		return resp, fmt.Errorf("%s", resp.Message)
 	}
 
-	// 1. 处理 sing-box 服务更新
-	if softInfo.SoftwareType == "sing-box" {
-		containerName := softInfo.ContainerName
-		if containerName == "" {
-			containerName = "sb-lax"
-		}
-		cfgHostPath := fmt.Sprintf("/opt/%s/config.json", containerName)
+	// 1. 根据软件形态与部署模式解析文件路径并安全执行换端口
+	_, activeFile, _, isSqlite, restartCmd, err := resolveBackupPaths(softInfo)
+	if err != nil {
+		resp.Message = fmt.Sprintf("resolve proxy paths: %v", err)
+		return resp, err
+	}
 
-		// A. 自动备份
-		backupCmd := fmt.Sprintf("cp %s %s.bak", cfgHostPath, cfgHostPath)
-		if _, err := h.detector.RunSSH(inst, backupCmd); err != nil {
-			resp.Message = fmt.Sprintf("failed to backup config: %v", err)
+	// A. 自动配置快照备份
+	backupCmd := fmt.Sprintf("cp %s %s.bak", activeFile, activeFile)
+	if _, err := h.detector.RunSSH(inst, backupCmd); err != nil {
+		resp.Message = fmt.Sprintf("failed to backup config: %v", err)
+		return resp, err
+	}
+
+	// B. 端口替换与语法预检
+	if isSqlite {
+		// 3x-ui 数据库热更新 (优先使用容器或宿主机 sqlite3)
+		var dbCmd string
+		if softInfo.DeployMode == "docker" {
+			cName := softInfo.ContainerName
+			if cName == "" {
+				cName = "3x-ui"
+			}
+			dbCmd = fmt.Sprintf("docker exec %s sqlite3 /etc/x-ui/x-ui.db \"UPDATE inbounds SET port=%d WHERE port=%d;\" 2>/dev/null || sqlite3 %s \"UPDATE inbounds SET port=%d WHERE port=%d;\"", cName, newPort, oldPort, activeFile, newPort, oldPort)
+		} else {
+			dbCmd = fmt.Sprintf("sqlite3 %s \"UPDATE inbounds SET port=%d WHERE port=%d;\"", activeFile, newPort, oldPort)
+		}
+		if _, err := h.detector.RunSSH(inst, dbCmd); err != nil {
+			// 回滚
+			h.detector.RunSSH(inst, fmt.Sprintf("cp %s.bak %s", activeFile, activeFile))
+			resp.Message = fmt.Sprintf("failed to update 3x-ui inbound port: %v", err)
 			return resp, err
 		}
-
-		// B. 替换端口
-		replaceCmd := fmt.Sprintf("sed -i 's/\"listen_port\": %d/\"listen_port\": %d/g' %s", oldPort, newPort, cfgHostPath)
+	} else {
+		// JSON 文本配置 (sing-box / xray)
+		replaceCmd := fmt.Sprintf("sed -i 's/\"listen_port\": %d/\"listen_port\": %d/g' %s", oldPort, newPort, activeFile)
 		if _, err := h.detector.RunSSH(inst, replaceCmd); err != nil {
-			// 回滚
-			h.detector.RunSSH(inst, fmt.Sprintf("cp %s.bak %s", cfgHostPath, cfgHostPath))
+			h.detector.RunSSH(inst, fmt.Sprintf("cp %s.bak %s", activeFile, activeFile))
 			resp.Message = fmt.Sprintf("failed to modify port in config: %v", err)
 			return resp, err
 		}
 
-		// C. 强校验：sing-box check 预检
-		checkCmd := fmt.Sprintf("docker exec %s sing-box check -c /etc/sing-box/config.json", containerName)
-		checkOut, err := h.detector.RunSSH(inst, checkCmd)
-		if err != nil {
-			// 预检失败，原子回滚！
-			logger.Errorf("[AUTO-HEAL] sing-box check failed on %s: %s, rolling back!", inst.IP, checkOut)
-			h.detector.RunSSH(inst, fmt.Sprintf("cp %s.bak %s", cfgHostPath, cfgHostPath))
-			resp.Message = fmt.Sprintf("sing-box check failed: %v, rolled back", err)
-			return resp, fmt.Errorf("%s", resp.Message)
+		// 强校验预检 (Preflight Check)
+		var checkCmd string
+		if softInfo.DeployMode == "docker" {
+			cName := softInfo.ContainerName
+			if cName == "" {
+				cName = "sb-mgr"
+			}
+			if softInfo.SoftwareType == "xray" {
+				checkCmd = fmt.Sprintf("docker exec %s xray -test -config /etc/xray/config.json 2>/dev/null || true", cName)
+			} else {
+				checkCmd = fmt.Sprintf("docker exec %s sing-box check -c /etc/sing-box/config.json", cName)
+			}
+		} else {
+			if softInfo.SoftwareType == "xray" {
+				checkCmd = fmt.Sprintf("xray -test -config %s 2>/dev/null || true", activeFile)
+			} else {
+				checkCmd = fmt.Sprintf("sing-box check -c %s", activeFile)
+			}
 		}
 
-		// D. 防火墙放行新端口并重启
-		fwCmd := fmt.Sprintf("iptables -I INPUT -p tcp --dport %d -j ACCEPT; iptables -I INPUT -p udp --dport %d -j ACCEPT; docker restart %s", newPort, newPort, containerName)
-		if _, err := h.detector.RunSSH(inst, fwCmd); err != nil {
-			resp.Message = fmt.Sprintf("failed to restart sing-box container: %v", err)
-			return resp, err
+		checkOut, err := h.detector.RunSSH(inst, checkCmd)
+		if err != nil {
+			logger.Errorf("[AUTO-HEAL] Preflight check failed on %s: %s, rolling back!", inst.IP, checkOut)
+			h.detector.RunSSH(inst, fmt.Sprintf("cp %s.bak %s", activeFile, activeFile))
+			resp.Message = fmt.Sprintf("preflight check failed: %v, rolled back", err)
+			return resp, fmt.Errorf("%s", resp.Message)
 		}
-	} else if softInfo.SoftwareType == "3x-ui" {
-		// 3x-ui 数据库热更新
-		dbCmd := fmt.Sprintf("docker exec 3x-ui sqlite3 /etc/x-ui/x-ui.db \"UPDATE inbounds SET port=%d WHERE port=%d;\" && docker restart 3x-ui", newPort, oldPort)
-		if _, err := h.detector.RunSSH(inst, dbCmd); err != nil {
-			resp.Message = fmt.Sprintf("failed to update 3x-ui inbound port: %v", err)
-			return resp, err
-		}
+	}
+
+	// C. 防火墙放行新端口并安全平滑重启服务
+	fwAndRestartCmd := fmt.Sprintf("iptables -I INPUT -p tcp --dport %d -j ACCEPT 2>/dev/null; iptables -I INPUT -p udp --dport %d -j ACCEPT 2>/dev/null; %s", newPort, newPort, restartCmd)
+	if out, err := h.detector.RunSSH(inst, fwAndRestartCmd); err != nil {
+		resp.Message = fmt.Sprintf("failed to restart service: %v (output: %s)", err, out)
+		return resp, err
 	}
 
 	// 2. 构造新节点 URL

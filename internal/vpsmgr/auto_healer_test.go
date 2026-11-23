@@ -1,6 +1,8 @@
 package vpsmgr
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"vpn-probe/internal/model"
@@ -167,5 +169,108 @@ func TestExecutePortHeal_ResidentialForbidden(t *testing.T) {
 	}
 	if resp == nil || resp.Success {
 		t.Fatalf("expected resp.Success to be false")
+	}
+}
+
+func TestExecutePortHeal_DockerSingbox_Success(t *testing.T) {
+	var executedCmds []string
+	det := NewDetector(nil)
+	det.SetSSHRunner(func(inst *VPSInstance, cmd string) (string, error) {
+		executedCmds = append(executedCmds, cmd)
+		if strings.Contains(cmd, "docker ps") {
+			return "sb-mgr|ghcr.io/sagernet/sing-box:latest|Up 5 hours\n", nil
+		}
+		if strings.Contains(cmd, "echo 'busy' || echo 'free'") {
+			return "free\n", nil
+		}
+		return "", nil
+	})
+
+	healer := NewAutoHealer(det, nil, "")
+	inst := &VPSInstance{
+		ID:   "vps-docker",
+		Name: "Docker VPS",
+		IP:   "1.2.3.4",
+	}
+
+	ctx := context.Background()
+	resp, err := healer.ExecutePortHeal(ctx, inst, "Self-Node-1", "vless://uuid@1.2.3.4:30000#Self-Node-1", 45000)
+	if err != nil {
+		t.Fatalf("ExecutePortHeal failed: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("expected resp.Success to be true, got false")
+	}
+	if resp.NewPort != 45000 {
+		t.Errorf("expected new port 45000, got: %d", resp.NewPort)
+	}
+
+	// 检查备份指令、sed 端口替换、语法预检与防火墙放行
+	var foundBackup, foundSed, foundCheck, foundRestart bool
+	for _, cmd := range executedCmds {
+		if strings.Contains(cmd, "cp /opt/sb-mgr/config.json /opt/sb-mgr/config.json.bak") {
+			foundBackup = true
+		}
+		if strings.Contains(cmd, "sed -i 's/\"listen_port\": 30000/\"listen_port\": 45000/g' /opt/sb-mgr/config.json") {
+			foundSed = true
+		}
+		if strings.Contains(cmd, "docker exec sb-mgr sing-box check -c /etc/sing-box/config.json") {
+			foundCheck = true
+		}
+		if strings.Contains(cmd, "iptables -I INPUT -p tcp --dport 45000 -j ACCEPT") && strings.Contains(cmd, "docker restart sb-mgr") {
+			foundRestart = true
+		}
+	}
+	if !foundBackup || !foundSed || !foundCheck || !foundRestart {
+		t.Fatalf("missing expected step: backup=%v sed=%v check=%v restart=%v. Commands: %v",
+			foundBackup, foundSed, foundCheck, foundRestart, executedCmds)
+	}
+}
+
+func TestExecutePortHeal_NativeSingbox_Success(t *testing.T) {
+	var executedCmds []string
+	det := NewDetector(nil)
+	det.SetSSHRunner(func(inst *VPSInstance, cmd string) (string, error) {
+		executedCmds = append(executedCmds, cmd)
+		if strings.Contains(cmd, "docker ps") {
+			return "/usr/bin/sing-box\n", nil
+		}
+		if strings.Contains(cmd, "echo 'busy' || echo 'free'") {
+			return "free\n", nil
+		}
+		return "", nil
+	})
+
+	healer := NewAutoHealer(det, nil, "")
+	inst := &VPSInstance{
+		ID:   "vps-native",
+		Name: "Native VPS",
+		IP:   "5.6.7.8",
+	}
+
+	ctx := context.Background()
+	resp, err := healer.ExecutePortHeal(ctx, inst, "Self-Native-1", "vless://uuid@5.6.7.8:20000#Self-Native-1", 33333)
+	if err != nil {
+		t.Fatalf("ExecutePortHeal native failed: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("expected resp.Success to be true, got false")
+	}
+
+	var foundBackup, foundCheck, foundSystemctl bool
+	for _, cmd := range executedCmds {
+		if strings.Contains(cmd, "cp /etc/sing-box/config.json /etc/sing-box/config.json.bak") {
+			foundBackup = true
+		}
+		if strings.Contains(cmd, "sing-box check -c /etc/sing-box/config.json") {
+			foundCheck = true
+		}
+		if strings.Contains(cmd, "systemctl restart sing-box") {
+			foundSystemctl = true
+		}
+	}
+	if !foundBackup || !foundCheck || !foundSystemctl {
+		t.Fatalf("missing expected native step: backup=%v check=%v systemctl=%v. Commands: %v",
+			foundBackup, foundCheck, foundSystemctl, executedCmds)
 	}
 }

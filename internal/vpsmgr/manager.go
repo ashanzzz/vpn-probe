@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -426,7 +427,7 @@ docker run -d --name sb-mgr --restart always --net=host -v /opt/sb-mgr:/etc/sing
 	return "", fmt.Errorf("unsupported software '%s'", software)
 }
 
-// UpdateSoftware 升级指定 VPS 上的代理软件至最新镜像并平滑重启
+// UpdateSoftware 升级指定 VPS 上的代理软件至最新版本或镜像并平滑重启（Docker 模式下执行容器重建事务，Native 模式下触发脚本更新）
 func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, error) {
 	inst := m.findInstance(vpsID)
 	if inst == nil {
@@ -434,21 +435,89 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 	}
 
 	softInfo := m.detector.InspectVPS(ctx, inst)
-	if softInfo.DeployMode != "docker" || softInfo.ContainerName == "" {
-		return "", fmt.Errorf("instance %s does not run manageable docker container (detected: %s/%s)", inst.IP, softInfo.SoftwareType, softInfo.DeployMode)
+	if softInfo == nil || softInfo.SoftwareType == "none" || softInfo.Status == "not_installed" {
+		return "", fmt.Errorf("instance %s does not have manageable proxy software installed", inst.IP)
 	}
 
-	updateCmd := fmt.Sprintf("docker pull ghcr.io/sagernet/sing-box:latest && docker restart %s", softInfo.ContainerName)
-	if softInfo.SoftwareType == "3x-ui" {
-		updateCmd = "docker pull ghcr.io/mhsanaei/3x-ui:latest && docker restart 3x-ui"
+	var updateCmd string
+	if softInfo.DeployMode == "docker" {
+		cName := softInfo.ContainerName
+		if cName == "" {
+			if softInfo.SoftwareType == "3x-ui" {
+				cName = "3x-ui"
+			} else {
+				cName = "sb-mgr"
+			}
+		}
+
+		if softInfo.SoftwareType == "3x-ui" {
+			cfgDir := "/etc/x-ui"
+			if softInfo.ConfigPath != "" {
+				cfgDir = filepath.Dir(softInfo.ConfigPath)
+			}
+			updateCmd = fmt.Sprintf("docker pull ghcr.io/mhsanaei/3x-ui:latest && "+
+				"docker rename %s %s-old && docker stop %s-old && "+
+				"(docker run -d --name %s --restart always --net=host -v %s:/etc/x-ui ghcr.io/mhsanaei/3x-ui:latest || "+
+				"(docker rm -f %s 2>/dev/null; docker rename %s-old %s; docker start %s; exit 1)) && "+
+				"docker rm -f %s-old",
+				cName, cName, cName,
+				cName, cfgDir,
+				cName, cName, cName, cName,
+				cName)
+		} else if softInfo.SoftwareType == "xray" {
+			cfgDir := "/etc/v2ray-agent/docker"
+			if softInfo.ConfigPath != "" {
+				cfgDir = filepath.Dir(softInfo.ConfigPath)
+			}
+			updateCmd = fmt.Sprintf("docker pull ghcr.io/xtls/xray-core:latest && "+
+				"docker rename %s %s-old && docker stop %s-old && "+
+				"(docker run -d --name %s --restart always --net=host -v %s:/etc/xray ghcr.io/xtls/xray-core:latest run -c /etc/xray/config.json || "+
+				"(docker rm -f %s 2>/dev/null; docker rename %s-old %s; docker start %s; exit 1)) && "+
+				"docker rm -f %s-old",
+				cName, cName, cName,
+				cName, cfgDir,
+				cName, cName, cName, cName,
+				cName)
+		} else {
+			// 默认 sing-box
+			cfgDir := fmt.Sprintf("/opt/%s", cName)
+			if softInfo.ConfigPath != "" {
+				cfgDir = filepath.Dir(softInfo.ConfigPath)
+			}
+			updateCmd = fmt.Sprintf("docker pull ghcr.io/sagernet/sing-box:latest && "+
+				"docker rename %s %s-old && docker stop %s-old && "+
+				"(docker run -d --name %s --restart always --net=host -v %s:/etc/sing-box ghcr.io/sagernet/sing-box:latest run -c /etc/sing-box/config.json || "+
+				"(docker rm -f %s 2>/dev/null; docker rename %s-old %s; docker start %s; exit 1)) && "+
+				"docker rm -f %s-old",
+				cName, cName, cName,
+				cName, cfgDir,
+				cName, cName, cName, cName,
+				cName)
+		}
+	} else if softInfo.DeployMode == "native" {
+		if softInfo.SoftwareType == "sing-box" {
+			updateCmd = "bash -c \"$(curl -fsSL https://sing-box.app/deb-install.sh)\" 2>/dev/null || " +
+				"bash -c \"$(curl -fsSL https://raw.githubusercontent.com/SagerNet/sing-box/main/install.sh)\" 2>/dev/null; " +
+				"systemctl restart sing-box 2>/dev/null || service sing-box restart 2>/dev/null"
+		} else if softInfo.SoftwareType == "3x-ui" {
+			updateCmd = "x-ui update 2>/dev/null || bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) 2>/dev/null; " +
+				"systemctl restart x-ui 2>/dev/null || service x-ui restart 2>/dev/null"
+		} else if softInfo.SoftwareType == "xray" {
+			updateCmd = "bash -c \"$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)\" @ install 2>/dev/null; " +
+				"systemctl restart xray 2>/dev/null || service xray restart 2>/dev/null"
+		} else {
+			return "", fmt.Errorf("unsupported native software type: %s", softInfo.SoftwareType)
+		}
+	} else {
+		return "", fmt.Errorf("instance %s does not run manageable software (detected: %s/%s)", inst.IP, softInfo.SoftwareType, softInfo.DeployMode)
 	}
 
 	out, err := m.detector.RunSSH(inst, updateCmd)
 	if err != nil {
-		return out, fmt.Errorf("update software on %s failed: %w", inst.IP, err)
+		return out, fmt.Errorf("update software on %s failed: %w (output: %s)", inst.IP, err, out)
 	}
 
-	return fmt.Sprintf("Successfully updated container '%s' on %s to latest", softInfo.ContainerName, inst.IP), nil
+	return fmt.Sprintf("Successfully updated %s (%s) on %s to latest", softInfo.SoftwareType, softInfo.DeployMode, inst.IP), nil
 }
 
 // CreateBackup 为指定 VPS 创建配置快照

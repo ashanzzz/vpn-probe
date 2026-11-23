@@ -112,6 +112,17 @@ func TestDiagnosisLogic(t *testing.T) {
 			wantActionType: "CHECK_SERVER_AND_PROCESS",
 		},
 		{
+			name:           "服务未运行: 全球海外和国内端口不通但国内Ping通 (主机在线/代理进程未启动或崩溃)",
+			port:           33338,
+			protocol:       "vless",
+			domesticTCPOK:  false,
+			abroadOK:       false,
+			pingOK:         true,
+			wantFault:      model.FaultMachineDown,
+			wantStatusText: "【服务未运行】主机在线(Ping通)但端口无响应/进程异常",
+			wantActionType: "CHECK_PROXY_PROCESS",
+		},
+		{
 			name:           "家宽国内直连受阻: 境外隧道正常但国内直连受阻 (需专线中转，严禁换端口)",
 			port:           40981,
 			protocol:       "socks5",

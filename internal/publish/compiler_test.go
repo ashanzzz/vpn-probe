@@ -148,6 +148,18 @@ func TestMatchMemberName_UnicodePrefixAndChineseTransit(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "Direct node with flag emoji vs lowercase plain",
+			raw:      "🇯🇵 JP-Tokyo-Softbank-Reality-Vision",
+			alias:    "jp-tokyo-softbank-reality-vision",
+			expected: true,
+		},
+		{
+			name:     "Direct node lowercase emoji vs uppercase plain",
+			raw:      "🇯🇵 jp-tokyo-softbank-reality-vision",
+			alias:    "JP-Tokyo-Softbank-Reality-Vision",
+			expected: true,
+		},
+		{
 			name:     "Case-insensitive alias matching",
 			raw:      "链式|JP-Tokyo-Softbank-Reality-Vision ➔ LZ-JP-SoftBank-家宽",
 			alias:    "sb-日宽-softbank",

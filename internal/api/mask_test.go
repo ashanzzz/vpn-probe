@@ -40,6 +40,24 @@ func TestMaskNodeURL(t *testing.T) {
 			omits: []string{"myHy2SecretPassword"},
 		},
 		{
+			name:  "TUIC with uuid and token",
+			input: "tuic://11112222-3333-4444-5555-666677778888:secretToken123@38.175.222.44:8443?congestion_controller=bbr#Tuic-Node",
+			contains: []string{
+				"tuic://11112222-3333-4444-5555-666677778888:******@38.175.222.44:8443",
+				"#Tuic-Node",
+			},
+			omits: []string{"secretToken123"},
+		},
+		{
+			name:  "TUIC with single token",
+			input: "tuic://mySingleTuicPass@38.175.222.44:8443#Tuic-Node2",
+			contains: []string{
+				"tuic://******@38.175.222.44:8443",
+				"#Tuic-Node2",
+			},
+			omits: []string{"mySingleTuicPass"},
+		},
+		{
 			name:  "VLESS Reality with UUID, pbk, sid",
 			input: "vless://5b84d275-d328-4565-9b47-20e9121fee7e@38.175.222.44:36563?encryption=none&security=reality&sni=aws.amazon.com&fp=chrome&type=tcp&pbk=Djl4lJnk4RIOWfywQJxvCRwhGyZdUdSk9Xquv-35TzI&sid=3c4ffcc0#US-LAX-ACCK-4837-Reality",
 			contains: []string{

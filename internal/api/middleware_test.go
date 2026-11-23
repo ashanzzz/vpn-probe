@@ -159,6 +159,20 @@ func TestAuthMiddleware(t *testing.T) {
 	if err != nil || resp.StatusCode != fiber.StatusOK {
 		t.Fatalf("expected query token fallback on subscription endpoint to return 200, got %d", resp.StatusCode)
 	}
+
+	// 15. 测试 Header / Query Token 携带前后空白字符自动 TrimSpace -> 200 OK
+	req = httptest.NewRequest("GET", "/api/protected", nil)
+	req.Header.Set("Authorization", "Bearer  "+authToken+"  \n")
+	resp, err = app.Test(req)
+	if err != nil || resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("expected header token with whitespace padding to return 200, got %d", resp.StatusCode)
+	}
+
+	req = httptest.NewRequest("GET", "/api/sub/online?token=%20"+readToken+"%20", nil)
+	resp, err = app.Test(req)
+	if err != nil || resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("expected query token with whitespace padding to return 200, got %d", resp.StatusCode)
+	}
 }
 
 func TestIPLockout(t *testing.T) {

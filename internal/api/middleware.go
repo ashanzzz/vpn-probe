@@ -217,11 +217,13 @@ func NewAuthMiddleware(cfg AuthConfig) fiber.Handler {
 		if headerToken == "" {
 			headerToken = c.Get("X-API-Key")
 		}
+		headerToken = strings.TrimSpace(headerToken)
 
 		queryToken = c.Query("token")
 		if queryToken == "" {
 			queryToken = c.Query("api_key")
 		}
+		queryToken = strings.TrimSpace(queryToken)
 
 		// 安全规则：URL Query 传参仅允许在 /api/sub/* 订阅拉取端点及 /rules/* 脚本引用端点使用
 		isQueryAllowed := strings.HasPrefix(path, "/api/sub/") || strings.HasPrefix(path, "/rules/")

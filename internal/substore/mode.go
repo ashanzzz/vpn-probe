@@ -526,6 +526,9 @@ var (
 
 // AuditFileGroups 审计指定 File 的 Clash 配置是否存在悬空/不存在的节点引用
 func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAuditResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	cfg := c.GetConfig()
 	if cfg == nil || !cfg.Enabled || cfg.URL == "" {
 		return nil, fmt.Errorf("substore is not configured or disabled")
@@ -544,9 +547,16 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 	var lastErr error
 	var bodyBytes []byte
 
+	c.mu.RLock()
+	client := c.httpClient
+	c.mu.RUnlock()
+	if client == nil {
+		client = &http.Client{Timeout: 120 * time.Second}
+	}
+
 	for _, base := range urlsToTry {
 		fn := func(baseURL string) ([]byte, error) {
-			auditCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			auditCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 			defer cancel()
 
 			req, err := http.NewRequestWithContext(auditCtx, "GET", fmt.Sprintf("%s/api/file/%s", baseURL, fileName), nil)
@@ -556,15 +566,13 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 			c.setAuth(req)
 			req.Header.Set("User-Agent", "ClashX/1.90.0")
 
-			auditClient := &http.Client{Timeout: 120 * time.Second}
-			defer auditClient.CloseIdleConnections()
-			resp, err := auditClient.Do(req)
+			resp, err := client.Do(req)
 			if err != nil {
 				return nil, err
 			}
 			defer resp.Body.Close()
 
-			b, err := io.ReadAll(resp.Body)
+			b, err := io.ReadAll(io.LimitReader(resp.Body, 50*1024*1024))
 			if err != nil {
 				return nil, err
 			}

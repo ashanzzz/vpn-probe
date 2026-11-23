@@ -36,6 +36,9 @@ type Scheduler struct {
 	healer         *healer.Healer
 	vpsMgr         *vpsmgr.Manager
 	mu             sync.RWMutex
+	checkMu        sync.Mutex            // 保证 RunAllChecks 串行执行，防止沙箱探针与系统资源竞争
+	speedMu        sync.Mutex            // 保证 RunSpeedTestAll 串行执行，避免并发测速带宽互相挤占
+	syncMu         sync.Mutex            // 保证五维策略组向 SubStore 同步串行化
 	nodeStates     map[string]*NodeState // node name -> state
 	cancel         context.CancelFunc
 }
@@ -442,6 +445,9 @@ func (s *Scheduler) Stop() {
 
 // RunAllChecks 对已配置的监控节点全量执行检测并分类落盘 (仅探测自建节点)
 func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.BatchProbeResponse {
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
+
 	s.mu.RLock()
 	var links []string
 	for _, state := range s.nodeStates {
@@ -451,7 +457,7 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 		links = append(links, state.Config.URL)
 		// 预热上一次已知健康的海外节点作为候选探针
 		if state.LastResult != nil && state.LastResult.Online && !state.LastResult.ChinaExit {
-			if state.LastResult.Diagnostic != nil {
+			if s.engine != nil && state.LastResult.Diagnostic != nil {
 				s.engine.UpdateHealthyPeer(probe.PeerProxyCandidate{
 					Name: state.LastResult.Name,
 					URL:  state.Config.URL,
@@ -467,6 +473,11 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 		return nil
 	}
 
+	if s.engine == nil {
+		logger.Warnf("[MONITOR] Probe engine is nil, skipping checks")
+		return nil
+	}
+
 	req := &model.BatchProbeRequest{
 		Links:              links,
 		IsSelf:             true,
@@ -476,6 +487,9 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 	}
 
 	resp := s.engine.ProbeBatch(ctx, req)
+	if resp == nil {
+		return nil
+	}
 
 	// 1. 结构化分类与自愈编排 (区分线路机、家宽机)
 	var transitNodes []*model.NodeProbeResult
@@ -577,7 +591,9 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 
 			// 方案B：五维智能策略组分类 (线路机、美区全家桶、日区全家桶、其他、送中隔离)
 			fiveGroups := ClassifyIntoFiveGroups(rankedTransits, uniqueResis, chainLinks)
+			s.syncMu.Lock()
 			err := s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
+			s.syncMu.Unlock()
 			if err != nil {
 				logger.Event(logger.LevelWarn, "substore", "sync_failed", fmt.Sprintf("error=%v", err))
 			} else {
@@ -592,6 +608,9 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 
 // RunSpeedTestAll 对所有在线线路机执行测速并按得分重排
 func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, durationSec int) []*model.NodeProbeResult {
+	s.speedMu.Lock()
+	defer s.speedMu.Unlock()
+
 	if s.engine == nil {
 		logger.Warnf("[SPEEDTEST] Probe engine is nil, skipping speed test")
 		return nil
@@ -658,16 +677,20 @@ func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, duration
 	s.mu.RUnlock()
 
 	ranked := speedtest.RankNodes(allTransits)
-	chains := s.healer.BuildSmartChains(ranked, allResis)
+	uniqueResis := deduplicateNodeResults(allResis)
+	chains := s.healer.BuildSmartChains(ranked, uniqueResis)
 
 	if s.substoreClient != nil && s.cfg.SubStore.Enabled {
-		fullMeshChains := s.healer.BuildFullMeshRegionalChains(ranked, allResis)
+		fullMeshChains := s.healer.BuildFullMeshRegionalChains(ranked, uniqueResis)
 		if len(fullMeshChains) == 0 {
 			fullMeshChains = chains
 		}
 		fullMeshChains = mergeCustomChains(fullMeshChains)
-		fiveGroups := ClassifyIntoFiveGroups(ranked, allResis, fullMeshChains)
-		if err := s.substoreClient.SyncFiveGroups(ctx, fiveGroups); err != nil {
+		fiveGroups := ClassifyIntoFiveGroups(ranked, uniqueResis, fullMeshChains)
+		s.syncMu.Lock()
+		err := s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
+		s.syncMu.Unlock()
+		if err != nil {
 			logger.Event(logger.LevelWarn, "substore", "sync_failed", fmt.Sprintf("speedtest sync error=%v", err))
 		}
 	}
@@ -683,6 +706,9 @@ func (s *Scheduler) SyncThreeTierNow(ctx context.Context) error {
 
 // SyncFiveGroupsNow 立即执行一次自建五维策略组全量同步 (方案B全网状中继池)
 func (s *Scheduler) SyncFiveGroupsNow(ctx context.Context) error {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
 	if s.substoreClient == nil || !s.cfg.SubStore.Enabled {
 		return fmt.Errorf("substore integration is not enabled")
 	}

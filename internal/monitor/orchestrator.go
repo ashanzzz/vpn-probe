@@ -560,11 +560,8 @@ type CustomChainBind struct {
 	CreatedAt       string `json:"created_at"`
 }
 
-// LoadCustomChains 读取所有自定义显式链式绑定
-func LoadCustomChains() ([]CustomChainBind, error) {
-	customChainsMu.RLock()
-	defer customChainsMu.RUnlock()
-
+// loadCustomChainsLocked 读取所有自定义显式链式绑定 (调用方须已持有读锁或写锁)
+func loadCustomChainsLocked() ([]CustomChainBind, error) {
 	if _, err := os.Stat(customChainsFile); os.IsNotExist(err) {
 		return []CustomChainBind{}, nil
 	}
@@ -576,13 +573,20 @@ func LoadCustomChains() ([]CustomChainBind, error) {
 
 	chains := make([]CustomChainBind, 0)
 	if err := json.Unmarshal(data, &chains); err != nil {
-		return []CustomChainBind{}, nil
+		return nil, fmt.Errorf("unmarshal custom chains from %s: %w", customChainsFile, err)
 	}
 	if chains == nil {
 		chains = make([]CustomChainBind, 0)
 	}
 
 	return chains, nil
+}
+
+// LoadCustomChains 读取所有自定义显式链式绑定
+func LoadCustomChains() ([]CustomChainBind, error) {
+	customChainsMu.RLock()
+	defer customChainsMu.RUnlock()
+	return loadCustomChainsLocked()
 }
 
 // SaveCustomChains 保存自定义显式链式绑定列表 (原子写入保证持久化安全)
@@ -690,9 +694,9 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 	customChainsMu.Lock()
 	defer customChainsMu.Unlock()
 
-	chains := []CustomChainBind{}
-	if data, err := os.ReadFile(customChainsFile); err == nil {
-		_ = json.Unmarshal(data, &chains)
+	chains, err := loadCustomChainsLocked()
+	if err != nil {
+		return bind, err
 	}
 
 	// 存在相同绑定则替换，否则追加
@@ -721,9 +725,9 @@ func (o *Orchestrator) UnbindExplicitChain(target string) error {
 	customChainsMu.Lock()
 	defer customChainsMu.Unlock()
 
-	chains := []CustomChainBind{}
-	if data, err := os.ReadFile(customChainsFile); err == nil {
-		_ = json.Unmarshal(data, &chains)
+	chains, err := loadCustomChainsLocked()
+	if err != nil {
+		return err
 	}
 
 	var newChains []CustomChainBind

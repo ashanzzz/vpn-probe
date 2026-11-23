@@ -152,8 +152,12 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 	customGroups, _ := monitor.LoadCustomGroups()
 	customMap := make(map[string]model.CustomGroupDef)
 	for _, cg := range customGroups {
-		customMap[cg.Name] = cg
-		customMap[cg.DisplayName] = cg
+		if cg.Name != "" {
+			customMap[cg.Name] = cg
+		}
+		if cg.DisplayName != "" {
+			customMap[cg.DisplayName] = cg
+		}
 	}
 
 	// 5. Build parsed rules and calculate rule counts per target policy group

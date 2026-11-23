@@ -1217,7 +1217,7 @@ func (s *APIServer) handleProbe(c *fiber.Ctx) error {
 		})
 	}
 
-	ctx := context.Background()
+	ctx := c.Context()
 	resp := s.engine.ProbeBatch(ctx, &req)
 
 	// 写入历史
@@ -1248,7 +1248,7 @@ func (s *APIServer) handleProbe(c *fiber.Ctx) error {
 func (s *APIServer) handleGetHistory(c *fiber.Ctx) error {
 	limit := c.QueryInt("limit", 50)
 	reveal := c.QueryBool("reveal", false)
-	records, err := s.store.GetRecentResults(context.Background(), limit)
+	records, err := s.store.GetRecentResults(c.Context(), limit)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": err.Error(),
@@ -1265,7 +1265,7 @@ func (s *APIServer) handleGetHistory(c *fiber.Ctx) error {
 // handleGetGroupSubscription 提供纯文本节点订阅列表，可直接配置给 SubStore 作为订阅源
 func (s *APIServer) handleGetGroupSubscription(c *fiber.Ctx) error {
 	groupName := c.Params("group")
-	records, err := s.store.GetRecentResults(context.Background(), 200)
+	records, err := s.store.GetRecentResults(c.Context(), 200)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).SendString(err.Error())
 	}
@@ -1313,7 +1313,7 @@ func (s *APIServer) handleSyncSubStore(c *fiber.Ctx) error {
 
 	subName := c.Query("sub_name")
 	if subName != "" {
-		if err := s.substoreClient.TriggerDownload(context.Background(), subName); err != nil {
+		if err := s.substoreClient.TriggerDownload(c.Context(), subName); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"error": err.Error(),
 			})

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -240,5 +241,24 @@ func TestOrchestrator_SyncAllCustomGroups_EmptyNodes(t *testing.T) {
 	}
 	if syncedContent != "" {
 		t.Errorf("expected empty string content for empty custom group, got %q", syncedContent)
+	}
+}
+
+func TestOrchestrator_LoadCustomChains_MalformedJSONReturnsError(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), "malformed_chains.json")
+	if err := os.WriteFile(tmpFile, []byte("{not valid json"), 0644); err != nil {
+		t.Fatalf("failed to write tmp file: %v", err)
+	}
+	defer SetCustomChainsFileForTest(tmpFile)()
+
+	_, err := LoadCustomChains()
+	if err == nil {
+		t.Fatal("expected error when loading malformed custom chains JSON, got nil")
+	}
+
+	orc := &Orchestrator{}
+	err = orc.UnbindExplicitChain("target-1")
+	if err == nil {
+		t.Fatal("expected error from UnbindExplicitChain on malformed file, got nil")
 	}
 }

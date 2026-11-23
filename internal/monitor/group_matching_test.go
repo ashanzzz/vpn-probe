@@ -20,4 +20,31 @@ func TestMatchAtomsManualFilterAndTags(t *testing.T) {
 	if len(out) != 0 {
 		t.Fatal("china exit not filtered")
 	}
+
+	// Test ChinaLeakOnly
+	leakFilter := model.GroupFilter{
+		Kinds:         []string{"residential"},
+		ChinaLeakOnly: true,
+	}
+	leakOut := MatchAtoms(nodes, leakFilter)
+	if len(leakOut) != 1 || leakOut[0].ID != "two" {
+		t.Fatalf("expected only node 'two' for ChinaLeakOnly, got: %+v", leakOut)
+	}
+
+	// Verify DefaultCustomGroups ashan-china-leak matches leaked nodes and excludes clean nodes
+	defaultGroups := model.DefaultCustomGroups()
+	var chinaLeakGroup *model.CustomGroupDef
+	for i := range defaultGroups {
+		if defaultGroups[i].Name == "ashan-china-leak" {
+			chinaLeakGroup = &defaultGroups[i]
+			break
+		}
+	}
+	if chinaLeakGroup == nil {
+		t.Fatal("missing default group ashan-china-leak")
+	}
+	matchedLeak := MatchAtoms(nodes, chinaLeakGroup.Filter)
+	if len(matchedLeak) != 1 || matchedLeak[0].ID != "two" {
+		t.Fatalf("expected ashan-china-leak default group to isolate node 'two', got: %+v", matchedLeak)
+	}
 }

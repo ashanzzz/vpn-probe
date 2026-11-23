@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+const maxRetainedJobs = 50
 
 type Job struct {
 	ID        string    `json:"id"`
@@ -26,15 +29,23 @@ type Job struct {
 // Manager serializes publications, stores jobs on disk and resumes queued work after restart.
 // Revisions are coalesced: only the newest desired state is applied to Sub-Store.
 type Manager struct {
-	mu      sync.Mutex
-	file    string
-	jobs    []Job
-	wake    chan struct{}
-	publish func(context.Context, func(string)) error
+	mu       sync.Mutex
+	file     string
+	jobs     []Job
+	wake     chan struct{}
+	stopChan chan struct{}
+	stopOnce sync.Once
+	publish  func(context.Context, func(string)) error
 }
 
 func NewManager(file string, fn func(context.Context, func(string)) error) (*Manager, error) {
-	m := &Manager{file: file, wake: make(chan struct{}, 1), publish: fn, jobs: []Job{}}
+	m := &Manager{
+		file:     file,
+		wake:     make(chan struct{}, 1),
+		stopChan: make(chan struct{}),
+		publish:  fn,
+		jobs:     []Job{},
+	}
 	b, err := os.ReadFile(file)
 	if err == nil {
 		if err = json.Unmarshal(b, &m.jobs); err != nil {
@@ -48,12 +59,45 @@ func NewManager(file string, fn func(context.Context, func(string)) error) (*Man
 			m.jobs[i].Status = "queued"
 		}
 	}
+	m.pruneOldJobsLocked()
 	if err = m.persistLocked(); err != nil {
 		return nil, err
 	}
 	go m.run()
 	m.notify()
 	return m, nil
+}
+
+func (m *Manager) Close() {
+	m.stopOnce.Do(func() {
+		close(m.stopChan)
+	})
+}
+
+func (m *Manager) pruneOldJobsLocked() {
+	if len(m.jobs) <= maxRetainedJobs {
+		return
+	}
+	var active []Job
+	var terminal []Job
+	for _, j := range m.jobs {
+		if j.Status == "queued" || j.Status == "running" || j.Status == "verifying" {
+			active = append(active, j)
+		} else {
+			terminal = append(terminal, j)
+		}
+	}
+	keepTerminal := maxRetainedJobs - len(active)
+	if keepTerminal < 10 {
+		keepTerminal = 10
+	}
+	if len(terminal) > keepTerminal {
+		terminal = terminal[len(terminal)-keepTerminal:]
+	}
+	m.jobs = append(active, terminal...)
+	sort.Slice(m.jobs, func(i, j int) bool {
+		return m.jobs[i].Revision < m.jobs[j].Revision
+	})
 }
 func (m *Manager) notify() {
 	select {
@@ -100,6 +144,7 @@ func (m *Manager) Enqueue() (Job, error) {
 	now := time.Now().UTC()
 	j := Job{ID: uuid.NewString(), Revision: revision + 1, Status: "queued", CreatedAt: now, UpdatedAt: now}
 	m.jobs = append(m.jobs, j)
+	m.pruneOldJobsLocked()
 	err := m.persistLocked()
 	m.mu.Unlock()
 	if err != nil {
@@ -140,11 +185,22 @@ func (m *Manager) set(id, status, msg string, attempts int) {
 			break
 		}
 	}
+	m.pruneOldJobsLocked()
 	_ = m.persistLocked()
 }
 func (m *Manager) run() {
-	for range m.wake {
+	for {
+		select {
+		case <-m.stopChan:
+			return
+		case <-m.wake:
+		}
 		for {
+			select {
+			case <-m.stopChan:
+				return
+			default:
+			}
 			m.mu.Lock()
 			latest := -1
 			for i := range m.jobs {
@@ -169,6 +225,11 @@ func (m *Manager) run() {
 			m.mu.Unlock()
 			var err error
 			for attempt := 1; attempt <= 3; attempt++ {
+				select {
+				case <-m.stopChan:
+					return
+				default:
+				}
 				m.set(selected.ID, "running", "", attempt)
 				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 				err = m.publish(ctx, func(stage string) { m.set(selected.ID, stage, "", attempt) })
@@ -177,7 +238,11 @@ func (m *Manager) run() {
 					break
 				}
 				if attempt < 3 {
-					time.Sleep(time.Duration(attempt) * time.Second)
+					select {
+					case <-m.stopChan:
+						return
+					case <-time.After(time.Duration(attempt) * time.Second):
+					}
 				}
 			}
 			if err == nil {

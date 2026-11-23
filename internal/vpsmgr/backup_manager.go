@@ -2,7 +2,7 @@ package vpsmgr
 
 import (
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,7 +34,7 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 			if softInfo.ConfigPath != "" {
 				activeFile = softInfo.ConfigPath
 			}
-			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+			backupDir = path.Join(path.Dir(activeFile), "backups")
 			restartCmd = "systemctl restart sing-box 2>/dev/null || service sing-box restart 2>/dev/null"
 			return backupDir, activeFile, ".json", false, restartCmd, nil
 		} else if softInfo.SoftwareType == "xray" {
@@ -42,7 +42,7 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 			if softInfo.ConfigPath != "" {
 				activeFile = softInfo.ConfigPath
 			}
-			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+			backupDir = path.Join(path.Dir(activeFile), "backups")
 			restartCmd = "systemctl restart xray 2>/dev/null || service xray restart 2>/dev/null"
 			return backupDir, activeFile, ".json", false, restartCmd, nil
 		} else if softInfo.SoftwareType == "3x-ui" {
@@ -50,7 +50,7 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 			if softInfo.ConfigPath != "" {
 				activeFile = softInfo.ConfigPath
 			}
-			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+			backupDir = path.Join(path.Dir(activeFile), "backups")
 			restartCmd = "systemctl restart x-ui 2>/dev/null || service x-ui restart 2>/dev/null"
 			return backupDir, activeFile, ".db", true, restartCmd, nil
 		}
@@ -61,7 +61,7 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 		activeFile = "/etc/x-ui/x-ui.db"
 		if softInfo.ConfigPath != "" {
 			activeFile = softInfo.ConfigPath
-			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+			backupDir = path.Join(path.Dir(activeFile), "backups")
 		}
 		return backupDir, activeFile, ".db", true, "docker restart 3x-ui", nil
 	}
@@ -76,7 +76,7 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 		activeFile = fmt.Sprintf("/opt/%s/config.json", cName)
 		if softInfo.ConfigPath != "" {
 			activeFile = softInfo.ConfigPath
-			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+			backupDir = path.Join(path.Dir(activeFile), "backups")
 		}
 		restartCmd = fmt.Sprintf("docker restart %s", cName)
 		return backupDir, activeFile, ".json", false, restartCmd, nil
@@ -90,7 +90,7 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 		activeFile = "/etc/v2ray-agent/docker/config.json"
 		if softInfo.ConfigPath != "" {
 			activeFile = softInfo.ConfigPath
-			backupDir = filepath.Join(filepath.Dir(activeFile), "backups")
+			backupDir = path.Join(path.Dir(activeFile), "backups")
 		}
 		restartCmd = fmt.Sprintf("docker restart %s", cName)
 		return backupDir, activeFile, ".json", false, restartCmd, nil
@@ -150,7 +150,7 @@ func (bm *BackupManager) CreateBackup(inst *VPSInstance, softInfo *SoftwareInfo)
 
 	snap := &BackupSnapshot{
 		ID:        ts,
-		FileName:  filepath.Base(snapFile),
+		FileName:  path.Base(snapFile),
 		FilePath:  snapFile,
 		CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
 		SizeBytes: sizeBytes,
@@ -221,7 +221,7 @@ func (bm *BackupManager) ListBackups(inst *VPSInstance, softInfo *SoftwareInfo) 
 			continue
 		}
 		fPath := parts[0]
-		fName := filepath.Base(fPath)
+		fName := path.Base(fPath)
 		size, _ := strconv.ParseInt(parts[1], 10, 64)
 		modTime := parts[2]
 		if len(modTime) >= 19 {

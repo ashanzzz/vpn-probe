@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path/filepath"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -453,7 +453,7 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 		if softInfo.SoftwareType == "3x-ui" {
 			cfgDir := "/etc/x-ui"
 			if softInfo.ConfigPath != "" {
-				cfgDir = filepath.Dir(softInfo.ConfigPath)
+				cfgDir = path.Dir(softInfo.ConfigPath)
 			}
 			updateCmd = fmt.Sprintf("docker pull ghcr.io/mhsanaei/3x-ui:latest && "+
 				"docker rm -f %s-old 2>/dev/null; docker rename %s %s-old && docker stop %s-old && "+
@@ -467,7 +467,7 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 		} else if softInfo.SoftwareType == "xray" {
 			cfgDir := "/etc/v2ray-agent/docker"
 			if softInfo.ConfigPath != "" {
-				cfgDir = filepath.Dir(softInfo.ConfigPath)
+				cfgDir = path.Dir(softInfo.ConfigPath)
 			}
 			updateCmd = fmt.Sprintf("docker pull ghcr.io/xtls/xray-core:latest && "+
 				"docker rm -f %s-old 2>/dev/null; docker rename %s %s-old && docker stop %s-old && "+
@@ -482,7 +482,7 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 			// 默认 sing-box
 			cfgDir := fmt.Sprintf("/opt/%s", cName)
 			if softInfo.ConfigPath != "" {
-				cfgDir = filepath.Dir(softInfo.ConfigPath)
+				cfgDir = path.Dir(softInfo.ConfigPath)
 			}
 			updateCmd = fmt.Sprintf("docker pull ghcr.io/sagernet/sing-box:latest && "+
 				"docker rm -f %s-old 2>/dev/null; docker rename %s %s-old && docker stop %s-old && "+

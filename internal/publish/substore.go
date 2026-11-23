@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"vpn-probe/internal/monitor"
 	"vpn-probe/internal/substore"
 )
 
@@ -128,27 +129,30 @@ func (p Publisher) Apply(ctx context.Context, script string, verify func([]byte)
 	}, progress)
 }
 
-// MatchMemberName matches expected raw node name with actual proxy name symmetrically, handling R2 aliases
+// MatchMemberName matches expected raw node name with actual proxy name symmetrically, handling R2 aliases and emoji prefixes
 func MatchMemberName(expected string, actual string) bool {
-	if expected == actual {
+	if monitor.MatchNodeName(expected, actual) {
 		return true
 	}
 	return matchChainAlias(expected, actual) || matchChainAlias(actual, expected)
 }
 
 func matchChainAlias(full string, alias string) bool {
-	if strings.Contains(full, "➔") || strings.HasPrefix(full, "链式|") {
-		raw := strings.TrimPrefix(full, "链式|")
+	if strings.Contains(full, "➔") {
+		raw := full
+		if idx := strings.Index(raw, "|"); idx != -1 {
+			raw = raw[idx+1:]
+		}
 		parts := strings.Split(raw, "➔")
 		if len(parts) == 2 {
 			transit := strings.TrimSpace(parts[0])
 			resi := strings.TrimSpace(parts[1])
 			prefix := ""
-			if strings.Contains(transit, "4837") || strings.Contains(transit, "LAX") {
+			if strings.Contains(transit, "4837") || strings.Contains(transit, "LAX") || strings.Contains(transit, "洛杉矶") || strings.Contains(transit, "美西") {
 				prefix = "LAX-"
 			} else if strings.Contains(transit, "IIJ") {
 				prefix = "IIJ-"
-			} else if strings.Contains(transit, "Softbank") || strings.Contains(transit, "SoftBank") || strings.Contains(transit, "SB") {
+			} else if strings.Contains(transit, "Softbank") || strings.Contains(transit, "SoftBank") || strings.Contains(transit, "SB") || strings.Contains(transit, "软银") {
 				prefix = "SB-"
 			}
 			suffix := ""
@@ -158,8 +162,13 @@ func matchChainAlias(full string, alias string) bool {
 					break
 				}
 			}
-			if prefix != "" && suffix != "" && (strings.HasPrefix(alias, prefix) || strings.Contains(alias, prefix)) && strings.Contains(alias, suffix) {
-				return true
+			if prefix != "" && suffix != "" {
+				aliasLower := strings.ToLower(alias)
+				prefixLower := strings.ToLower(prefix)
+				suffixLower := strings.ToLower(suffix)
+				if (strings.HasPrefix(aliasLower, prefixLower) || strings.Contains(aliasLower, prefixLower)) && strings.Contains(aliasLower, suffixLower) {
+					return true
+				}
 			}
 		}
 	}

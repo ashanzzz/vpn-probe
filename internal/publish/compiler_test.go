@@ -116,6 +116,65 @@ func TestMatchMemberName_Symmetric(t *testing.T) {
 	}
 }
 
+func TestMatchMemberName_UnicodePrefixAndChineseTransit(t *testing.T) {
+	cases := []struct {
+		name     string
+		raw      string
+		alias    string
+		expected bool
+	}{
+		{
+			name:     "Flag emoji with Chinese Softbank",
+			raw:      "🇯🇵 链式|东京软银 ➔ LZ-JP-SoftBank-家宽",
+			alias:    "SB-日宽-SoftBank",
+			expected: true,
+		},
+		{
+			name:     "Flag emoji with Chinese LAX 4837",
+			raw:      "🇺🇸 链式|洛杉矶4837 ➔ LZ-US-Pavlov-家宽",
+			alias:    "LAX-美宽-Pavlov",
+			expected: true,
+		},
+		{
+			name:     "Chinese West US transit name",
+			raw:      "链式|美西洛杉矶专线线路机 — VLESS Reality ➔ LZ-US-Pavlov-家宽01",
+			alias:    "LAX-美宽-Pavlov",
+			expected: true,
+		},
+		{
+			name:     "Direct node with flag emoji vs plain",
+			raw:      "🇯🇵 JP-Tokyo-Softbank-Reality-Vision",
+			alias:    "JP-Tokyo-Softbank-Reality-Vision",
+			expected: true,
+		},
+		{
+			name:     "Case-insensitive alias matching",
+			raw:      "链式|JP-Tokyo-Softbank-Reality-Vision ➔ LZ-JP-SoftBank-家宽",
+			alias:    "sb-日宽-softbank",
+			expected: true,
+		},
+		{
+			name:     "Unrelated mismatch",
+			raw:      "链式|JP-Tokyo-IIJ-Reality ➔ LZ-US-Pavlov-家宽",
+			alias:    "SB-日宽-SoftBank",
+			expected: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotForward := MatchMemberName(tc.raw, tc.alias)
+			if gotForward != tc.expected {
+				t.Errorf("MatchMemberName(%q, %q) = %v; want %v", tc.raw, tc.alias, gotForward, tc.expected)
+			}
+			gotBackward := MatchMemberName(tc.alias, tc.raw)
+			if gotBackward != tc.expected {
+				t.Errorf("MatchMemberName(%q, %q) = %v; want %v", tc.alias, tc.raw, gotBackward, tc.expected)
+			}
+		})
+	}
+}
+
 func TestCompileScript_EmptyProxiesFallbackInScript(t *testing.T) {
 	script, err := CompileScript([]model.CustomGroupDef{
 		{

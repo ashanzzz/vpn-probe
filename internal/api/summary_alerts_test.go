@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"vpn-probe/internal/config"
@@ -202,6 +203,18 @@ func TestSummaryFaultClassification(t *testing.T) {
 			StatusText: "【家宽隧道离线】",
 		},
 	})
+	// 4. Machine Down node
+	scheduler.InjectNodeStateForTest("Node-Down", &model.NodeProbeResult{
+		Name:        "Node-Down",
+		OriginalURL: "vless://uuid@4.4.4.4:443#Node-Down",
+		Online:      false,
+		Diagnostic: &model.DiagnosticInfo{
+			TargetIP:   "4.4.4.4",
+			TargetPort: 443,
+			FaultType:  model.FaultMachineDown,
+			StatusText: "【机器关机/离线】",
+		},
+	})
 
 	server := NewAPIServer(cfg, nil, nil, nil, nil, scheduler, nil)
 
@@ -232,6 +245,64 @@ func TestSummaryFaultClassification(t *testing.T) {
 	}
 	if int(summary["offline_nodes"].(float64)) != 1 {
 		t.Errorf("expected offline_nodes=1, got %v", summary["offline_nodes"])
+	}
+	if int(summary["residential_tunnel_offline_nodes"].(float64)) != 1 {
+		t.Errorf("expected residential_tunnel_offline_nodes=1, got %v", summary["residential_tunnel_offline_nodes"])
+	}
+}
+
+func TestSummaryResidentialTunnelOfflineOnly(t *testing.T) {
+	ResetAuthTracker()
+
+	cfg := config.DefaultConfig()
+	cfg.Server.AuthToken = "secret-token"
+	cfg.Monitor.Enabled = true
+
+	scheduler := monitor.NewScheduler(cfg, nil, nil, nil)
+	scheduler.InjectNodeStateForTest("LZ-US-Verizon-家宽", &model.NodeProbeResult{
+		Name:        "LZ-US-Verizon-家宽",
+		OriginalURL: "vless://uuid@167.104.167.151:44012#LZ-US-Verizon-家宽",
+		Online:      false,
+		Diagnostic: &model.DiagnosticInfo{
+			TargetIP:        "167.104.167.151",
+			TargetPort:      44012,
+			FaultType:       model.FaultResidentialTunnelOffline,
+			StatusText:      "【家庭端未就绪或断开】家宽反向隧道未建立或连接被拒",
+			ActionType:      "CHECK_RESIDENTIAL_DEVICE",
+			TroubleshootTip: "严禁更换端口，请检查家庭端设备反向连接状态！",
+		},
+	})
+
+	server := NewAPIServer(cfg, nil, nil, nil, nil, scheduler, nil)
+
+	req := httptest.NewRequest("GET", "/api/summary", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := server.app.Test(req, 2000)
+	if err != nil {
+		t.Fatalf("request /api/summary failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var res map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("decode summary json failed: %v", err)
+	}
+
+	summary := res["summary"].(map[string]any)
+	if summary["requires_healing_action"] != false {
+		t.Errorf("expected requires_healing_action=false for purely residential tunnel offline, got %v", summary["requires_healing_action"])
+	}
+	if int(summary["residential_tunnel_offline_nodes"].(float64)) != 1 {
+		t.Errorf("expected residential_tunnel_offline_nodes=1, got %v", summary["residential_tunnel_offline_nodes"])
+	}
+	if int(summary["offline_nodes"].(float64)) != 0 {
+		t.Errorf("expected offline_nodes=0, got %v", summary["offline_nodes"])
+	}
+	instruction, _ := summary["ai_instruction"].(string)
+	if instruction == "" || !strings.Contains(instruction, "严禁更换端口") {
+		t.Errorf("expected prompt to guide waiting for reconnect without changing port, got %q", instruction)
 	}
 }
 

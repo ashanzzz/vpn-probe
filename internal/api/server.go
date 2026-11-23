@@ -1148,6 +1148,9 @@ func (s *APIServer) setupRoutes() {
 	s.app.Get("/api/v1/publish-jobs/:id", s.handleGetPublishJob)
 	s.app.Post("/api/v1/publish-jobs/:id/retry", s.handleRetryPublishJob)
 	s.app.Get("/api/v1/subscriptions/:name/inspect", s.handleSubscriptionInspect)
+	s.app.Get("/api/v1/subscription/:name/inspect", s.handleSubscriptionInspect)
+	s.app.Get("/api/subscriptions/:name/inspect", s.handleSubscriptionInspect)
+	s.app.Get("/api/subscription/:name/inspect", s.handleSubscriptionInspect)
 
 	// 6. 挂载远程 AI 专用的 MCP over SSE 传输接口
 	if s.mcpServer != nil && s.mcpServer.GetServer() != nil {
@@ -1345,6 +1348,7 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 	offlineCount := 0
 	congestionCount := 0
 	residentialChainCount := 0
+	residentialTunnelCount := 0
 
 	for _, st := range allStates {
 		v2rayLink := st.Config.URL
@@ -1413,7 +1417,9 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 				protocolErrorCount++
 			case model.FaultNetworkCongestion:
 				congestionCount++
-			case model.FaultMachineDown, model.FaultResidentialTunnelOffline, model.FaultTransitRelayDown:
+			case model.FaultResidentialTunnelOffline, model.FaultTransitRelayDown:
+				residentialTunnelCount++
+			case model.FaultMachineDown:
 				offlineCount++
 			case model.FaultResidentialDirectBlocked:
 				residentialChainCount++
@@ -1490,11 +1496,16 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 		if offlineCount > 0 {
 			parts = append(parts, fmt.Sprintf("%d 个真正离线", offlineCount))
 		}
+		if residentialTunnelCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个家宽隧道等待建连(严禁换端口)", residentialTunnelCount))
+		}
 		if congestionCount > 0 {
 			parts = append(parts, fmt.Sprintf("%d 个网络拥塞/超时(无需换端口)", congestionCount))
 		}
 		overallPrompt = fmt.Sprintf("检测到 %d 个节点需要自愈或人工排查 (其中 %s)。请按 nodes_requiring_action 中的 v2ray_link 与 ai_heal_instruction 执行处置。",
 			len(actionList), strings.Join(parts, ", "))
+	} else if residentialTunnelCount > 0 {
+		overallPrompt = fmt.Sprintf("自建核心专线全部在线，检测到 %d 个住宅家宽节点反向穿透隧道等待家庭端建连或暂时断开（中转服务器正常，严禁更换端口），系统静候家庭端自动恢复重连。", residentialTunnelCount)
 	} else if residentialChainCount > 0 && congestionCount > 0 {
 		overallPrompt = fmt.Sprintf("检测到 %d 个住宅家宽节点直连受阻(已自动合成链式中继)，且有 %d 个节点出现跨境网络拥塞/抖动超时(机器正常无需换端口)，系统保持持续观测。", residentialChainCount, congestionCount)
 	} else if residentialChainCount > 0 {
@@ -1507,17 +1518,18 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"summary": fiber.Map{
-			"total_nodes":             total,
-			"healthy_nodes":           healthyCount,
-			"nodes_requiring_action":  len(actionList),
-			"port_blocked_nodes":      portBlockedCount,
-			"ip_blocked_nodes":        ipBlockedCount,
-			"protocol_error_nodes":    protocolErrorCount,
-			"offline_nodes":           offlineCount,
-			"congestion_nodes":        congestionCount,
-			"residential_chain_nodes": residentialChainCount,
-			"requires_healing_action": requiresHealing,
-			"ai_instruction":          overallPrompt,
+			"total_nodes":                      total,
+			"healthy_nodes":                    healthyCount,
+			"nodes_requiring_action":           len(actionList),
+			"port_blocked_nodes":               portBlockedCount,
+			"ip_blocked_nodes":                 ipBlockedCount,
+			"protocol_error_nodes":             protocolErrorCount,
+			"offline_nodes":                    offlineCount,
+			"residential_tunnel_offline_nodes": residentialTunnelCount,
+			"congestion_nodes":                 congestionCount,
+			"residential_chain_nodes":          residentialChainCount,
+			"requires_healing_action":          requiresHealing,
+			"ai_instruction":                   overallPrompt,
 		},
 		"nodes_requiring_action": actionList,
 		"healthy_nodes":          healthyList,

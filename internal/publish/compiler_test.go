@@ -132,3 +132,25 @@ func TestCompileScript_EmptyProxiesFallbackInScript(t *testing.T) {
 		t.Fatalf("expected script to contain defensive empty proxies fallback to DIRECT")
 	}
 }
+
+func TestCompileScript_PreservesUserGroupsInOtherProxyGroups(t *testing.T) {
+	script, err := CompileScript([]model.CustomGroupDef{
+		{
+			Name:        "ashan-tw-resi",
+			DisplayName: "自建-台湾家宽分组",
+			Enabled:     true,
+			Type:        "select",
+			AddToEntry:  true,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("CompileScript: %v", err)
+	}
+	// Verify that the script does not strip vpnDefined from all groups' proxies
+	if strings.Contains(script, "g.proxies = g.proxies.filter(n => !vpnDefined.has(n));") {
+		t.Fatalf("script should not unconditionally purge user-defined groups from all existing policy groups")
+	}
+	if !strings.Contains(script, "allowedAdditions") {
+		t.Fatalf("expected script to contain allowedAdditions logic for entry group")
+	}
+}

@@ -256,6 +256,7 @@ func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallTool
 	offlineCount := 0
 	congestionCount := 0
 	residentialChainCount := 0
+	residentialTunnelCount := 0
 
 	for _, r := range records {
 		if seen[r.OriginalURL] {
@@ -310,7 +311,9 @@ func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallTool
 				protocolErrorCount++
 			case model.FaultNetworkCongestion:
 				congestionCount++
-			case model.FaultMachineDown, model.FaultResidentialTunnelOffline, model.FaultTransitRelayDown:
+			case model.FaultResidentialTunnelOffline, model.FaultTransitRelayDown:
+				residentialTunnelCount++
+			case model.FaultMachineDown:
 				offlineCount++
 			case model.FaultResidentialDirectBlocked:
 				residentialChainCount++
@@ -383,11 +386,16 @@ func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallTool
 		if offlineCount > 0 {
 			parts = append(parts, fmt.Sprintf("%d个真正离线", offlineCount))
 		}
+		if residentialTunnelCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d个家宽隧道等待建连(严禁换端口)", residentialTunnelCount))
+		}
 		if congestionCount > 0 {
 			parts = append(parts, fmt.Sprintf("%d个网络拥塞/超时(无需换端口)", congestionCount))
 		}
 		overallPrompt = fmt.Sprintf("检测到 %d 个节点需要自愈或人工排查 (%s)。请按 nodes_requiring_action 列表中的 v2ray_link 与 ai_heal_instruction 执行处置。",
 			len(actionList), strings.Join(parts, ", "))
+	} else if residentialTunnelCount > 0 {
+		overallPrompt = fmt.Sprintf("自建核心专线全部在线，检测到 %d 个住宅家宽节点反向穿透隧道等待家庭端建连或暂时断开（中转服务器正常，严禁更换端口），系统静候家庭端自动恢复重连。", residentialTunnelCount)
 	} else if residentialChainCount > 0 && congestionCount > 0 {
 		overallPrompt = fmt.Sprintf("检测到 %d 个住宅家宽节点直连受阻(已自动建立链式中继)，且有 %d 个节点出现跨境网络拥塞/抖动超时(机器正常无需换端口)，系统保持持续观测。", residentialChainCount, congestionCount)
 	} else if residentialChainCount > 0 {
@@ -400,17 +408,18 @@ func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallTool
 
 	resultMap := map[string]any{
 		"summary": map[string]any{
-			"total_nodes":             total,
-			"healthy_nodes":           healthyCount,
-			"nodes_requiring_action":  len(actionList),
-			"port_blocked_nodes":      portBlockedCount,
-			"ip_blocked_nodes":        ipBlockedCount,
-			"protocol_error_nodes":    protocolErrorCount,
-			"offline_nodes":           offlineCount,
-			"congestion_nodes":        congestionCount,
-			"residential_chain_nodes": residentialChainCount,
-			"requires_healing_action": requiresHealing,
-			"ai_instruction":          overallPrompt,
+			"total_nodes":                      total,
+			"healthy_nodes":                    healthyCount,
+			"nodes_requiring_action":           len(actionList),
+			"port_blocked_nodes":               portBlockedCount,
+			"ip_blocked_nodes":                 ipBlockedCount,
+			"protocol_error_nodes":             protocolErrorCount,
+			"offline_nodes":                    offlineCount,
+			"residential_tunnel_offline_nodes": residentialTunnelCount,
+			"congestion_nodes":                 congestionCount,
+			"residential_chain_nodes":          residentialChainCount,
+			"requires_healing_action":          requiresHealing,
+			"ai_instruction":                   overallPrompt,
 		},
 		"nodes_requiring_action": actionList,
 		"healthy_nodes":          healthyList,

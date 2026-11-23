@@ -531,6 +531,12 @@ func EvaluateFault(
 			actionType = "CHANGE_IP_OR_CDN"
 			tip = fmt.Sprintf("【IP被墙】海外探针(%s)可正常握手，但国内全黑洞丢包，机器与服务完好，需更换IP或配置CDN反代救活。", abroadSource)
 		}
+	} else if !abroadOK && domesticTCPOK {
+		// 国内通、海外探针不通 -> 并非机子关机或软件崩溃！机器正常监听
+		faultType = model.FaultNetworkCongestion
+		statusText = "【境外阻断或单向异常】国内TCP连通但境外探测不可达"
+		actionType = "CHECK_NETWORK_ROUTING"
+		tip = fmt.Sprintf("【境外路由/探针异常】目标 %s:%d 在境内可正常建立TCP握手，说明机器在线且代理软件正常监听；但境外探针(%s)连接失败。通常为境外上游路由故障、探针源受限或机房上联海外阻断，严禁误判为关机或盲目重启！", host, port, abroadSource)
 	} else {
 		// 海外也不通、国内也不通 -> 真正离线
 		faultType = model.FaultMachineDown

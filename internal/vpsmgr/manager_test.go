@@ -1,9 +1,12 @@
 package vpsmgr
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"vpn-probe/internal/config"
@@ -54,20 +57,24 @@ func TestManager_GetBlockedAnalysis(t *testing.T) {
 }
 
 func TestManager_RefreshFromVPSHub(t *testing.T) {
-	loginStatus := http.StatusOK
-	instancesStatus := http.StatusOK
+	var loginStatus atomic.Int32
+	var instancesStatus atomic.Int32
+	loginStatus.Store(http.StatusOK)
+	instancesStatus.Store(http.StatusOK)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/auth/login" {
-			w.WriteHeader(loginStatus)
-			if loginStatus == http.StatusOK {
+			st := int(loginStatus.Load())
+			w.WriteHeader(st)
+			if st == http.StatusOK {
 				_ = json.NewEncoder(w).Encode(map[string]string{"token": "test-jwt-token"})
 			}
 			return
 		}
 		if r.URL.Path == "/api/instances" {
-			w.WriteHeader(instancesStatus)
-			if instancesStatus == http.StatusOK {
+			st := int(instancesStatus.Load())
+			w.WriteHeader(st)
+			if st == http.StatusOK {
 				data := map[string]any{
 					"instances": []map[string]any{
 						{
@@ -107,11 +114,100 @@ func TestManager_RefreshFromVPSHub(t *testing.T) {
 	}
 
 	// 2. 登录失败 (401 Unauthorized) 验证安全返回且不崩溃、不泄漏
-	loginStatus = http.StatusUnauthorized
+	loginStatus.Store(http.StatusUnauthorized)
 	m.refreshFromVPSHub()
 
 	// 3. 实例列表拉取失败 (500 Internal Server Error) 验证安全返回
-	loginStatus = http.StatusOK
-	instancesStatus = http.StatusInternalServerError
+	loginStatus.Store(http.StatusOK)
+	instancesStatus.Store(http.StatusInternalServerError)
 	m.refreshFromVPSHub()
+}
+
+func TestManager_UpdateSoftware_Docker(t *testing.T) {
+	cfg := &config.Config{}
+	m := NewManager(cfg, nil, "")
+
+	var executedCmds []string
+	det := NewDetector(nil)
+	det.SetSSHRunner(func(inst *VPSInstance, cmd string) (string, error) {
+		executedCmds = append(executedCmds, cmd)
+		if strings.Contains(cmd, "docker ps") {
+			return "sb-mgr|ghcr.io/sagernet/sing-box:latest|Up 10 hours\n", nil
+		}
+		return "", nil
+	})
+	m.SetDetectorForTest(det)
+
+	inst := &VPSInstance{
+		ID:   "vps-test",
+		Name: "Test VPS",
+		IP:   "1.2.3.4",
+	}
+	m.SetInstancesForTest([]*VPSInstance{inst})
+
+	ctx := context.Background()
+	msg, err := m.UpdateSoftware(ctx, "vps-test")
+	if err != nil {
+		t.Fatalf("UpdateSoftware failed: %v", err)
+	}
+	if !strings.Contains(msg, "Successfully updated") {
+		t.Errorf("unexpected message: %s", msg)
+	}
+
+	// 验证包含容器重建事务：pull, rename, stop, run 与 rm -f old
+	var foundRebuild bool
+	for _, cmd := range executedCmds {
+		if strings.Contains(cmd, "docker rename sb-mgr sb-mgr-old") &&
+			strings.Contains(cmd, "docker run -d --name sb-mgr") &&
+			strings.Contains(cmd, "docker rm -f sb-mgr-old") {
+			foundRebuild = true
+			break
+		}
+	}
+	if !foundRebuild {
+		t.Fatalf("expected docker container rebuild transaction command, executed: %v", executedCmds)
+	}
+}
+
+func TestManager_UpdateSoftware_Native(t *testing.T) {
+	cfg := &config.Config{}
+	m := NewManager(cfg, nil, "")
+
+	var executedCmds []string
+	det := NewDetector(nil)
+	det.SetSSHRunner(func(inst *VPSInstance, cmd string) (string, error) {
+		executedCmds = append(executedCmds, cmd)
+		if strings.Contains(cmd, "docker ps") {
+			return "/usr/bin/sing-box\n", nil
+		}
+		return "", nil
+	})
+	m.SetDetectorForTest(det)
+
+	inst := &VPSInstance{
+		ID:   "vps-native",
+		Name: "Native VPS",
+		IP:   "5.6.7.8",
+	}
+	m.SetInstancesForTest([]*VPSInstance{inst})
+
+	ctx := context.Background()
+	msg, err := m.UpdateSoftware(ctx, "vps-native")
+	if err != nil {
+		t.Fatalf("UpdateSoftware native failed: %v", err)
+	}
+	if !strings.Contains(msg, "Successfully updated sing-box (native)") {
+		t.Errorf("unexpected message: %s", msg)
+	}
+
+	var foundRestart bool
+	for _, cmd := range executedCmds {
+		if strings.Contains(cmd, "systemctl restart sing-box") {
+			foundRestart = true
+			break
+		}
+	}
+	if !foundRestart {
+		t.Fatalf("expected native service restart in commands: %v", executedCmds)
+	}
 }

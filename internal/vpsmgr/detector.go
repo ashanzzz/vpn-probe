@@ -8,15 +8,20 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 	"vpn-probe/internal/logger"
 )
 
+// SSHRunnerFunc 自定义 SSH 命令执行器 (支持单测 Mock 与沙箱隔离)
+type SSHRunnerFunc func(inst *VPSInstance, cmd string) (string, error)
+
 type Detector struct {
 	ghChecker *GitHubChecker
-	mockSSH   func(inst *VPSInstance, cmd string) (string, error)
+	sshRunner SSHRunnerFunc
+	mu        sync.RWMutex
 }
 
 func NewDetector(gh *GitHubChecker) *Detector {
@@ -25,30 +30,30 @@ func NewDetector(gh *GitHubChecker) *Detector {
 	}
 }
 
-// SetMockSSH 用于单元测试模拟远程 SSH 执行
-func (d *Detector) SetMockSSH(fn func(inst *VPSInstance, cmd string) (string, error)) {
-	d.mockSSH = fn
+// SetSSHRunner 注入自定义 SSH 执行器 (单测/Mock 专用)
+func (d *Detector) SetSSHRunner(runner SSHRunnerFunc) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.sshRunner = runner
+}
+
+func (d *Detector) getSSHRunner() SSHRunnerFunc {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.sshRunner
 }
 
 // RunSSH 执行远程 SSH 命令并返回标准输出
 func (d *Detector) RunSSH(inst *VPSInstance, cmd string) (string, error) {
-	if d.mockSSH != nil {
-		return d.mockSSH(inst, cmd)
-	}
-
-	var authMethods []ssh.AuthMethod
-	if inst.SSHKey != "" {
-		if signer, err := ssh.ParsePrivateKey([]byte(inst.SSHKey)); err == nil {
-			authMethods = append(authMethods, ssh.PublicKeys(signer))
-		}
-	}
-	if inst.SSHPassword != "" {
-		authMethods = append(authMethods, ssh.Password(inst.SSHPassword))
+	if runner := d.getSSHRunner(); runner != nil {
+		return runner(inst, cmd)
 	}
 
 	config := &ssh.ClientConfig{
-		User:            inst.SSHUser,
-		Auth:            authMethods,
+		User: inst.SSHUser,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(inst.SSHPassword),
+		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         7 * time.Second,
 	}

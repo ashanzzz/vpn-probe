@@ -150,7 +150,7 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 		NodeName: nodeName,
 	}
 
-	if strings.Contains(nodeName, "家宽") || (inst != nil && inst.ProviderID == "lazycat") {
+	if model.IsResidentialNode(nodeName, targetURL, "") || (inst != nil && inst.ProviderID == "lazycat") {
 		resp.Message = "住宅家宽节点严禁执行换端口操作：家宽物理上为链式代理，请核查中转机或家庭端连通性"
 		return resp, fmt.Errorf("port heal is forbidden on residential nodes")
 	}

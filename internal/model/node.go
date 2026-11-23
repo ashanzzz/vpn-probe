@@ -30,6 +30,7 @@ const (
 	FaultResidentialTunnelOffline  FaultType = "residential_tunnel_offline"  // 家宽穿透隧道掉线/家庭设备离线 (Issue #26)
 	FaultTransitRelayDown          FaultType = "transit_relay_down"          // 家宽中转宿主机宕机/网络中断 (Issue #26)
 	FaultResidentialDirectBlocked  FaultType = "residential_direct_blocked"  // 家宽国内直连受阻(境外隧道正常，需中继) (Issue #26)
+	FaultNetworkCongestion         FaultType = "network_congestion"          // 网络拥塞/链路抖动超时 (国内外TCP握手成功但应用层握手超时)
 )
 
 // DiagnosticInfo 深度故障与被墙诊断信息

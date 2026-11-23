@@ -70,7 +70,7 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const isTransitBlocked = !node.name.includes('家宽') && node.node_type !== 'residential' && node.diagnostic?.fault_type === 'PORT_BLOCKED';
+  const isTransitBlocked = !node.name.includes('家宽') && node.node_type !== 'residential' && (node.diagnostic?.fault_type === 'PORT_BLOCKED' || node.diagnostic?.fault_type === 'port_blocked');
   const isResi = node.node_type === 'residential' || node.name.includes('家宽');
   const resiFault = node.diagnostic?.fault_type;
 
@@ -242,7 +242,7 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
           )}
 
           {/* Issue #26: Residential-Aware Diagnostic Guidance (杜绝换端口误判) */}
-          {isResi && resiFault === 'RESIDENTIAL_DIRECT_BLOCKED' && (
+          {isResi && (resiFault === 'RESIDENTIAL_DIRECT_BLOCKED' || resiFault === 'residential_direct_blocked') && (
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start space-x-3 text-amber-900">
               <Compass className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1 text-xs">
@@ -256,7 +256,7 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
             </div>
           )}
 
-          {isResi && resiFault === 'RESIDENTIAL_TUNNEL_OFFLINE' && (
+          {isResi && (resiFault === 'RESIDENTIAL_TUNNEL_OFFLINE' || resiFault === 'residential_tunnel_offline') && (
             <div className="p-4 bg-orange-50 border border-orange-200 rounded-xl flex items-start space-x-3 text-orange-900">
               <AlertTriangle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1 text-xs">
@@ -270,7 +270,7 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
             </div>
           )}
 
-          {isResi && resiFault === 'TRANSIT_RELAY_DOWN' && (
+          {isResi && (resiFault === 'TRANSIT_RELAY_DOWN' || resiFault === 'transit_relay_down') && (
             <div className="p-4 bg-red-50 border border-red-200 rounded-xl flex items-start space-x-3 text-red-900">
               <XCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
               <div className="flex-1 text-xs">
@@ -279,6 +279,21 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
                 </div>
                 <p className="mt-1 text-red-800 leading-relaxed">
                   中转宿主机 Ping 与端口全部未响应，请登录 Unraid 或云服务器排查中转宿主机运行状态。
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* 网络拥塞提示 (国内外TCP均畅通，仅应用层超时，严禁换端口) */}
+          {(node.diagnostic?.fault_type === 'NETWORK_CONGESTION' || node.diagnostic?.fault_type === 'network_congestion') && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start space-x-3 text-amber-900">
+              <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1 text-xs">
+                <div className="font-bold text-sm text-amber-950">
+                  【网络拥塞超时】国内外TCP均畅通 · 跨境握手超时
+                </div>
+                <p className="mt-1 text-amber-800 leading-relaxed">
+                  目标节点在境内与境外均能建立 TCP 握手，但应用层探测超时。通常为国际链路拥堵或网络抖动，<strong>机器与端口均正常，严禁更换端口或重置配置</strong>，保持观察等待链路自行恢复。
                 </p>
               </div>
             </div>

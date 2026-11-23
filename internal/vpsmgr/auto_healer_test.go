@@ -84,6 +84,36 @@ func TestDiagnoseNode_ProtocolMismatch(t *testing.T) {
 	}
 }
 
+func TestDiagnoseNode_NetworkCongestion(t *testing.T) {
+	healer := &AutoHealer{}
+	res := &model.NodeProbeResult{
+		Name:        "Test Node Congestion",
+		OriginalURL: "vless://uuid@1.2.3.4:12345#Test",
+		Online:      false,
+		IsSelf:      true,
+		Diagnostic: &model.DiagnosticInfo{
+			DomesticReachable: true,
+			AbroadReachable:   true,
+			DomesticPing:      true,
+			TargetIP:          "1.2.3.4",
+			TargetPort:        12345,
+			FaultType:         model.FaultNetworkCongestion,
+			TroubleshootTip:   "【网络拥塞】国内外TCP均已握手连通，应用层握手超时",
+		},
+	}
+
+	diag := healer.DiagnoseNode(res)
+	if diag.FaultType != "NETWORK_CONGESTION" {
+		t.Fatalf("expected NETWORK_CONGESTION, got %s", diag.FaultType)
+	}
+	if diag.CanAutoHealPort {
+		t.Fatalf("NETWORK_CONGESTION must not allow auto-changing port")
+	}
+	if diag.CanRelayRescue {
+		t.Fatalf("NETWORK_CONGESTION must not trigger relay rescue")
+	}
+}
+
 func TestGenerateRandomPort(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		p := GenerateRandomPort()

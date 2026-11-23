@@ -50,7 +50,7 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
         api.getBlockedAnalysis().catch(() => ({ count: 0, results: [] })),
       ]);
       setInstances(vpsData.instances || []);
-      setBlockedAnalysis(analysisData.results || []);
+      setBlockedAnalysis((analysisData as any).analysis || analysisData.results || []);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || '获取 VPS 运维数据失败' });
     } finally {
@@ -309,8 +309,15 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
             <tbody className="divide-y divide-slate-200 bg-white">
               {blockedAnalysis.length > 0 ? (
                 blockedAnalysis.map((item, idx) => {
-                  const isBlocked = item.fault_type === 'PORT_BLOCKED';
-                  const isDown = item.fault_type === 'MACHINE_DOWN';
+                  const isBlocked = item.fault_type === 'PORT_BLOCKED' || item.fault_type === 'port_blocked';
+                  const isServerBlocked = item.fault_type === 'SERVER_BLOCKED' || item.fault_type === 'server_blocked' || item.fault_type === 'ip_blocked';
+                  const isProtocolMismatch = item.fault_type === 'PROTOCOL_MISMATCH' || item.fault_type === 'protocol_mismatch';
+                  const isCongestion = item.fault_type === 'NETWORK_CONGESTION' || item.fault_type === 'network_congestion';
+                  const isDirectBlocked = item.fault_type === 'RESIDENTIAL_DIRECT_BLOCKED' || item.fault_type === 'residential_direct_blocked';
+                  const isTunnelOffline = item.fault_type === 'RESIDENTIAL_TUNNEL_OFFLINE' || item.fault_type === 'residential_tunnel_offline';
+                  const isRelayDown = item.fault_type === 'TRANSIT_RELAY_DOWN' || item.fault_type === 'transit_relay_down';
+                  const isDown = item.fault_type === 'MACHINE_DOWN' || item.fault_type === 'machine_offline';
+                  const isHealthy = item.fault_type === 'HEALTHY' || item.fault_type === 'none';
                   return (
                     <tr key={idx} className="hover:bg-slate-50/80 transition">
                       <td className="px-4 py-3 font-semibold text-slate-900">
@@ -347,13 +354,41 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
                           <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-red-100 text-red-800 border border-red-200">
                             PORT_BLOCKED (端口被墙)
                           </span>
+                        ) : isServerBlocked ? (
+                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-red-100 text-red-800 border border-red-200">
+                            SERVER_BLOCKED (整机被墙)
+                          </span>
+                        ) : isProtocolMismatch ? (
+                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                            PROTOCOL_MISMATCH (配置错误)
+                          </span>
+                        ) : isCongestion ? (
+                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                            CONGESTION (网络拥塞)
+                          </span>
+                        ) : isDirectBlocked ? (
+                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-blue-100 text-blue-800 border border-blue-200">
+                            DIRECT_BLOCKED (需链式中继)
+                          </span>
+                        ) : isTunnelOffline ? (
+                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-orange-100 text-orange-800 border border-orange-200">
+                            TUNNEL_OFFLINE (家宽隧道掉线)
+                          </span>
+                        ) : isRelayDown ? (
+                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-purple-100 text-purple-800 border border-purple-200">
+                            RELAY_DOWN (中转宿主宕机)
+                          </span>
                         ) : isDown ? (
-                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-slate-100 text-slate-700">
+                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
                             MACHINE_DOWN (服务关机)
                           </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-emerald-100 text-emerald-800">
+                        ) : isHealthy ? (
+                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
                             HEALTHY (正常)
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                            UNKNOWN (未知异常)
                           </span>
                         )}
                       </td>

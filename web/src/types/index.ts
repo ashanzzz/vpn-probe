@@ -433,12 +433,14 @@ export interface CategoriesSummary {
     residential?: CategoryStat;
     us_resi?: CategoryStat;
     jp_resi?: CategoryStat;
+    tw_resi?: CategoryStat;
     other_resi?: CategoryStat;
     transit?: CategoryStat;
     china_leaks: AtomNode[];
     // 兼容字段
     us?: CategoryStat;
     jp?: CategoryStat;
+    tw?: CategoryStat;
     other?: CategoryStat;
   };
   custom_groups?: CustomGroupSummaryItem[];
@@ -483,6 +485,48 @@ export interface RuleInspectItem {
   target: string;
   provider?: string;
   raw: string;
+}
+
+export interface DomainCheckResult {
+  domain: string;
+  url: string;
+  reachable: boolean;
+  status_code: number;
+  latency_ms: number;
+  possible_gfw: boolean;
+  error?: string;
+}
+
+export interface VerifySubscriptionResponse {
+  status: string;
+  file_name: string;
+  valid: boolean;
+  audit?: {
+    file_name: string;
+    valid: boolean;
+    group_counts?: Record<string, number>;
+    dangling_references?: Record<string, string[]>;
+  };
+  domains_check?: DomainCheckResult[];
+  all_domains_reachable?: boolean;
+  self_nodes_count?: number;
+  self_nodes_online_count?: number;
+  self_nodes_healthy?: boolean;
+  self_nodes_report?: Array<{
+    name: string;
+    original_url: string;
+    online: boolean;
+    latency_ms: number;
+    china_exit: boolean;
+    exit_country?: string;
+  }>;
+  correctness_proof?: {
+    is_q?: boolean;
+    is_ashan?: boolean;
+    residential_count?: number;
+    transit_count?: number;
+    message?: string;
+  };
 }
 
 export interface SubscriptionInspectResponse {

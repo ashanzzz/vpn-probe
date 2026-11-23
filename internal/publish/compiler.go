@@ -132,7 +132,7 @@ function resolveProxyName(targetName, allNames) {
       }
       if (prefix && suffix) {
         for (const name of allNames) {
-          if (name.startsWith(prefix) && name.includes(suffix)) {
+          if (name.includes(prefix) && name.includes(suffix)) {
             return name;
           }
         }

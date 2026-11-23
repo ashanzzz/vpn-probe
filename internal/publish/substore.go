@@ -158,7 +158,7 @@ func matchChainAlias(full string, alias string) bool {
 					break
 				}
 			}
-			if prefix != "" && suffix != "" && strings.HasPrefix(alias, prefix) && strings.Contains(alias, suffix) {
+			if prefix != "" && suffix != "" && (strings.HasPrefix(alias, prefix) || strings.Contains(alias, prefix)) && strings.Contains(alias, suffix) {
 				return true
 			}
 		}

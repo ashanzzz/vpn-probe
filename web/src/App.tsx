@@ -12,10 +12,9 @@ import { MonitorDashboard } from './components/MonitorDashboard';
 import { ReportDrawer } from './components/ReportDrawer';
 import { HealingWizard } from './components/HealingWizard';
 import { VPSCenter } from './components/VPSCenter';
-import { SubStoreHub } from './components/SubStoreHub';
+import { PipelineHub } from './components/PipelineHub';
 import { QuickProbe } from './components/QuickProbe';
 import { SettingsLogs } from './components/SettingsLogs';
-import { OrchestrationHub } from './components/OrchestrationHub';
 
 export const App: React.FC = () => {
   const [token, setToken] = useState<string>(() => getStoredToken());
@@ -229,16 +228,12 @@ export const App: React.FC = () => {
           />
         )}
 
-        {currentTab === 'orchestration' && (
-          <OrchestrationHub onRefreshGlobal={fetchStatus} />
+        {currentTab === 'pipeline' && (
+          <PipelineHub onRefreshGlobal={fetchStatus} />
         )}
 
         {currentTab === 'vps' && (
           <VPSCenter onOpenHealingWizard={handleOpenHealingWizard} />
-        )}
-
-        {currentTab === 'substore' && (
-          <SubStoreHub />
         )}
 
         {currentTab === 'probe' && (

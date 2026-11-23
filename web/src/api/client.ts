@@ -20,6 +20,7 @@ import {
   BackupSnapshot,
   SafeUpgradeResponse,
   SubscriptionInspectResponse,
+  VerifySubscriptionResponse,
 } from '../types';
 
 const TOKEN_KEY = 'vpn_probe_admin_token';
@@ -223,8 +224,8 @@ export const api = {
     });
   },
 
-  async verifySubscription(file: string = 'Q'): Promise<any> {
-    return request(`/api/substore/verify?file=${encodeURIComponent(file)}`);
+  async verifySubscription(file: string = 'Q'): Promise<VerifySubscriptionResponse> {
+    return request<VerifySubscriptionResponse>(`/api/substore/verify?file=${encodeURIComponent(file)}`);
   },
 
   // 7. VPS 管理与自愈换端口

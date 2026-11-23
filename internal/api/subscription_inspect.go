@@ -213,7 +213,7 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 			if cg.Filter.CleanOnly {
 				tags = append(tags, "干净出口")
 			}
-		} else if strings.HasPrefix(gName, "自建-") || strings.HasPrefix(gName, "自建·") {
+		} else if strings.HasPrefix(gName, "自建-") || strings.HasPrefix(gName, "自建·") || gName == "不送中" {
 			isExt = false
 			if strings.Contains(gName, "线路") {
 				category = "self_backbone"
@@ -221,9 +221,12 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 			} else if strings.Contains(gName, "家宽") {
 				category = "self_resi"
 				tags = append(tags, "自建·家宽全家桶")
-			} else if strings.Contains(gName, "送中") {
+			} else if strings.Contains(gName, "送中") && gName != "不送中" {
 				category = "self_china_leak"
 				tags = append(tags, "自建·送中隔离")
+			} else if gName == "不送中" {
+				category = "self_clean"
+				tags = append(tags, "自建·防送中直通")
 			} else {
 				category = "self_custom"
 				tags = append(tags, "自建·内部组")

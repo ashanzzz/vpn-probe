@@ -344,11 +344,12 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 		Nodes            []model.AtomNode `json:"nodes"`
 	}
 
-	transitStat := &CategoryStat{DisplayName: "自建-线路分组 (纯骨干)"}
-	allResiStat := &CategoryStat{DisplayName: "自建-家宽分组 (全量自建家宽池)"}
-	usStat := &CategoryStat{Country: "US", DisplayName: "自建-美国家宽分组"}
-	jpStat := &CategoryStat{Country: "JP", DisplayName: "自建-日本家宽分组"}
-	otherStat := &CategoryStat{Country: "OTHER", DisplayName: "自建-其他家宽分组"}
+	transitStat := &CategoryStat{DisplayName: "自建-线路机"}
+	allResiStat := &CategoryStat{DisplayName: "自建-家宽分组"}
+	usStat := &CategoryStat{Country: "US", DisplayName: "自建-美国和美国家宽"}
+	jpStat := &CategoryStat{Country: "JP", DisplayName: "自建-日本和日本家宽"}
+	twStat := &CategoryStat{Country: "TW", DisplayName: "自建-台湾家宽分组"}
+	otherStat := &CategoryStat{Country: "OTHER", DisplayName: "自建-其他"}
 	var chinaLeaks []model.AtomNode
 
 	// 获取外部分组信息 (外部商业机场订阅池)
@@ -395,6 +396,8 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 			target = usStat
 		case "JP":
 			target = jpStat
+		case "TW":
+			target = twStat
 		default:
 			target = otherStat
 		}
@@ -431,17 +434,25 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 		"status":      "ok",
 		"total_atoms": len(atoms),
 		"categories": map[string]any{
-			"external":    externalStat, // 外部分组
-			"residential": allResiStat,  // 自建-家宽分组 (全量自建家宽池)
-			"us_resi":     usStat,       // 自建-美国家宽分组
-			"jp_resi":     jpStat,       // 自建-日本家宽分组
-			"other_resi":  otherStat,    // 自建-其他家宽分组
-			"transit":     transitStat,  // 自建-线路分组
-			"china_leaks": chinaLeaks,   // 自建-送中分组 (严禁中继分流)
-			// 兼容旧字段
-			"us":    usStat,
-			"jp":    jpStat,
-			"other": otherStat,
+			"external":       externalStat, // 外部分组
+			"residential":    allResiStat,  // 自建-家宽分组 (全量自建家宽池)
+			"transit":        transitStat,  // 自建-线路机
+			"us_resi":        usStat,       // 自建-美国和美国家宽
+			"jp_resi":        jpStat,       // 自建-日本和日本家宽
+			"tw_resi":        twStat,       // 自建-台湾家宽分组
+			"other_resi":     otherStat,    // 自建-其他
+			"china_leaks":    chinaLeaks,   // 自建-送中
+			// 规范干净组命名与兼容旧字段
+			"transit_clean":  transitStat,
+			"us_clean":       usStat,
+			"jp_clean":       jpStat,
+			"tw_clean":       twStat,
+			"other_clean":    otherStat,
+			"songzhong":      chinaLeaks,
+			"us":             usStat,
+			"jp":             jpStat,
+			"tw":             twStat,
+			"other":          otherStat,
 		},
 		"custom_groups": customSummary,
 	}

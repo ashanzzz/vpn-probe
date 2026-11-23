@@ -528,7 +528,99 @@ export const OrchestrationHub: React.FC<OrchestrationHubProps> = ({ onRefreshGlo
             </div>
           )}
 
-          {/* E. 骨干线路机分组 */}
+          {/* E. 台湾家宽分组 */}
+          {summary?.categories?.tw_resi && (
+            <div className="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs hover:border-slate-300 transition flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="px-2 py-0.5 rounded text-2xs font-bold uppercase bg-emerald-100 text-emerald-800 flex items-center space-x-1">
+                    <span>🇹🇼</span>
+                    <span>台区全家桶</span>
+                  </span>
+                  <button 
+                    onClick={() => toggleCard('tw_resi')} 
+                    className="text-slate-400 hover:text-slate-600"
+                  >
+                    {expandedCards['tw_resi'] ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                <h4 className="font-bold text-slate-900 text-sm mb-1">
+                  {summary.categories.tw_resi.display_name}
+                </h4>
+                <p className="text-xs text-slate-500 mb-3">
+                  HiNet 中华电信原生家宽 + 台湾链式中继池。
+                </p>
+                <div className="flex items-center justify-between text-xs font-mono bg-emerald-50/60 p-2 rounded-lg text-emerald-900 mb-2">
+                  <span>纯净节点数</span>
+                  <span className="font-bold">{summary.categories.tw_resi.total_clean_count}</span>
+                </div>
+              </div>
+
+              {expandedCards['tw_resi'] && (
+                <div className="mt-2 pt-2 border-t border-slate-100 space-y-1 max-h-32 overflow-y-auto text-2xs font-mono">
+                  {summary.categories.tw_resi.nodes.map(n => (
+                    <div key={n.id} className="flex items-center justify-between text-slate-600 py-0.5">
+                      <span className="truncate pr-2">{n.name}</span>
+                      <span className="text-slate-400">{n.kind}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-2xs text-slate-400">
+                <span>策略标识</span>
+                <span className="font-mono font-semibold text-slate-600">ashan-tw-resi</span>
+              </div>
+            </div>
+          )}
+
+          {/* F. 其他自建分组 */}
+          {summary?.categories?.other_resi && (
+            <div className="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs hover:border-slate-300 transition flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="px-2 py-0.5 rounded text-2xs font-bold uppercase bg-amber-100 text-amber-800 flex items-center space-x-1">
+                    <span>🌐</span>
+                    <span>其他自建池</span>
+                  </span>
+                  <button 
+                    onClick={() => toggleCard('other_resi')} 
+                    className="text-slate-400 hover:text-slate-600"
+                  >
+                    {expandedCards['other_resi'] ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                <h4 className="font-bold text-slate-900 text-sm mb-1">
+                  {summary.categories.other_resi.display_name}
+                </h4>
+                <p className="text-xs text-slate-500 mb-3">
+                  新加坡、韩国等其他原生家宽直连与链式中继池。
+                </p>
+                <div className="flex items-center justify-between text-xs font-mono bg-amber-50/60 p-2 rounded-lg text-amber-900 mb-2">
+                  <span>纯净节点数</span>
+                  <span className="font-bold">{summary.categories.other_resi.total_clean_count}</span>
+                </div>
+              </div>
+
+              {expandedCards['other_resi'] && (
+                <div className="mt-2 pt-2 border-t border-slate-100 space-y-1 max-h-32 overflow-y-auto text-2xs font-mono">
+                  {summary.categories.other_resi.nodes.map(n => (
+                    <div key={n.id} className="flex items-center justify-between text-slate-600 py-0.5">
+                      <span className="truncate pr-2">{n.name}</span>
+                      <span className="text-slate-400">{n.kind}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-2xs text-slate-400">
+                <span>策略标识</span>
+                <span className="font-mono font-semibold text-slate-600">ashan-other</span>
+              </div>
+            </div>
+          )}
+
+          {/* G. 骨干线路机分组 */}
           {summary?.categories?.transit && (
             <div className="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs hover:border-slate-300 transition flex flex-col justify-between">
               <div>

@@ -310,7 +310,9 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 			}
 
 			// 彻底过滤链式中继（链式代理为运行时中转池动态组装，不作为基础原子直连探针）
-			if strings.Contains(trimmed, "dialerProxy=") || strings.Contains(trimmed, "➔") || strings.Contains(trimmed, "链式|") {
+			lower := strings.ToLower(trimmed)
+			if strings.Contains(lower, "dialerproxy=") || strings.Contains(lower, "dialer-proxy=") ||
+				strings.Contains(trimmed, "➔") || strings.Contains(trimmed, "链式") {
 				continue
 			}
 
@@ -322,6 +324,8 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 			ep := parsed.Tag
 			if h, p, s := parseEndpoint(trimmed); h != "" {
 				ep = fmt.Sprintf("%s:%d:%s", h, p, s)
+			} else {
+				ep = trimmed
 			}
 			if seenEndpoints[ep] {
 				continue
@@ -359,14 +363,18 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 	for _, n := range dynamicNodes {
 		ep := getEndpoint(n.URL)
 		matchedKey := ""
-		for key, state := range s.nodeStates {
-			if getEndpoint(state.Config.URL) == ep || key == n.Name {
-				matchedKey = key
-				break
+		if _, ok := s.nodeStates[n.Name]; ok {
+			matchedKey = n.Name
+		} else {
+			for key, state := range s.nodeStates {
+				if getEndpoint(state.Config.URL) == ep {
+					matchedKey = key
+					break
+				}
 			}
 		}
 
-		isResi := strings.Contains(n.Name, "家宽") || strings.Contains(n.URL, "socks") || strings.Contains(n.URL, "167.104.167.151") || strings.HasPrefix(n.Name, "LZ-")
+		isResi := model.IsResidentialNode(n.Name, n.URL, "")
 		nodeType := "transit"
 		if isResi {
 			nodeType = "residential"
@@ -375,8 +383,11 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 		if matchedKey != "" {
 			validSelfSet[matchedKey] = true
 			s.nodeStates[matchedKey].Config.URL = n.URL
+			s.nodeStates[matchedKey].Config.Name = n.Name
 			s.nodeStates[matchedKey].Config.IsSelf = true
 			if s.nodeStates[matchedKey].LastResult != nil {
+				s.nodeStates[matchedKey].LastResult.Name = n.Name
+				s.nodeStates[matchedKey].LastResult.OriginalURL = n.URL
 				s.nodeStates[matchedKey].LastResult.NodeType = nodeType
 			}
 		} else {
@@ -403,11 +414,6 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 	for _, n := range s.cfg.Monitor.ResidentialNodes {
 		if n.IsSelf {
 			validSelfSet[n.Name] = true
-		}
-	}
-	for name, state := range s.nodeStates {
-		if state.LastResult != nil && state.LastResult.NodeType == "residential" {
-			validSelfSet[name] = true
 		}
 	}
 
@@ -477,7 +483,7 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 	var healthyTransits []*model.NodeProbeResult
 
 	for _, res := range resp.Results {
-		isResi := strings.Contains(res.Name, "家宽") || strings.Contains(res.Name, "动态") || strings.Contains(res.Name, "LZ-") || res.Protocol == "socks" || res.Protocol == "socks5"
+		isResi := model.IsResidentialNode(res.Name, res.OriginalURL, res.Protocol)
 		if isResi {
 			res.NodeType = "residential"
 			resiNodes = append(resiNodes, res)

@@ -158,7 +158,7 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 					protoDesc = parsed.Protocol + "-ws"
 				}
 			}
-			isResi := strings.Contains(parsed.Tag, "家宽") || strings.Contains(strings.ToLower(parsed.Tag), "resi") || parsed.Protocol == "socks5"
+			isResi := model.IsResidentialNode(parsed.Tag, link, parsed.Protocol)
 			diagErr := err
 			if sbLog != "" {
 				diagErr = fmt.Errorf("%w | sing-box: %s", err, sbLog)

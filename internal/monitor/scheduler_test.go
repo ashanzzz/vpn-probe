@@ -432,3 +432,65 @@ func TestRefreshNodesFromSubStore_EmptyPreservesExisting(t *testing.T) {
 		t.Fatalf("expected 1 node preserved after failure, got %d", len(s.GetStatus()))
 	}
 }
+
+func TestRefreshNodesFromSubStore_PruneDynamicNodes(t *testing.T) {
+	// 验证当动态自建家宽节点从 SubStore 移除后，能够正常被 Prune，而静态配置的自建节点不受影响
+	subsJSON := `{"status":"success","data":[
+		{"name":"ashan-transit","displayName":"线路机","content":"vless://u1@1.1.1.1:443#Transit-01"},
+		{"name":"ashan-us-resi","displayName":"美区全家桶","content":"vless://u2@167.104.167.151:41000#LZ-US-To-Be-Pruned"}
+	]}`
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/subs" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(subsJSON))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			Enabled: true,
+			Nodes: []config.MonitoredNode{
+				{Name: "Static-Transit", URL: "vless://u@3.3.3.3:443#Static-Transit", IsSelf: true},
+			},
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     mockServer.URL,
+		},
+	}
+
+	sc := substore.NewClient(&cfg.SubStore)
+	s := NewScheduler(cfg, nil, nil, sc)
+
+	// 第一次同步：拉入 Transit-01 和 LZ-US-To-Be-Pruned，加上静态节点共 3 个
+	_ = s.RefreshNodesFromSubStore(context.Background())
+	if len(s.GetStatus()) != 3 {
+		t.Fatalf("expected 3 nodes after initial sync, got %d", len(s.GetStatus()))
+	}
+
+	// 模拟 SubStore 删除了 LZ-US-To-Be-Pruned，仅保留 Transit-01
+	subsJSON = `{"status":"success","data":[
+		{"name":"ashan-transit","displayName":"线路机","content":"vless://u1@1.1.1.1:443#Transit-01"}
+	]}`
+
+	// 第二次同步：LZ-US-To-Be-Pruned 必须被正常剪枝删除，仅保留 Static-Transit 与 Transit-01 共 2 个节点
+	_ = s.RefreshNodesFromSubStore(context.Background())
+	status := s.GetStatus()
+	if len(status) != 2 {
+		t.Fatalf("expected 2 nodes after pruning, got %d", len(status))
+	}
+	if _, ok := status["LZ-US-To-Be-Pruned"]; ok {
+		t.Errorf("expected LZ-US-To-Be-Pruned to be pruned from monitor")
+	}
+	if _, ok := status["Transit-01"]; !ok {
+		t.Errorf("expected Transit-01 to remain")
+	}
+	if _, ok := status["Static-Transit"]; !ok {
+		t.Errorf("expected Static-Transit to remain")
+	}
+}

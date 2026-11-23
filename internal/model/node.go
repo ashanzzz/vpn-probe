@@ -182,3 +182,37 @@ func ResolveCountry(exitCountry, nodeName string) string {
 		return "OTHER"
 	}
 }
+
+// IsResidentialNode 通用住宅家宽节点判定函数，消除不同探测阶段的判定分裂与周期性身份震荡
+func IsResidentialNode(name, rawURL, proto string) bool {
+	nameLower := strings.ToLower(name)
+	urlLower := strings.ToLower(rawURL)
+	protoLower := strings.ToLower(proto)
+
+	// 1. 协议特征
+	if protoLower == "socks" || protoLower == "socks5" || strings.Contains(urlLower, "socks") {
+		return true
+	}
+
+	// 2. 节点名关键字
+	if strings.Contains(name, "家宽") ||
+		strings.Contains(name, "动态") ||
+		strings.Contains(name, "LZ-") ||
+		strings.HasPrefix(name, "LZ-") ||
+		strings.Contains(nameLower, "resi") ||
+		strings.Contains(nameLower, "residential") ||
+		strings.Contains(name, "美宽") ||
+		strings.Contains(name, "日宽") ||
+		strings.Contains(name, "台宽") ||
+		strings.Contains(name, "韩宽") ||
+		strings.Contains(name, "新宽") {
+		return true
+	}
+
+	// 3. 懒猫云中转宿主机典型特征 (反向穿透落地机)
+	if strings.Contains(rawURL, "167.104.167.151") {
+		return true
+	}
+
+	return false
+}

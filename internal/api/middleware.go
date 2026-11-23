@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +65,39 @@ func (t *ipFailTracker) isLocked(ip string) (bool, time.Duration) {
 	if rec.lockedUntil.After(now) {
 		return true, rec.lockedUntil.Sub(now)
 	}
+	// 已过期且超过 10 分钟窗口的旧失败记录，在查阅时顺手清理
+	if now.Sub(rec.firstFailAt) > 10*time.Minute {
+		delete(t.failures, ip)
+	}
 	return false, 0
+}
+
+func (t *ipFailTracker) cleanupLocked(now time.Time) {
+	// 防御性内存回收：当记录数超过 100 时，清理已解锁且超过 10 分钟窗口的陈旧记录
+	if len(t.failures) > 100 {
+		for ip, rec := range t.failures {
+			if now.After(rec.lockedUntil) && now.Sub(rec.firstFailAt) > 10*time.Minute {
+				delete(t.failures, ip)
+			}
+		}
+		// 若依然超过硬上限 500（例如面临分布式海量扫描），按最早失败时间淘汰超额记录保安全
+		if excess := len(t.failures) - 500; excess > 0 {
+			type ipTimestamp struct {
+				ip string
+				t  time.Time
+			}
+			items := make([]ipTimestamp, 0, len(t.failures))
+			for ip, rec := range t.failures {
+				items = append(items, ipTimestamp{ip: ip, t: rec.firstFailAt})
+			}
+			sort.Slice(items, func(i, j int) bool {
+				return items[i].t.Before(items[j].t)
+			})
+			for i := 0; i < excess && i < len(items); i++ {
+				delete(t.failures, items[i].ip)
+			}
+		}
+	}
 }
 
 func (t *ipFailTracker) recordFailure(ip string) bool {
@@ -72,6 +105,8 @@ func (t *ipFailTracker) recordFailure(ip string) bool {
 	defer t.mu.Unlock()
 
 	now := time.Now()
+	t.cleanupLocked(now)
+
 	rec, ok := t.failures[ip]
 	if !ok || time.Since(rec.firstFailAt) > 60*time.Second {
 		t.failures[ip] = &failureRecord{

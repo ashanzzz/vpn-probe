@@ -262,3 +262,294 @@ func TestOrchestrator_LoadCustomChains_MalformedJSONReturnsError(t *testing.T) {
 		t.Fatal("expected error from UnbindExplicitChain on malformed file, got nil")
 	}
 }
+
+func TestOrchestrator_ChainChinaExitInheritance(t *testing.T) {
+	tmpChains := filepath.Join(t.TempDir(), "custom_chains.json")
+	defer SetCustomChainsFileForTest(tmpChains)()
+	tmpGroups := filepath.Join(t.TempDir(), "custom_groups.json")
+	defer SetCustomGroupsFileForTest(tmpGroups)()
+
+	sch := &Scheduler{
+		healer:     healer.NewHealer(nil, nil),
+		nodeStates: make(map[string]*NodeState),
+	}
+
+	// 1. 干净线路机与干净家宽
+	sch.nodeStates["clean-transit"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "t1",
+			Name:        "US-Clean-Transit",
+			OriginalURL: "vless://u1@1.1.1.1:443#US-Clean-Transit",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   false,
+			LatencyMs:   100,
+		},
+	}
+	sch.nodeStates["clean-resi"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "r1",
+			Name:        "LZ-US-Clean-家宽",
+			OriginalURL: "vless://u2@2.2.2.2:443#LZ-US-Clean-家宽",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   false,
+			LatencyMs:   200,
+		},
+	}
+
+	// 2. 送中家宽与送中线路机
+	sch.nodeStates["leaked-resi"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "r2",
+			Name:        "LZ-US-Leaked-家宽",
+			OriginalURL: "vless://u3@3.3.3.3:443#LZ-US-Leaked-家宽",
+			ExitCountry: "CN",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   true,
+			LatencyMs:   300,
+		},
+	}
+	sch.nodeStates["leaked-transit"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "t2",
+			Name:        "US-Leaked-Transit",
+			OriginalURL: "vless://u4@4.4.4.4:443#US-Leaked-Transit",
+			ExitCountry: "CN",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   true,
+			LatencyMs:   150,
+		},
+	}
+
+	// 注入 3 条自定义链式代理
+	customChains := []CustomChainBind{
+		{
+			ID:              "bind-clean",
+			TransitName:     "US-Clean-Transit",
+			ResidentialName: "LZ-US-Clean-家宽",
+			ChainName:       "链式|US-Clean-Transit ➔ LZ-US-Clean-家宽",
+			ChainURL:        "vless://u2@2.2.2.2:443?dialerProxy=US-Clean-Transit#链式|US-Clean-Transit ➔ LZ-US-Clean-家宽",
+		},
+		{
+			ID:              "bind-leaked-landing",
+			TransitName:     "US-Clean-Transit",
+			ResidentialName: "LZ-US-Leaked-家宽",
+			ChainName:       "链式|US-Clean-Transit ➔ LZ-US-Leaked-家宽",
+			ChainURL:        "vless://u3@3.3.3.3:443?dialerProxy=US-Clean-Transit#链式|US-Clean-Transit ➔ LZ-US-Leaked-家宽",
+		},
+		{
+			ID:              "bind-leaked-relay",
+			TransitName:     "US-Leaked-Transit",
+			ResidentialName: "LZ-US-Clean-家宽",
+			ChainName:       "链式|US-Leaked-Transit ➔ LZ-US-Clean-家宽",
+			ChainURL:        "vless://u2@2.2.2.2:443?dialerProxy=US-Leaked-Transit#链式|US-Leaked-Transit ➔ LZ-US-Clean-家宽",
+		},
+	}
+	if err := SaveCustomChains(customChains); err != nil {
+		t.Fatalf("failed to save custom chains: %v", err)
+	}
+
+	orc := NewOrchestrator(sch)
+	atoms := orc.CollectAtoms()
+
+	var cleanChain, leakedLandingChain, leakedRelayChain *model.AtomNode
+	for i := range atoms {
+		switch atoms[i].Name {
+		case "链式|US-Clean-Transit ➔ LZ-US-Clean-家宽":
+			cleanChain = &atoms[i]
+		case "链式|US-Clean-Transit ➔ LZ-US-Leaked-家宽":
+			leakedLandingChain = &atoms[i]
+		case "链式|US-Leaked-Transit ➔ LZ-US-Clean-家宽":
+			leakedRelayChain = &atoms[i]
+		}
+	}
+
+	if cleanChain == nil || cleanChain.ChinaExit {
+		t.Fatalf("expected cleanChain to have ChinaExit=false, got: %v", cleanChain)
+	}
+	if leakedLandingChain == nil || !leakedLandingChain.ChinaExit {
+		t.Fatalf("expected leakedLandingChain to inherit ChinaExit=true from residential landing, got: %v", leakedLandingChain)
+	}
+	if leakedRelayChain == nil || !leakedRelayChain.ChinaExit {
+		t.Fatalf("expected leakedRelayChain to inherit ChinaExit=true from transit relay, got: %v", leakedRelayChain)
+	}
+
+	// 验证 QueryAtoms 过滤机制
+	cleanChains := orc.QueryAtoms(AtomQueryFilter{CleanOnly: true, Kind: "chain"})
+	if len(cleanChains) != 1 || cleanChains[0].Name != "链式|US-Clean-Transit ➔ LZ-US-Clean-家宽" {
+		t.Fatalf("expected only 1 clean chain, got %d: %v", len(cleanChains), cleanChains)
+	}
+
+	leakedChains := orc.QueryAtoms(AtomQueryFilter{ChinaLeakOnly: true, Kind: "chain"})
+	if len(leakedChains) != 2 {
+		t.Fatalf("expected 2 leaked chains, got %d: %v", len(leakedChains), leakedChains)
+	}
+
+	// 验证 GetCategoriesSummary 大盘分类隔离
+	summary := orc.GetCategoriesSummary()
+	cats := summary["categories"].(map[string]any)
+	chinaLeaks := cats["china_leaks"].([]model.AtomNode)
+
+	foundLeakedLanding := false
+	foundLeakedRelay := false
+	for _, a := range chinaLeaks {
+		if a.Name == "链式|US-Clean-Transit ➔ LZ-US-Leaked-家宽" {
+			foundLeakedLanding = true
+		}
+		if a.Name == "链式|US-Leaked-Transit ➔ LZ-US-Clean-家宽" {
+			foundLeakedRelay = true
+		}
+	}
+	if !foundLeakedLanding || !foundLeakedRelay {
+		t.Fatalf("expected both leaked chains in china_leaks isolation box, got: %v", chinaLeaks)
+	}
+}
+
+func TestOrchestrator_ChainNameAndURLQuerySafety(t *testing.T) {
+	tmpChains := filepath.Join(t.TempDir(), "custom_chains_query.json")
+	defer SetCustomChainsFileForTest(tmpChains)()
+
+	sch := &Scheduler{
+		healer:     healer.NewHealer(nil, nil),
+		nodeStates: make(map[string]*NodeState),
+	}
+
+	sch.nodeStates["jp-transit"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "t-jp",
+			Name:        "JP-SoftBank",
+			OriginalURL: "vless://u@1.1.1.1:443#JP-SoftBank",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "transit",
+			LatencyMs:   120,
+		},
+	}
+	sch.nodeStates["jp-resi"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "r-jp",
+			Name:        "LZ-JP-KDDI-家宽",
+			OriginalURL: "vless://u@2.2.2.2:443#LZ-JP-KDDI-家宽",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "residential",
+			LatencyMs:   180,
+		},
+	}
+
+	// URL query params 携带 '|' 与 '➔'，验证安全解析不被 query 参数破坏
+	complexURL := "vless://uuid@167.104.167.151:20640?encryption=none&pbk=key|split&sni=apple.com&flow=xtls-rprx-vision&dialerProxy=JP-SoftBank#链式|JP-SoftBank ➔ LZ-JP-KDDI-家宽"
+	customChains := []CustomChainBind{
+		{
+			ID:              "bind-complex",
+			TransitName:     "JP-SoftBank",
+			ResidentialName: "LZ-JP-KDDI-家宽",
+			ChainName:       "链式|JP-SoftBank ➔ LZ-JP-KDDI-家宽",
+			ChainURL:        complexURL,
+		},
+	}
+	if err := SaveCustomChains(customChains); err != nil {
+		t.Fatalf("failed to save custom chains: %v", err)
+	}
+
+	orc := NewOrchestrator(sch)
+	atoms := orc.CollectAtoms()
+
+	var matched *model.AtomNode
+	for i := range atoms {
+		if atoms[i].Kind == "chain" {
+			matched = &atoms[i]
+			break
+		}
+	}
+
+	if matched == nil {
+		t.Fatal("expected chain atom to be created")
+	}
+	if matched.Name != "链式|JP-SoftBank ➔ LZ-JP-KDDI-家宽" {
+		t.Fatalf("expected exact name, got: %s", matched.Name)
+	}
+	if matched.Country != "JP" {
+		t.Fatalf("expected country JP, got: %s", matched.Country)
+	}
+	if matched.LatencyMs != 300 {
+		t.Fatalf("expected latency 300 (120+180), got: %d", matched.LatencyMs)
+	}
+}
+
+func TestOrchestrator_ChainWithoutTransitDoesNotMatchFirstTransit(t *testing.T) {
+	tmpChains := filepath.Join(t.TempDir(), "custom_chains_no_transit.json")
+	defer SetCustomChainsFileForTest(tmpChains)()
+
+	sch := &Scheduler{
+		healer:     healer.NewHealer(nil, nil),
+		nodeStates: make(map[string]*NodeState),
+	}
+
+	sch.nodeStates["leaked-transit"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "t-leak",
+			Name:        "US-Leaking-Transit",
+			OriginalURL: "vless://u@1.1.1.1:443#US-Leaking-Transit",
+			ExitCountry: "CN",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   true,
+			LatencyMs:   999,
+		},
+	}
+	sch.nodeStates["clean-resi"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "r-clean",
+			Name:        "LZ-US-Clean-家宽",
+			OriginalURL: "vless://u@2.2.2.2:443#LZ-US-Clean-家宽",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   false,
+			LatencyMs:   50,
+		},
+	}
+
+	// Custom chain with no transit part (no ➔)
+	customChains := []CustomChainBind{
+		{
+			ID:              "bind-no-transit",
+			TransitName:     "",
+			ResidentialName: "LZ-US-Clean-家宽",
+			ChainName:       "LZ-US-Clean-家宽",
+			ChainURL:        "vless://u@2.2.2.2:443#LZ-US-Clean-家宽",
+		},
+	}
+	if err := SaveCustomChains(customChains); err != nil {
+		t.Fatalf("failed to save custom chains: %v", err)
+	}
+
+	orc := NewOrchestrator(sch)
+	atoms := orc.CollectAtoms()
+
+	var matched *model.AtomNode
+	for i := range atoms {
+		if atoms[i].Kind == "chain" {
+			matched = &atoms[i]
+			break
+		}
+	}
+
+	if matched == nil {
+		t.Fatal("expected chain atom to be created")
+	}
+	t.Logf("Chain LatencyMs: %d, ChinaExit: %v", matched.LatencyMs, matched.ChinaExit)
+	if matched.ChinaExit {
+		t.Errorf("BUG DETECTED: chain with empty transit part inherited ChinaExit from unrelated transit!")
+	}
+	if matched.LatencyMs != 50 {
+		t.Errorf("BUG DETECTED: chain with empty transit part inherited transit latency (%d != 50)", matched.LatencyMs)
+	}
+}
+

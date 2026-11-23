@@ -150,22 +150,6 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 		chains := mergeCustomChains(fullMesh)
 
 		for _, ch := range chains {
-			decodedCh, err := url.QueryUnescape(ch)
-			if err != nil {
-				decodedCh = ch
-			}
-			targetPart := decodedCh
-			transitPart := ""
-			if idx := strings.Index(decodedCh, "➔"); idx != -1 {
-				transitPart = strings.TrimSpace(decodedCh[:idx])
-				targetPart = strings.TrimSpace(decodedCh[idx+len("➔"):])
-			} else if hashIdx := strings.Index(decodedCh, "#"); hashIdx != -1 {
-				targetPart = strings.TrimSpace(decodedCh[hashIdx+1:])
-			}
-			if idx := strings.Index(transitPart, "|"); idx != -1 {
-				transitPart = strings.TrimSpace(transitPart[idx+1:])
-			}
-			country := model.ResolveCountry("", targetPart)
 			chainName := ch
 			if hashIdx := strings.Index(ch, "#"); hashIdx != -1 {
 				chainName = ch[hashIdx+1:]
@@ -174,34 +158,58 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 				chainName = uName
 			}
 
+			// 优先从标签名中解析中继与落地目标，避免 URL 参数/密码中的特殊符号干扰
+			chainLabel := chainName
+			if pipeIdx := strings.Index(chainLabel, "|"); pipeIdx != -1 {
+				chainLabel = strings.TrimSpace(chainLabel[pipeIdx+1:])
+			}
+			transitPart := ""
+			targetPart := chainLabel
+			if arrowIdx := strings.Index(chainLabel, "➔"); arrowIdx != -1 {
+				transitPart = strings.TrimSpace(chainLabel[:arrowIdx])
+				targetPart = strings.TrimSpace(chainLabel[arrowIdx+len("➔"):])
+			}
+			country := model.ResolveCountry("", targetPart)
+
 			chainOnline := true
 			testedAt := time.Now()
 			chainLatency := 0
+			chainChinaExit := false
 
-			// 匹配关联中转专线延迟
-			for _, t := range transits {
-				if t.Name == transitPart || strings.Contains(transitPart, t.Name) || strings.Contains(t.Name, transitPart) {
-					chainLatency += t.LatencyMs
-					break
+			// 匹配关联中转专线延迟与送中状态
+			if transitPart != "" {
+				for _, t := range transits {
+					if t.Name == transitPart || strings.Contains(transitPart, t.Name) || strings.Contains(t.Name, transitPart) {
+						chainLatency += t.LatencyMs
+						if t.ChinaExit {
+							chainChinaExit = true
+						}
+						break
+					}
 				}
 			}
 
-			// 匹配关联目标家宽节点的真实反向隧道状态与延迟
-			for _, r := range uniqueResis {
-				if r.Name == targetPart || strings.Contains(targetPart, r.Name) || strings.Contains(r.Name, targetPart) {
-					testedAt = r.TestedAt
-					if r.Diagnostic != nil && r.Diagnostic.AbroadRTTMs > 0 {
-						chainLatency += r.Diagnostic.AbroadRTTMs
-					} else if r.LatencyMs > 0 {
-						chainLatency += r.LatencyMs
-					}
-					if !r.Online {
-						// 仅当住宅节点海外反向链路畅通且处于纯国内直连受阻时，链式中继才有效；家庭端掉线或中转宕机均判定为离线
-						if r.Diagnostic != nil && (r.Diagnostic.FaultType == model.FaultResidentialTunnelOffline || r.Diagnostic.FaultType == model.FaultTransitRelayDown || !r.Diagnostic.AbroadReachable) {
-							chainOnline = false
+			// 匹配关联目标家宽节点的真实反向隧道状态、延迟与送中状态
+			if targetPart != "" {
+				for _, r := range uniqueResis {
+					if r.Name == targetPart || strings.Contains(targetPart, r.Name) || strings.Contains(r.Name, targetPart) {
+						testedAt = r.TestedAt
+						if r.Diagnostic != nil && r.Diagnostic.AbroadRTTMs > 0 {
+							chainLatency += r.Diagnostic.AbroadRTTMs
+						} else if r.LatencyMs > 0 {
+							chainLatency += r.LatencyMs
 						}
+						if r.ChinaExit {
+							chainChinaExit = true
+						}
+						if !r.Online {
+							// 仅当住宅节点海外反向链路畅通且处于纯国内直连受阻时，链式中继才有效；家庭端掉线或中转宕机均判定为离线
+							if r.Diagnostic != nil && (r.Diagnostic.FaultType == model.FaultResidentialTunnelOffline || r.Diagnostic.FaultType == model.FaultTransitRelayDown || !r.Diagnostic.AbroadReachable) {
+								chainOnline = false
+							}
+						}
+						break
 					}
-					break
 				}
 			}
 
@@ -212,7 +220,7 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 				Protocol:  "chain",
 				Country:   country,
 				Kind:      "chain",
-				ChinaExit: false,
+				ChinaExit: chainChinaExit,
 				LatencyMs: chainLatency,
 				Online:    chainOnline,
 				TestedAt:  testedAt,
@@ -235,9 +243,12 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 	// 'NAT residential' group can therefore include chains without hand-tagging
 	// every relay/landing combination.
 	landings := make(map[string]model.AtomNode)
+	transitMap := make(map[string]model.AtomNode)
 	for _, a := range atoms {
 		if a.Kind == "residential" {
 			landings[a.Name] = a
+		} else if a.Kind == "transit" {
+			transitMap[a.Name] = a
 		}
 	}
 	for i := range atoms {
@@ -248,15 +259,26 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 		if len(parts) != 2 {
 			continue
 		}
-		landing, ok := landings[strings.TrimSpace(parts[1])]
-		if !ok {
-			continue
+		landingName := strings.TrimSpace(parts[1])
+		if landing, ok := landings[landingName]; ok {
+			if atoms[i].InfraType == "" {
+				atoms[i].InfraType = landing.InfraType
+			}
+			if len(atoms[i].Tags) == 0 {
+				atoms[i].Tags = append([]string(nil), landing.Tags...)
+			}
+			if landing.ChinaExit {
+				atoms[i].ChinaExit = true
+			}
 		}
-		if atoms[i].InfraType == "" {
-			atoms[i].InfraType = landing.InfraType
+		transitName := strings.TrimSpace(parts[0])
+		if pipeIdx := strings.Index(transitName, "|"); pipeIdx != -1 {
+			transitName = strings.TrimSpace(transitName[pipeIdx+1:])
 		}
-		if len(atoms[i].Tags) == 0 {
-			atoms[i].Tags = append([]string(nil), landing.Tags...)
+		if tr, ok := transitMap[transitName]; ok {
+			if tr.ChinaExit {
+				atoms[i].ChinaExit = true
+			}
 		}
 	}
 	return atoms

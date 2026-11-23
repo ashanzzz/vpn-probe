@@ -232,7 +232,16 @@ func (m *Manager) run() {
 				}
 				m.set(selected.ID, "running", "", attempt)
 				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+				done := make(chan struct{})
+				go func() {
+					select {
+					case <-m.stopChan:
+						cancel()
+					case <-done:
+					}
+				}()
 				err = m.publish(ctx, func(stage string) { m.set(selected.ID, stage, "", attempt) })
+				close(done)
 				cancel()
 				if err == nil {
 					break

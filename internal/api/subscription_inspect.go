@@ -277,7 +277,11 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 					}
 				}
 				if !matched {
-					if strings.Contains(pName, "家宽") {
+					if strings.Contains(pName, "链式") || strings.Contains(pName, "➔") {
+						psum.Kind = "chain"
+						psum.IsSelfHosted = true
+						psum.Online = true
+					} else if strings.Contains(pName, "家宽") {
 						psum.Kind = "residential"
 						psum.IsSelfHosted = true
 						psum.Online = true

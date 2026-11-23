@@ -153,3 +153,68 @@ func TestGetBridgedConvertJS(t *testing.T) {
 		t.Fatalf("expected fallback JS when server returns 500, got: %s", resFallback)
 	}
 }
+
+func TestManager_AtomicSaveAndDeepCopy(t *testing.T) {
+	tmpDir := t.TempDir()
+	rulesFile := filepath.Join(tmpDir, "custom_rules.json")
+
+	mgr, err := NewManager(rulesFile)
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	// 1. 验证 GetConfig() 返回深拷贝切片，修改切片不影响内部状态
+	cfg := mgr.GetConfig()
+	initialLen := len(cfg.DirectDomains)
+	cfg.DirectDomains = append(cfg.DirectDomains, "tampered.domain.com")
+	cfg.CustomRules = append(cfg.CustomRules, "tampered,rule")
+
+	cfg2 := mgr.GetConfig()
+	if len(cfg2.DirectDomains) != initialLen {
+		t.Errorf("slice leak: modifying DirectDomains affected manager internal state")
+	}
+	for _, d := range cfg2.DirectDomains {
+		if d == "tampered.domain.com" {
+			t.Errorf("found tampered domain in manager config")
+		}
+	}
+
+	// 2. 验证 UpdateConfig 成功后原子写盘，且不存在残留的临时文件
+	newCfg := cfg.Clone()
+	newCfg.DirectDomains = append(newCfg.DirectDomains, "atomic-test.org")
+	if err := mgr.UpdateConfig(newCfg); err != nil {
+		t.Fatalf("UpdateConfig failed: %v", err)
+	}
+
+	// 检查目录内文件
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		t.Fatalf("read dir failed: %v", err)
+	}
+	var tmpFound bool
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".custom_rules-") {
+			tmpFound = true
+		}
+	}
+	if tmpFound {
+		t.Errorf("found dangling temporary file in rules directory")
+	}
+
+	// 重新加载验证落盘数据
+	mgrReloaded, err := NewManager(rulesFile)
+	if err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+	reloadedCfg := mgrReloaded.GetConfig()
+	hasAtomic := false
+	for _, d := range reloadedCfg.DirectDomains {
+		if d == "atomic-test.org" {
+			hasAtomic = true
+			break
+		}
+	}
+	if !hasAtomic {
+		t.Errorf("atomic-test.org was not persisted to disk")
+	}
+}

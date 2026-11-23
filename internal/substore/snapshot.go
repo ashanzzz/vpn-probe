@@ -234,7 +234,13 @@ func (sm *SnapshotManager) WarmupOne(ctx context.Context, fileName string) (*Sna
 // Warmup 批量烘焙指定的一组文件 (如 ["ashan", "Ashan", "Q", "q"])
 func (sm *SnapshotManager) Warmup(ctx context.Context, fileNames []string) map[string]error {
 	results := make(map[string]error)
-	for _, fn := range fileNames {
+	for i, fn := range fileNames {
+		if ctx.Err() != nil {
+			for _, rem := range fileNames[i:] {
+				results[rem] = ctx.Err()
+			}
+			break
+		}
 		// 单文件超时控制 90s，防止外部机场严重拖垮整体流程
 		subCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 		_, err := sm.WarmupOne(subCtx, fn)

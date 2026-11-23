@@ -21,6 +21,24 @@ type CustomRuleConfig struct {
 	MLKEMEnabled          bool     `json:"mlkem_enabled"`
 }
 
+// Clone returns a deep copy of CustomRuleConfig with isolated slice fields
+func (c CustomRuleConfig) Clone() CustomRuleConfig {
+	out := c
+	if c.LANDNSDomains != nil {
+		out.LANDNSDomains = make([]string, len(c.LANDNSDomains))
+		copy(out.LANDNSDomains, c.LANDNSDomains)
+	}
+	if c.DirectDomains != nil {
+		out.DirectDomains = make([]string, len(c.DirectDomains))
+		copy(out.DirectDomains, c.DirectDomains)
+	}
+	if c.CustomRules != nil {
+		out.CustomRules = make([]string, len(c.CustomRules))
+		copy(out.CustomRules, c.CustomRules)
+	}
+	return out
+}
+
 type Manager struct {
 	mu                 sync.RWMutex
 	filePath           string
@@ -80,24 +98,46 @@ func (m *Manager) load() error {
 
 func (m *Manager) save() error {
 	dir := filepath.Dir(m.filePath)
-	_ = os.MkdirAll(dir, 0755)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(m.cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.filePath, data, 0644)
+	f, err := os.CreateTemp(dir, ".custom_rules-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := f.Name()
+	defer os.Remove(tmpName)
+	defer f.Close()
+
+	if err := f.Chmod(0644); err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, m.filePath)
 }
 
 func (m *Manager) GetConfig() CustomRuleConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.cfg
+	return m.cfg.Clone()
 }
 
 func (m *Manager) UpdateConfig(newCfg CustomRuleConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.cfg = newCfg
+	m.cfg = newCfg.Clone()
 	return m.save()
 }
 
@@ -390,7 +430,7 @@ func (m *Manager) GetBridgedConvertJS() string {
 	if err == nil {
 		defer resp.Body.Close()
 		if resp.StatusCode == http.StatusOK {
-			data, readErr := io.ReadAll(resp.Body)
+			data, readErr := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
 			if readErr == nil && len(data) > 0 {
 				bridge := `
 

@@ -131,7 +131,7 @@ export interface TransitHostGroup {
   region: string;
   region_flag: string;
   ip: string;
-  status: 'healthy' | 'china' | 'port_blocked' | 'all_blocked';
+  status: 'healthy' | 'china' | 'port_blocked' | 'all_blocked' | 'congested';
   status_label: string;
   primary_reality: NodeProbeResult; // 仅采用 VLESS Reality (淘汰 SS2022)
   rescue_cf_ws?: NodeProbeResult;   // CF-WS 443 应急救活节点

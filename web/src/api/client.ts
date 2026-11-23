@@ -199,11 +199,11 @@ export const api = {
     });
   },
 
-  async getSubStoreNodes(name: string = "ashan's vps"): Promise<{ status: string; subscription: string; count: number; nodes: string[]; raw_content?: string }> {
+  async getSubStoreNodes(name: string = "ashan-transit"): Promise<{ status: string; subscription: string; count: number; nodes: string[]; raw_content?: string }> {
     return request(`/api/substore/nodes?name=${encodeURIComponent(name)}`);
   },
 
-  async updateSubStoreNodes(name: string = "ashan's vps", links: string[]): Promise<any> {
+  async updateSubStoreNodes(name: string = "ashan-transit", links: string[]): Promise<any> {
     return request('/api/substore/nodes', {
       method: 'POST',
       body: JSON.stringify({ name, links }),

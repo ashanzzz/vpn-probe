@@ -61,6 +61,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       region: '日本',
       region_flag: '🇯🇵',
       target_ip: '167.104.167.151',
+      exit_ip: '126.158.42.89',
       assigned_relay_name: '东京软银 — VLESS Reality Vision',
       is_failover_relay: false,
       direct_node: {
@@ -71,6 +72,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 318,
         china_exit: false,
         exit_country: 'JP',
+        exit_ip: '126.158.42.89',
         category: '家宽机-直连',
         original_url: 'socks5://user1:pass1@167.104.167.151:40981#LZ-JP-SoftBank-家宽-01',
         speed_result: { bandwidth_mb_s: 2.1, bandwidth_mbps: 16.8, ttfb_ms: 340, duration_sec: 4.8, bytes_transferred: 10485760 },
@@ -83,6 +85,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 132,
         china_exit: false,
         exit_country: 'JP',
+        exit_ip: '126.158.42.89',
         category: '线路➔家宽链式代理',
         original_url: 'vless://...#Chain-JP-01',
         speed_result: { bandwidth_mb_s: 14.6, bandwidth_mbps: 116.8, ttfb_ms: 155, duration_sec: 0.7, bytes_transferred: 10485760 },
@@ -94,6 +97,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       region: '日本',
       region_flag: '🇯🇵',
       target_ip: '167.104.167.152',
+      exit_ip: '126.161.78.102',
       assigned_relay_name: '东京 IIJ — VLESS Reality',
       is_failover_relay: false,
       direct_node: {
@@ -104,6 +108,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 295,
         china_exit: false,
         exit_country: 'JP',
+        exit_ip: '126.161.78.102',
         category: '家宽机-直连',
         original_url: 'socks5://user2:pass2@167.104.167.152:40982#LZ-JP-SoftBank-家宽-02',
         speed_result: { bandwidth_mb_s: 1.8, bandwidth_mbps: 14.4, ttfb_ms: 310, duration_sec: 5.5, bytes_transferred: 10485760 },
@@ -116,6 +121,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 140,
         china_exit: false,
         exit_country: 'JP',
+        exit_ip: '126.161.78.102',
         category: '线路➔家宽链式代理',
         original_url: 'vless://...#Chain-JP-02',
         speed_result: { bandwidth_mb_s: 12.8, bandwidth_mbps: 102.4, ttfb_ms: 168, duration_sec: 0.8, bytes_transferred: 10485760 },
@@ -127,6 +133,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       region: '美国',
       region_flag: '🇺🇸',
       target_ip: '167.104.167.153',
+      exit_ip: '96.63.208.40',
       assigned_relay_name: '美西 ACCK 洛杉矶 4837 — VLESS Reality',
       is_failover_relay: false,
       direct_node: {
@@ -137,6 +144,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 380,
         china_exit: false,
         exit_country: 'US',
+        exit_ip: '96.63.208.40',
         category: '家宽机-直连',
         original_url: 'socks5://user3:pass3@167.104.167.153:49041#LZ-US-Pavlov-家宽-01',
         speed_result: { bandwidth_mb_s: 1.2, bandwidth_mbps: 9.6, ttfb_ms: 420, duration_sec: 8.3, bytes_transferred: 10485760 },
@@ -149,6 +157,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 185,
         china_exit: false,
         exit_country: 'US',
+        exit_ip: '96.63.208.40',
         category: '线路➔家宽链式代理',
         original_url: 'vless://...#Chain-US-01',
         speed_result: { bandwidth_mb_s: 11.4, bandwidth_mbps: 91.2, ttfb_ms: 195, duration_sec: 0.9, bytes_transferred: 10485760 },
@@ -160,6 +169,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       region: '美国',
       region_flag: '🇺🇸',
       target_ip: '167.104.167.154',
+      exit_ip: '96.63.208.42',
       assigned_relay_name: '美西 ACCK 洛杉矶 4837 — VLESS Reality',
       is_failover_relay: false,
       direct_node: {
@@ -170,6 +180,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 395,
         china_exit: false,
         exit_country: 'US',
+        exit_ip: '96.63.208.42',
         category: '家宽机-直连',
         original_url: 'socks5://user4:pass4@167.104.167.154:49042#LZ-US-Pavlov-家宽-02',
         speed_result: { bandwidth_mb_s: 0.9, bandwidth_mbps: 7.2, ttfb_ms: 450, duration_sec: 11.1, bytes_transferred: 10485760 },
@@ -182,6 +193,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 190,
         china_exit: false,
         exit_country: 'US',
+        exit_ip: '96.63.208.42',
         category: '线路➔家宽链式代理',
         original_url: 'vless://...#Chain-US-02',
         speed_result: { bandwidth_mb_s: 10.8, bandwidth_mbps: 86.4, ttfb_ms: 202, duration_sec: 1.0, bytes_transferred: 10485760 },
@@ -193,6 +205,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       region: '日本',
       region_flag: '🇯🇵',
       target_ip: '167.104.167.155',
+      exit_ip: '133.200.12.34',
       assigned_relay_name: '东京软银 — VLESS Reality Vision',
       is_failover_relay: false,
       direct_node: {
@@ -203,6 +216,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 310,
         china_exit: false,
         exit_country: 'JP',
+        exit_ip: '133.200.12.34',
         category: '家宽机-直连',
         original_url: 'socks5://user5:pass5@167.104.167.155:40983#LZ-JP-SoftBank-家宽-03',
         speed_result: { bandwidth_mb_s: 2.3, bandwidth_mbps: 18.4, ttfb_ms: 325, duration_sec: 4.3, bytes_transferred: 10485760 },
@@ -215,6 +229,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 136,
         china_exit: false,
         exit_country: 'JP',
+        exit_ip: '133.200.12.34',
         category: '线路➔家宽链式代理',
         original_url: 'vless://...#Chain-JP-03',
         speed_result: { bandwidth_mb_s: 15.2, bandwidth_mbps: 121.6, ttfb_ms: 150, duration_sec: 0.7, bytes_transferred: 10485760 },
@@ -226,6 +241,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       region: '日本',
       region_flag: '🇯🇵',
       target_ip: '167.104.167.156',
+      exit_ip: '133.200.45.67',
       assigned_relay_name: '东京 IIJ — VLESS Reality',
       is_failover_relay: false,
       direct_node: {
@@ -236,6 +252,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 305,
         china_exit: false,
         exit_country: 'JP',
+        exit_ip: '133.200.45.67',
         category: '家宽机-直连',
         original_url: 'socks5://user6:pass6@167.104.167.156:40984#LZ-JP-SoftBank-家宽-04',
         speed_result: { bandwidth_mb_s: 1.9, bandwidth_mbps: 15.2, ttfb_ms: 330, duration_sec: 5.2, bytes_transferred: 10485760 },
@@ -248,6 +265,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 142,
         china_exit: false,
         exit_country: 'JP',
+        exit_ip: '133.200.45.67',
         category: '线路➔家宽链式代理',
         original_url: 'vless://...#Chain-JP-04',
         speed_result: { bandwidth_mb_s: 13.5, bandwidth_mbps: 108.0, ttfb_ms: 165, duration_sec: 0.8, bytes_transferred: 10485760 },
@@ -259,6 +277,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       region: '美国',
       region_flag: '🇺🇸',
       target_ip: '167.104.167.157',
+      exit_ip: '96.63.208.45',
       assigned_relay_name: '东京软银 — VLESS Reality Vision (匀配)',
       is_failover_relay: false,
       direct_node: {
@@ -269,6 +288,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 410,
         china_exit: false,
         exit_country: 'US',
+        exit_ip: '96.63.208.45',
         category: '家宽机-直连',
         original_url: 'socks5://user7:pass7@167.104.167.157:49043#LZ-US-Pavlov-家宽-03',
         speed_result: { bandwidth_mb_s: 0.8, bandwidth_mbps: 6.4, ttfb_ms: 480, duration_sec: 12.5, bytes_transferred: 10485760 },
@@ -281,6 +301,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 215,
         china_exit: false,
         exit_country: 'US',
+        exit_ip: '96.63.208.45',
         category: '线路➔家宽链式代理',
         original_url: 'vless://...#Chain-US-03',
         speed_result: { bandwidth_mb_s: 8.5, bandwidth_mbps: 68.0, ttfb_ms: 230, duration_sec: 1.2, bytes_transferred: 10485760 },
@@ -292,6 +313,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       region: '美国',
       region_flag: '🇺🇸',
       target_ip: '167.104.167.158',
+      exit_ip: '96.63.208.48',
       assigned_relay_name: '美西 ACCK 洛杉矶 4837 — VLESS Reality',
       is_failover_relay: false,
       direct_node: {
@@ -302,6 +324,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 388,
         china_exit: false,
         exit_country: 'US',
+        exit_ip: '96.63.208.48',
         category: '家宽机-直连',
         original_url: 'socks5://user8:pass8@167.104.167.158:49044#LZ-US-Pavlov-家宽-04',
         speed_result: { bandwidth_mb_s: 1.1, bandwidth_mbps: 8.8, ttfb_ms: 410, duration_sec: 9.1, bytes_transferred: 10485760 },
@@ -314,6 +337,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 188,
         china_exit: false,
         exit_country: 'US',
+        exit_ip: '96.63.208.48',
         category: '线路➔家宽链式代理',
         original_url: 'vless://...#Chain-US-04',
         speed_result: { bandwidth_mb_s: 11.0, bandwidth_mbps: 88.0, ttfb_ms: 198, duration_sec: 0.9, bytes_transferred: 10485760 },
@@ -325,6 +349,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       region: '日本',
       region_flag: '🇯🇵',
       target_ip: '167.104.167.159',
+      exit_ip: '126.165.90.12',
       assigned_relay_name: '东京软银 — VLESS Reality Vision',
       is_failover_relay: false,
       direct_node: {
@@ -335,6 +360,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 315,
         china_exit: false,
         exit_country: 'JP',
+        exit_ip: '126.165.90.12',
         category: '家宽机-直连',
         original_url: 'socks5://user9:pass9@167.104.167.159:40985#LZ-JP-SoftBank-家宽-05',
         speed_result: { bandwidth_mb_s: 2.0, bandwidth_mbps: 16.0, ttfb_ms: 335, duration_sec: 5.0, bytes_transferred: 10485760 },
@@ -347,6 +373,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 135,
         china_exit: false,
         exit_country: 'JP',
+        exit_ip: '126.165.90.12',
         category: '线路➔家宽链式代理',
         original_url: 'vless://...#Chain-JP-05',
         speed_result: { bandwidth_mb_s: 14.8, bandwidth_mbps: 118.4, ttfb_ms: 152, duration_sec: 0.7, bytes_transferred: 10485760 },
@@ -358,6 +385,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       region: '美国',
       region_flag: '🇺🇸',
       target_ip: '167.104.167.160',
+      exit_ip: '96.63.208.50',
       assigned_relay_name: '美西 ACCK 洛杉矶 4837 — VLESS Reality',
       is_failover_relay: false,
       direct_node: {
@@ -368,6 +396,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 390,
         china_exit: false,
         exit_country: 'US',
+        exit_ip: '96.63.208.50',
         category: '家宽机-直连',
         original_url: 'socks5://user10:pass10@167.104.167.160:49045#LZ-US-Pavlov-家宽-05',
         speed_result: { bandwidth_mb_s: 1.0, bandwidth_mbps: 8.0, ttfb_ms: 430, duration_sec: 10.0, bytes_transferred: 10485760 },
@@ -380,6 +409,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         latency_ms: 186,
         china_exit: false,
         exit_country: 'US',
+        exit_ip: '96.63.208.50',
         category: '线路➔家宽链式代理',
         original_url: 'vless://...#Chain-US-05',
         speed_result: { bandwidth_mb_s: 11.2, bandwidth_mbps: 89.6, ttfb_ms: 196, duration_sec: 0.9, bytes_transferred: 10485760 },
@@ -475,10 +505,11 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       };
 
       const isRealityBlocked = fallbackReality.diagnostic?.fault_type === 'PORT_BLOCKED' || fallbackReality.diagnostic?.fault_type === 'port_blocked';
-      const isRealityDown = !fallbackReality.online && !isRealityBlocked;
+      const isRealityCongested = fallbackReality.diagnostic?.fault_type === 'NETWORK_CONGESTION' || fallbackReality.diagnostic?.fault_type === 'network_congestion';
+      const isRealityDown = !fallbackReality.online && !isRealityBlocked && !isRealityCongested;
       const isAllBlocked = isRealityDown; // 直连全军覆没时拉起救援
 
-      let status: 'healthy' | 'china' | 'port_blocked' | 'all_blocked' = 'healthy';
+      let status: 'healthy' | 'china' | 'port_blocked' | 'all_blocked' | 'congested' = 'healthy';
       let status_label = '🟢 正常';
 
       if (isAllBlocked) {
@@ -487,6 +518,9 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       } else if (isRealityBlocked) {
         status = 'port_blocked';
         status_label = '🟠 端口阻断';
+      } else if (isRealityCongested) {
+        status = 'congested';
+        status_label = '⚡ 跨境拥塞 (无需换端口)';
       } else if (fallbackReality.china_exit) {
         status = 'china';
         status_label = '🟡 送中';
@@ -515,12 +549,14 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
     let transitChina = 0;
     let transitPortBlocked = 0;
     let transitAllBlocked = 0;
+    let transitCongested = 0;
 
     transitHostGroups.forEach((h) => {
       if (h.status === 'healthy') transitHealthy++;
       else if (h.status === 'china') transitChina++;
       else if (h.status === 'port_blocked') transitPortBlocked++;
       else if (h.status === 'all_blocked') transitAllBlocked++;
+      else if (h.status === 'congested') transitCongested++;
     });
 
     const resiTotal = customResiList.length;
@@ -774,6 +810,8 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                         ? 'bg-amber-100 text-amber-800'
                         : host.status === 'port_blocked'
                         ? 'bg-orange-100 text-orange-800 animate-pulse'
+                        : host.status === 'congested'
+                        ? 'bg-sky-100 text-sky-800'
                         : 'bg-red-100 text-red-800 font-bold'
                     }`}
                   >
@@ -900,7 +938,10 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         {/* Residential Card Stream */}
         <div className="space-y-3">
           {customResiList.map((item) => {
-            const trueLandingIP = item.chain_node?.exit_ip || item.direct_node?.exit_ip || item.target_ip || '96.63.208.40';
+            const rawExit = item.chain_node?.exit_ip || item.direct_node?.exit_ip || item.exit_ip;
+            const isJumpHostIP = (ip?: string) => !ip || ip.startsWith('167.104.167.') || ip === '38.175.222.44' || ip === '156.231.113.91' || ip === '45.192.242.72';
+            const defaultLandingIP = (item.region_flag === '🇯🇵' || item.region?.includes('日')) ? '126.158.42.89' : '96.63.208.40';
+            const trueLandingIP = (!isJumpHostIP(rawExit) && rawExit) ? rawExit : defaultLandingIP;
             const isClean = !(item.direct_node?.china_exit || item.chain_node?.china_exit);
             const directFault = item.direct_node?.diagnostic?.fault_type;
 
@@ -930,9 +971,13 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                           title="点击进入真实落地 IP 深度检测结果 (检测日期/自测速度/流媒体分流/国家与纯净度)"
                         >
                           <Globe className="w-3 h-3 text-blue-500 group-hover:scale-110 transition-transform" />
-                          <span>落地 IP: {trueLandingIP}</span>
+                          <span>落地出口 IP: {trueLandingIP}</span>
                           <ExternalLink className="w-2.5 h-2.5 text-blue-400 group-hover:text-blue-600 ml-0.5" />
                         </button>
+
+                        <span className="text-2xs font-mono px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 border border-slate-200" title="反代中转宿主机及端口转发入口">
+                          反代宿主: {item.target_ip}
+                        </span>
 
                         {isClean ? (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-mono bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -1002,6 +1047,10 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                       ) : directFault === 'TRANSIT_RELAY_DOWN' ? (
                         <span className="px-1.5 py-0.2 rounded text-2xs font-semibold bg-red-100 text-red-800 border border-red-200">
                           中转机宕机
+                        </span>
+                      ) : (directFault === 'NETWORK_CONGESTION' || directFault === 'network_congestion') ? (
+                        <span className="px-1.5 py-0.2 rounded text-2xs font-semibold bg-sky-100 text-sky-800 border border-sky-200">
+                          ⚡ 跨境网络拥塞
                         </span>
                       ) : (
                         <span className="text-2xs font-medium text-slate-500">

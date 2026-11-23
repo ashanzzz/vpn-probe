@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -130,6 +131,13 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 		})
 	}
 
+	rawProxyTypeMap := make(map[string]string, len(rawCfg.Proxies))
+	for _, p := range rawCfg.Proxies {
+		if p.Name != "" {
+			rawProxyTypeMap[p.Name] = p.Type
+		}
+	}
+
 	// 4. Gather atoms from orchestrator to annotate proxy nodes
 	var atomMap = make(map[string]model.AtomNode)
 	var atoms []model.AtomNode
@@ -252,16 +260,38 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 				psum.LatencyMs = atom.LatencyMs
 				psum.Online = atom.Online
 				psum.Tags = atom.Tags
-			} else if strings.Contains(pName, "家宽") {
-				psum.Kind = "residential"
-				psum.IsSelfHosted = true
-				psum.Online = true
-			} else if strings.Contains(pName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(pName, "4837") {
-				psum.Kind = "transit"
-				psum.IsSelfHosted = true
-				psum.Online = true
 			} else {
-				psum.Kind = "airport"
+				// 二次尝试：使用对称别名匹配器检索链式中继与别名原子节点
+				matched := false
+				for _, atom := range atoms {
+					if publish.MatchMemberName(atom.Name, pName) {
+						psum.Type = atom.Protocol
+						psum.Country = atom.Country
+						psum.Kind = atom.Kind
+						psum.IsSelfHosted = true
+						psum.LatencyMs = atom.LatencyMs
+						psum.Online = atom.Online
+						psum.Tags = atom.Tags
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					if strings.Contains(pName, "家宽") {
+						psum.Kind = "residential"
+						psum.IsSelfHosted = true
+						psum.Online = true
+					} else if strings.Contains(pName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(pName, "4837") {
+						psum.Kind = "transit"
+						psum.IsSelfHosted = true
+						psum.Online = true
+					} else {
+						psum.Kind = "airport"
+					}
+				}
+			}
+			if psum.Type == "" {
+				psum.Type = rawProxyTypeMap[pName]
 			}
 			proxiesOut = append(proxiesOut, psum)
 		}
@@ -293,6 +323,7 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 	for p := range rawCfg.RuleProviders {
 		ruleProviders = append(ruleProviders, p)
 	}
+	sort.Strings(ruleProviders)
 
 	// 8. Generate the real JavaScript Script Operator source code driving this file
 	var script string

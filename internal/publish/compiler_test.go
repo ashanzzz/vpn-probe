@@ -102,16 +102,16 @@ func TestMatchMemberName_Symmetric(t *testing.T) {
 	raw := "链式|JP-Tokyo-IIJ-Reality ➔ LZ-US-Pavlov-家宽"
 	alias := "IIJ-美宽-Pavlov"
 
-	if !matchMemberName(raw, alias) {
-		t.Fatalf("expected matchMemberName(raw, alias) to be true")
+	if !MatchMemberName(raw, alias) {
+		t.Fatalf("expected MatchMemberName(raw, alias) to be true")
 	}
-	if !matchMemberName(alias, raw) {
-		t.Fatalf("expected matchMemberName(alias, raw) to be true (symmetric)")
+	if !MatchMemberName(alias, raw) {
+		t.Fatalf("expected MatchMemberName(alias, raw) to be true (symmetric)")
 	}
-	if !matchMemberName("DIRECT", "DIRECT") {
-		t.Fatalf("expected exact match to be true")
+	if !MatchMemberName("DIRECT", "DIRECT") {
+		t.Fatalf("expected MatchMemberName(DIRECT, DIRECT) to be true")
 	}
-	if matchMemberName(raw, "SB-日宽-SoftBank") {
+	if MatchMemberName(raw, "SB-日宽-SoftBank") {
 		t.Fatalf("expected mismatch to return false")
 	}
 }

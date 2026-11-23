@@ -3,7 +3,9 @@ package probe
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
+	"time"
 	"vpn-probe/internal/model"
 )
 
@@ -267,5 +269,37 @@ func TestCheckDomesticPingContext_Cancelled(t *testing.T) {
 	ok := CheckDomesticPingContext(ctx, "127.0.0.1")
 	if ok {
 		t.Errorf("expected false for cancelled context, got true")
+	}
+}
+
+func TestCheckAbroadViaProxy_Cancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel context
+
+	// Should return error or false immediately without hanging or leaking
+	ok, _, err := CheckAbroadViaProxy(ctx, "127.0.0.1:39999", "8.8.8.8", 53, 500*time.Millisecond)
+	if ok {
+		t.Errorf("expected false for pre-cancelled context, got true")
+	}
+	if err == nil {
+		t.Errorf("expected error for pre-cancelled context, got nil")
+	}
+}
+
+func TestMakeProxyHTTPClient_ContextPropagation(t *testing.T) {
+	client, err := MakeProxyHTTPClient(39999, 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("failed to create proxy client: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://1.1.1.1", nil)
+	if err != nil {
+		t.Fatalf("failed to create request: %v", err)
+	}
+	_, doErr := client.Do(req)
+	if doErr == nil {
+		t.Errorf("expected error with cancelled context, got nil")
 	}
 }

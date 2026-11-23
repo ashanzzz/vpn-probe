@@ -194,7 +194,9 @@ func CheckDomesticPing(host string) bool {
 
 // CheckAbroadViaProxy 通过本地健康代理沙箱端口，在海外向目标主机端口发起 TCP 握手
 func CheckAbroadViaProxy(ctx context.Context, socksAddr string, targetHost string, targetPort int, timeout time.Duration) (bool, time.Duration, error) {
-	dialer, err := proxy.SOCKS5("tcp", socksAddr, nil, proxy.Direct)
+	dialer, err := proxy.SOCKS5("tcp", socksAddr, nil, &net.Dialer{
+		Timeout: timeout,
+	})
 	if err != nil {
 		return false, 0, fmt.Errorf("create socks5 dialer: %w", err)
 	}
@@ -209,14 +211,25 @@ func CheckAbroadViaProxy(ctx context.Context, socksAddr string, targetHost strin
 	if cd, ok := dialer.(proxy.ContextDialer); ok {
 		conn, err = cd.DialContext(dialCtx, "tcp", target)
 	} else {
-		connChan := make(chan net.Conn, 1)
-		errChan := make(chan error, 1)
+		connChan := make(chan net.Conn)
+		errChan := make(chan error)
+		done := make(chan struct{})
+		defer close(done)
 		go func() {
 			c, e := dialer.Dial("tcp", target)
 			if e != nil {
-				errChan <- e
+				select {
+				case <-done:
+				case errChan <- e:
+				}
 			} else {
-				connChan <- c
+				select {
+				case <-done:
+					if c != nil {
+						_ = c.Close()
+					}
+				case connChan <- c:
+				}
 			}
 		}()
 		select {

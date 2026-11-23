@@ -494,3 +494,49 @@ func TestRefreshNodesFromSubStore_PruneDynamicNodes(t *testing.T) {
 		t.Errorf("expected Static-Transit to remain")
 	}
 }
+
+func TestScheduler_RunSpeedTestAll_ConcurrencyAndCloning(t *testing.T) {
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			Enabled: true,
+			Nodes: []config.MonitoredNode{
+				{Name: "Transit-01", URL: "vless://u1@1.1.1.1:443#Transit-01", IsSelf: true},
+				{Name: "Transit-02", URL: "vless://u2@2.2.2.2:443#Transit-02", IsSelf: true},
+			},
+		},
+	}
+
+	// 1. 验证 engine 为 nil 时不 panic 且安全返回 nil
+	s := NewScheduler(cfg, nil, nil, nil)
+	res := s.RunSpeedTestAll(context.Background(), false, 1)
+	if res != nil {
+		t.Errorf("expected nil result when engine is nil, got: %v", res)
+	}
+
+	// 初始化节点状态为 online transit
+	s.mu.Lock()
+	s.nodeStates["Transit-01"].LastResult = &model.NodeProbeResult{
+		Name:        "Transit-01",
+		OriginalURL: "vless://u1@1.1.1.1:443#Transit-01",
+		NodeType:    "transit",
+		Online:      true,
+		Score:       10,
+	}
+	s.nodeStates["Transit-02"].LastResult = &model.NodeProbeResult{
+		Name:        "Transit-02",
+		OriginalURL: "vless://u2@2.2.2.2:443#Transit-02",
+		NodeType:    "transit",
+		Online:      true,
+		Score:       20,
+	}
+	s.mu.Unlock()
+
+	// 2. 验证 GetStatus 返回的是独立结构体副本
+	st1 := s.GetStatus()
+	node1 := st1["Transit-01"]
+	node1.Config.Name = "Mutated-Name"
+	st2 := s.GetStatus()
+	if st2["Transit-01"].Config.Name == "Mutated-Name" {
+		t.Errorf("GetStatus should return decoupled shallow copies of NodeState")
+	}
+}

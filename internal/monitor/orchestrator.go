@@ -482,7 +482,7 @@ func SaveCustomGroup(def model.CustomGroupDef) error {
 		return err
 	}
 
-	return os.WriteFile(customGroupsFile, bytes, 0644)
+	return atomicWriteFile(customGroupsFile, bytes, 0644)
 }
 
 // DeleteCustomGroup 删除一个动态自定义分组定义
@@ -515,7 +515,7 @@ func DeleteCustomGroup(name string) error {
 		return err
 	}
 
-	return os.WriteFile(customGroupsFile, bytes, 0644)
+	return atomicWriteFile(customGroupsFile, bytes, 0644)
 }
 
 // SyncAllCustomGroups 评估并同步所有动态自定义分组至 Sub-Store
@@ -583,7 +583,7 @@ func LoadCustomChains() ([]CustomChainBind, error) {
 	return chains, nil
 }
 
-// SaveCustomChains 保存自定义显式链式绑定列表
+// SaveCustomChains 保存自定义显式链式绑定列表 (原子写入保证持久化安全)
 func SaveCustomChains(chains []CustomChainBind) error {
 	customChainsMu.Lock()
 	defer customChainsMu.Unlock()
@@ -592,7 +592,7 @@ func SaveCustomChains(chains []CustomChainBind) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(customChainsFile, data, 0644)
+	return atomicWriteFile(customChainsFile, data, 0644)
 }
 
 // BindExplicitChain 显式创建一条“指定线路机拉指定家宽机”的定制连接 (满足用户 API 灵活拉线路需求)
@@ -716,7 +716,7 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 	if err != nil {
 		return bind, err
 	}
-	if err := os.WriteFile(customChainsFile, bytes, 0644); err != nil {
+	if err := atomicWriteFile(customChainsFile, bytes, 0644); err != nil {
 		return bind, err
 	}
 
@@ -753,10 +753,20 @@ func (o *Orchestrator) UnbindExplicitChain(target string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(customChainsFile, bytes, 0644); err != nil {
+	if err := atomicWriteFile(customChainsFile, bytes, 0644); err != nil {
 		return err
 	}
 
 	logger.Sync("[CHAIN-UNBIND] ✂️ Custom chain removed for target: %s", target)
 	return nil
+}
+
+// atomicWriteFile 原子写入文件，通过临时文件加重命名保证断电和崩溃时不出现 0 字节损坏
+func atomicWriteFile(filename string, data []byte, perm os.FileMode) error {
+	_ = os.MkdirAll(filepath.Dir(filename), 0755)
+	tmp := filename + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filename)
 }

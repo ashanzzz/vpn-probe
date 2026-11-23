@@ -146,3 +146,50 @@ proxies:
 		t.Errorf("expected ' ➔ ' in output, got: %s", res)
 	}
 }
+
+func TestSnapshotManager_AtomicWriteAndBoundedReading(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. 验证 atomicWriteFile 幂等与原子落盘
+	targetPath := filepath.Join(tmpDir, "nested", "sub", "test.yaml")
+	data := []byte("proxies:\n  - name: test\n")
+	if err := atomicWriteFile(targetPath, data, 0644); err != nil {
+		t.Fatalf("atomicWriteFile failed: %v", err)
+	}
+	// 验证文件存在且内容一致
+	readData, err := os.ReadFile(targetPath)
+	if err != nil || string(readData) != string(data) {
+		t.Fatalf("readData mismatch: %v, got %s", err, string(readData))
+	}
+	// 验证未残留 .tmp 临时文件
+	if _, err := os.Stat(targetPath + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("expected .tmp file to not exist after rename")
+	}
+
+	// 2. 验证 fetchRenderedYAML 在非 200 且返回超长 HTML 错误时优雅截断
+	hugeErrorBody := strings.Repeat("A", 2000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(hugeErrorBody))
+	}))
+	defer server.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled: true,
+		URL:     server.URL,
+	}
+	client := NewClient(cfg)
+	sm := NewSnapshotManager(client, tmpDir)
+
+	_, err = sm.WarmupOne(context.Background(), "error-file")
+	if err == nil {
+		t.Fatalf("expected WarmupOne to fail on 500 status")
+	}
+	errStr := err.Error()
+	if !strings.Contains(errStr, "[truncated]") {
+		t.Errorf("expected error string to be truncated, got: %s", errStr)
+	}
+	if len(errStr) > 800 {
+		t.Errorf("expected error string to be bounded, got length: %d", len(errStr))
+	}
+}

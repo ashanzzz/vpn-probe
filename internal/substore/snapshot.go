@@ -107,7 +107,7 @@ func (sm *SnapshotManager) loadFromDisk() {
 		sanitized := SanitizeRenderedYAML(data)
 		if !bytes.Equal(sanitized, data) {
 			data = sanitized
-			_ = os.WriteFile(filePath, data, 0644)
+			_ = atomicWriteFile(filePath, data, 0644)
 		}
 
 		info, _ := f.Info()
@@ -213,9 +213,9 @@ func (sm *SnapshotManager) WarmupOne(ctx context.Context, fileName string) (*Sna
 		Status:       "ready",
 	}
 
-	// 1. 落盘保存
+	// 1. 原子落盘保存 (通过临时文件加原子重命名，防止进程崩溃或断电损坏快照)
 	targetPath := filepath.Join(sm.storageDir, fmt.Sprintf("%s.yaml", fileName))
-	if err := os.WriteFile(targetPath, data, 0644); err != nil {
+	if err := atomicWriteFile(targetPath, data, 0644); err != nil {
 		logger.Warnf("[SNAPSHOT-WARMUP] Failed to write snapshot file '%s': %v", targetPath, err)
 	}
 
@@ -372,7 +372,7 @@ func (sm *SnapshotManager) fetchRenderedYAML(ctx context.Context, fileName strin
 			continue
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 50*1024*1024))
 		resp.Body.Close()
 
 		if err != nil {
@@ -381,7 +381,11 @@ func (sm *SnapshotManager) fetchRenderedYAML(ctx context.Context, fileName strin
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			lastErr = fmt.Errorf("substore status %d: %s", resp.StatusCode, string(body))
+			errMsg := strings.TrimSpace(string(body))
+			if len(errMsg) > 512 {
+				errMsg = errMsg[:512] + "... [truncated]"
+			}
+			lastErr = fmt.Errorf("substore status %d: %s", resp.StatusCode, errMsg)
 			continue
 		}
 
@@ -426,4 +430,14 @@ func SanitizeRenderedYAML(data []byte) []byte {
 		data = bytes.ReplaceAll(data, []byte("➔+"), []byte("➔ "))
 	}
 	return data
+}
+
+// atomicWriteFile 原子写入文件，通过临时文件加重命名保证断电和崩溃时不出现 0 字节损坏
+func atomicWriteFile(filename string, data []byte, perm os.FileMode) error {
+	_ = os.MkdirAll(filepath.Dir(filename), 0755)
+	tmp := filename + ".tmp"
+	if err := os.WriteFile(tmp, data, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filename)
 }

@@ -130,3 +130,40 @@ func TestManager_RetryFailedJob(t *testing.T) {
 		t.Fatalf("expected retried job to succeed, got: %+v", rj)
 	}
 }
+
+func TestManager_CloseCancelsInFlightPublish(t *testing.T) {
+	tmpDir := t.TempDir()
+	jobFile := filepath.Join(tmpDir, "jobs.json")
+
+	publishStarted := make(chan struct{})
+	publishCanceled := make(chan struct{})
+
+	mgr, err := NewManager(jobFile, func(ctx context.Context, step func(string)) error {
+		close(publishStarted)
+		select {
+		case <-ctx.Done():
+			close(publishCanceled)
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+			return nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("failed to create manager: %v", err)
+	}
+
+	_, err = mgr.Enqueue()
+	if err != nil {
+		t.Fatalf("failed to enqueue: %v", err)
+	}
+
+	<-publishStarted
+	mgr.Close()
+
+	select {
+	case <-publishCanceled:
+		// Success! Close caused context cancellation
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected publish context to be canceled upon manager Close")
+	}
+}

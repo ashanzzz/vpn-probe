@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"vpn-probe/internal/config"
 )
@@ -191,5 +192,38 @@ func TestSnapshotManager_AtomicWriteAndBoundedReading(t *testing.T) {
 	}
 	if len(errStr) > 800 {
 		t.Errorf("expected error string to be bounded, got length: %d", len(errStr))
+	}
+}
+
+func TestSnapshotManager_WarmupContextCancellation(t *testing.T) {
+	tmpDir := t.TempDir()
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("proxies: []\n"))
+	}))
+	defer server.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled: true,
+		URL:     server.URL,
+	}
+	client := NewClient(cfg)
+	sm := NewSnapshotManager(client, tmpDir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel upfront
+
+	results := sm.Warmup(ctx, []string{"sub1", "sub2", "sub3"})
+	if len(results) != 3 {
+		t.Fatalf("expected all 3 results in map with canceled error, got %d", len(results))
+	}
+	if calls != 0 {
+		t.Errorf("expected 0 HTTP requests when context is canceled upfront, got %d", calls)
+	}
+	if results["sub1"] != context.Canceled || results["sub2"] != context.Canceled || results["sub3"] != context.Canceled {
+		t.Errorf("expected context.Canceled for all entries, got %v", results)
 	}
 }

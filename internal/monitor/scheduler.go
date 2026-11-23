@@ -540,9 +540,14 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 				}
 			}
 		}
-		_ = s.store.SaveResult(ctx, res)
 	}
 	s.mu.Unlock()
+
+	if s.store != nil {
+		for _, res := range resp.Results {
+			_ = s.store.SaveResult(ctx, res)
+		}
+	}
 
 	// 5. 三层独立订阅与总集合原子推送至 Sub-Store (带引擎故障熔断保护)
 	if s.substoreClient != nil && s.cfg.SubStore.Enabled {
@@ -619,17 +624,19 @@ func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, duration
 	for _, t := range targets {
 		res, err := s.engine.SpeedTestOne(ctx, t.originalURL, isStream, durationSec)
 		if err == nil && res != nil {
+			var toSave *model.NodeProbeResult
 			s.mu.Lock()
 			if state, ok := s.nodeStates[t.key]; ok && state.LastResult != nil {
 				cloned := *state.LastResult
 				cloned.Speed = res
 				cloned.Score = res.Score
 				state.LastResult = &cloned
-				if s.store != nil {
-					_ = s.store.SaveResult(ctx, &cloned)
-				}
+				toSave = &cloned
 			}
 			s.mu.Unlock()
+			if toSave != nil && s.store != nil {
+				_ = s.store.SaveResult(ctx, toSave)
+			}
 		} else {
 			logger.Warnf("[SPEEDTEST] Speed test for %s failed: %v", t.name, err)
 		}

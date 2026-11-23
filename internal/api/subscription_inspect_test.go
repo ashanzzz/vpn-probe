@@ -37,6 +37,10 @@ proxies:
     type: vless
     server: 2.3.4.5
     port: 443
+  - name: "链式|东京软银 ➔ 未知家宽01"
+    type: socks5
+    server: 2.3.4.5
+    port: 1080
 
 proxy-groups:
   - name: "选择代理"
@@ -44,7 +48,7 @@ proxy-groups:
     proxies: ["自建-美国和美国家宽", "外部-节点"]
   - name: "自建-美国和美国家宽"
     type: select
-    proxies: ["LZ-US-Pavlov-家宽", "美西 ACCK 洛杉矶 4837 — VLESS Reality", "LAX-US-Pavlov-家宽"]
+    proxies: ["LZ-US-Pavlov-家宽", "美西 ACCK 洛杉矶 4837 — VLESS Reality", "LAX-US-Pavlov-家宽", "链式|东京软银 ➔ 未知家宽01"]
   - name: "外部-节点"
     type: select
     proxies: ["蜂窝云-美区01"]
@@ -133,8 +137,8 @@ rule-providers:
 	if out.Subscription != "test-sub" {
 		t.Errorf("expected subscription 'test-sub', got %s", out.Subscription)
 	}
-	if out.TotalProxies != 4 {
-		t.Errorf("expected 4 proxies, got %d", out.TotalProxies)
+	if out.TotalProxies != 5 {
+		t.Errorf("expected 5 proxies, got %d", out.TotalProxies)
 	}
 	if out.TotalGroups != 3 {
 		t.Errorf("expected 3 groups, got %d", out.TotalGroups)
@@ -167,6 +171,14 @@ rule-providers:
 					}
 					if !p.IsSelfHosted {
 						t.Errorf("expected LAX-US-Pavlov-家宽 to have IsSelfHosted=true")
+					}
+				}
+				if p.Name == "链式|东京软银 ➔ 未知家宽01" {
+					if p.Kind != "chain" {
+						t.Errorf("expected 链式|东京软银 ➔ 未知家宽01 to fallback to chain kind, got %q", p.Kind)
+					}
+					if !p.IsSelfHosted {
+						t.Errorf("expected 链式|东京软银 ➔ 未知家宽01 to have IsSelfHosted=true")
 					}
 				}
 			}

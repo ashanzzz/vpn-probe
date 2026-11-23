@@ -385,20 +385,63 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 		}
 	}
 
-	// 2. 检查 Q-汇总 是否缺少自建 VPS / Q 订阅
-	if qSummary, exists := audit.Collections["Q-汇总"]; exists {
-		hasSelfHosted := false
-		for _, s := range qSummary {
-			if s == "Q" || s == "ashan-transit" || strings.HasPrefix(s, "ashan-") {
-				hasSelfHosted = true
-				break
+	// 2. 检查 Q 集合 (col-q 与 Q-汇总) 是否混入家宽节点或缺失骨干/外部订阅 (用户规范：外部连接+自建骨干，坚决排除所有40个家宽节点)
+	for _, qColName := range []string{"col-q", "Q-汇总"} {
+		if qSummary, exists := audit.Collections[qColName]; exists {
+			hasResi := false
+			hasTransit := false
+			hasAirport := false
+			for _, s := range qSummary {
+				if strings.Contains(s, "resi") || strings.Contains(s, "china-leak") || strings.Contains(s, "家宽") {
+					hasResi = true
+				}
+				if s == "ashan-transit" || s == "Q" {
+					hasTransit = true
+				}
+				if s == "蜂窝云" {
+					hasAirport = true
+				}
+			}
+			if hasResi {
+				audit.Healthy = false
+				msg := fmt.Sprintf("集合 '%s' (标称外部+自建骨干专线) 混入了家宽节点，违反了 Q 排除所有家宽的标准规范", qColName)
+				audit.Discrepancies = append(audit.Discrepancies, msg)
+				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("从 '%s' 中剔除所有家宽分组，仅保留 [\"ashan-transit\", \"蜂窝云\"]", qColName))
+			}
+			if !hasTransit || !hasAirport {
+				audit.Healthy = false
+				msg := fmt.Sprintf("集合 '%s' 缺少骨干专线或外部机场订阅，未达成双轨融合", qColName)
+				audit.Discrepancies = append(audit.Discrepancies, msg)
+				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("为 '%s' 补充 [\"ashan-transit\", \"蜂窝云\"]", qColName))
 			}
 		}
-		if !hasSelfHosted {
-			audit.Healthy = false
-			msg := "集合 'Q-汇总' (标称蜂窝云+自建VPS) 未包含自建节点订阅，导致自建节点在组合输出中完全缺席"
-			audit.Discrepancies = append(audit.Discrepancies, msg)
-			audit.RecommendedFixes = append(audit.RecommendedFixes, "为 'Q-汇总' 补充勾选自建分组，形成双轨融合")
+	}
+
+	// 2.1 检查 ashan 集合 (col-ashan 与 ashan-master) 是否缺少外部机场或家宽节点 (用户规范：外部连接+自建全量全家桶)
+	for _, aColName := range []string{"col-ashan", "ashan-master"} {
+		if aSummary, exists := audit.Collections[aColName]; exists {
+			hasAirport := false
+			hasResi := false
+			for _, s := range aSummary {
+				if s == "蜂窝云" {
+					hasAirport = true
+				}
+				if strings.Contains(s, "resi") {
+					hasResi = true
+				}
+			}
+			if !hasAirport {
+				audit.Healthy = false
+				msg := fmt.Sprintf("集合 '%s' (全量全家桶) 缺少外部机场订阅 '蜂窝云'，未达到外部连接+自建连接的全家桶标准", aColName)
+				audit.Discrepancies = append(audit.Discrepancies, msg)
+				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("为 '%s' 补齐外部机场订阅 '蜂窝云'", aColName))
+			}
+			if !hasResi {
+				audit.Healthy = false
+				msg := fmt.Sprintf("集合 '%s' 缺少自建家宽节点订阅，未达到全家桶标准", aColName)
+				audit.Discrepancies = append(audit.Discrepancies, msg)
+				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("为 '%s' 补齐自建家宽订阅", aColName))
+			}
 		}
 	}
 
@@ -412,17 +455,30 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 		}
 	}
 
-	// 4. 检查输出文件绑定是否规范
+	// 4. 检查输出文件绑定是否规范 (ashan/Ashan -> col-ashan/ashan-master, Q/q -> col-q/Q-汇总)
+	ashanTarget := "col-ashan"
+	if _, exists := audit.Collections["col-ashan"]; !exists {
+		if _, masterExists := audit.Collections["ashan-master"]; masterExists {
+			ashanTarget = "ashan-master"
+		}
+	}
+	qTarget := "col-q"
+	if _, exists := audit.Collections["col-q"]; !exists {
+		if _, qExists := audit.Collections["Q-汇总"]; qExists {
+			qTarget = "Q-汇总"
+		}
+	}
+
 	for _, f := range files {
 		if f.Name == "ashan" || f.Name == "Ashan" {
-			if f.SourceName != "ashan-纯净" {
+			if f.SourceName != ashanTarget && f.SourceName != "col-ashan" && f.SourceName != "ashan-master" {
 				audit.Healthy = false
-				audit.Discrepancies = append(audit.Discrepancies, fmt.Sprintf("文件 '%s' 未绑定至集合 'ashan-纯净'", f.Name))
+				audit.Discrepancies = append(audit.Discrepancies, fmt.Sprintf("文件 '%s' 未绑定至全量全家桶集合 '%s' (当前: '%s')", f.Name, ashanTarget, f.SourceName))
 			}
 		} else if f.Name == "Q" || f.Name == "q" {
-			if f.SourceName != "Q-汇总" {
+			if f.SourceName != qTarget && f.SourceName != "col-q" && f.SourceName != "Q-汇总" {
 				audit.Healthy = false
-				audit.Discrepancies = append(audit.Discrepancies, fmt.Sprintf("文件 '%s' 未绑定至集合 'Q-汇总'", f.Name))
+				audit.Discrepancies = append(audit.Discrepancies, fmt.Sprintf("文件 '%s' 未绑定至骨干轻量集合 '%s' (当前: '%s')", f.Name, qTarget, f.SourceName))
 			}
 		}
 	}
@@ -463,77 +519,110 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 		}
 	}
 
-	// 2. 修复 Q-汇总：融合自建与蜂窝云全量订阅
-	if qSummary, exists := audit.Collections["Q-汇总"]; exists {
-		hasCloud := false
-		hasTransit := false
-		hasLegacyQ := false
-		for _, s := range qSummary {
-			if s == "蜂窝云" {
-				hasCloud = true
+	// 2. 修复 Q 集合 (col-q 与 Q-汇总)：确保仅包含外部机场与自建纯骨干专线，彻底剔除家宽！
+	for _, qColName := range []string{"col-q", "Q-汇总"} {
+		if qSummary, exists := audit.Collections[qColName]; exists {
+			hasResi := false
+			hasTransit := false
+			hasAirport := false
+			for _, s := range qSummary {
+				if strings.Contains(s, "resi") || strings.Contains(s, "china-leak") || strings.Contains(s, "家宽") {
+					hasResi = true
+				}
+				if s == "ashan-transit" || s == "Q" {
+					hasTransit = true
+				}
+				if s == "蜂窝云" {
+					hasAirport = true
+				}
 			}
-			if s == "ashan-transit" {
-				hasTransit = true
+			if hasResi || !hasTransit || !hasAirport {
+				cleanQSubs := []string{"ashan-transit", "蜂窝云"}
+				payload := map[string]any{
+					"name":                  qColName,
+					"displayName":           "Q 高速骨干轻量组 (外部+自建骨干专线)",
+					"subscriptions":         cleanQSubs,
+					"ignoreFailedRemoteSub": "quiet",
+				}
+				if err := c.UpdateCollection(ctx, qColName, payload); err != nil {
+					return nil, fmt.Errorf("reconcile %s: %w", qColName, err)
+				}
+				actions = append(actions, fmt.Sprintf("已将集合 '%s' 净化为 [\"ashan-transit\", \"蜂窝云\"]，100%% 排除所有家宽节点", qColName))
+				logger.Sync("Reconciled collection '%s' -> 纯骨干专线+蜂窝云 (0 家宽)", qColName)
 			}
-			if s == "Q" {
-				hasLegacyQ = true
-			}
-		}
-		qSubExists := false
-		for _, s := range audit.Subscriptions {
-			if s == "Q" {
-				qSubExists = true
-				break
-			}
-		}
-		needsReconcile := !hasTransit || !hasCloud || (qSubExists && !hasLegacyQ)
-		if needsReconcile {
-			qSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
-			if qSubExists {
-				qSubs = append(qSubs, "Q")
-			}
-			qSubs = append(qSubs, "蜂窝云")
-			payload := map[string]any{
-				"name":                  "Q-汇总",
-				"displayName":           "Q 组合订阅 (蜂窝云 + 自建VPS)",
-				"subscriptions":         qSubs,
-				"ignoreFailedRemoteSub": "quiet",
-			}
-			if err := c.UpdateCollection(ctx, "Q-汇总", payload); err != nil {
-				return nil, fmt.Errorf("reconcile Q-汇总: %w", err)
-			}
-			actions = append(actions, "已为集合 'Q-汇总' 补齐 [自建五维 + 蜂窝云]，激活全量自建家宽与中继节点")
-			logger.Sync("Reconciled collection 'Q-汇总' -> 全量自建+蜂窝云")
 		}
 	}
 
-	// 3. 修复输出文件绑定：确保 ashan/Ashan 绑定 ashan-纯净，Q/q 绑定 Q-汇总
+	// 3. 修复 ashan 集合 (col-ashan 与 ashan-master)：全量全家桶 (外部机场 + 纯骨干专线 + 全量家宽)
+	for _, aColName := range []string{"col-ashan", "ashan-master"} {
+		if aSummary, exists := audit.Collections[aColName]; exists {
+			hasAirport := false
+			hasResi := false
+			for _, s := range aSummary {
+				if s == "蜂窝云" {
+					hasAirport = true
+				}
+				if strings.Contains(s, "resi") {
+					hasResi = true
+				}
+			}
+			if !hasAirport || !hasResi {
+				fullSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak", "蜂窝云"}
+				payload := map[string]any{
+					"name":                  aColName,
+					"displayName":           "Ashan 全量全家桶 (外部+自建全景)",
+					"subscriptions":         fullSubs,
+					"ignoreFailedRemoteSub": "quiet",
+				}
+				if err := c.UpdateCollection(ctx, aColName, payload); err != nil {
+					return nil, fmt.Errorf("reconcile %s: %w", aColName, err)
+				}
+				actions = append(actions, fmt.Sprintf("已为集合 '%s' 补齐 [外部机场 + 自建五维全家桶]", aColName))
+				logger.Sync("Reconciled collection '%s' -> 全量全家桶", aColName)
+			}
+		}
+	}
+
+	// 4. 修复输出文件绑定：确保 ashan/Ashan 绑定 col-ashan (或 ashan-master)，Q/q 绑定 col-q (或 Q-汇总)
+	ashanTargetCol := "col-ashan"
+	if _, exists := audit.Collections["col-ashan"]; !exists {
+		if _, masterExists := audit.Collections["ashan-master"]; masterExists {
+			ashanTargetCol = "ashan-master"
+		}
+	}
+	qTargetCol := "col-q"
+	if _, exists := audit.Collections["col-q"]; !exists {
+		if _, qExists := audit.Collections["Q-汇总"]; qExists {
+			qTargetCol = "Q-汇总"
+		}
+	}
+
 	for fName, sourceName := range audit.Files {
 		if fName == "ashan" || fName == "Ashan" {
-			if sourceName != "ashan-纯净" {
+			if sourceName != ashanTargetCol && sourceName != "col-ashan" && sourceName != "ashan-master" {
 				payload := map[string]any{
 					"source":     "local",
 					"sourceType": "collection",
-					"sourceName": "ashan-纯净",
+					"sourceName": ashanTargetCol,
 				}
 				if err := c.UpdateFile(ctx, fName, payload); err != nil {
 					return nil, fmt.Errorf("reconcile file %s: %w", fName, err)
 				}
-				actions = append(actions, fmt.Sprintf("已将纯自建文件 '%s' 重新绑定至集合 'ashan-纯净'，恢复纯自建纯净性", fName))
-				logger.Sync("Reconciled file '%s' -> source 'ashan-纯净'", fName)
+				actions = append(actions, fmt.Sprintf("已将全家桶订阅文件 '%s' 重新绑定至全量集合 '%s'", fName, ashanTargetCol))
+				logger.Sync("Reconciled file '%s' -> source '%s'", fName, ashanTargetCol)
 			}
 		} else if fName == "Q" || fName == "q" {
-			if sourceName != "Q-汇总" {
+			if sourceName != qTargetCol && sourceName != "col-q" && sourceName != "Q-汇总" {
 				payload := map[string]any{
 					"source":     "local",
 					"sourceType": "collection",
-					"sourceName": "Q-汇总",
+					"sourceName": qTargetCol,
 				}
 				if err := c.UpdateFile(ctx, fName, payload); err != nil {
 					return nil, fmt.Errorf("reconcile file %s: %w", fName, err)
 				}
-				actions = append(actions, fmt.Sprintf("已将组合订阅文件 '%s' 重新绑定至集合 'Q-汇总'", fName))
-				logger.Sync("Reconciled file '%s' -> source 'Q-汇总'", fName)
+				actions = append(actions, fmt.Sprintf("已将骨干轻量订阅文件 '%s' 重新绑定至纯骨干集合 '%s'", fName, qTargetCol))
+				logger.Sync("Reconciled file '%s' -> source '%s'", fName, qTargetCol)
 			}
 		}
 	}

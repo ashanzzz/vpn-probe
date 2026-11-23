@@ -120,7 +120,7 @@ func TestReconcileTopology_FileBindings(t *testing.T) {
 		case r.URL.Path == "/api/collections":
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"status":"success","data":[
-				{"name":"ashan-纯净","displayName":"Ashan 纯自建专线","subscriptions":["ashan-transit","ashan-us-resi","ashan-jp-resi","ashan-other"]},
+				{"name":"ashan-master","displayName":"Ashan 全量全家桶","subscriptions":["ashan-transit","ashan-us-resi","ashan-jp-resi","ashan-other","ashan-china-leak","蜂窝云"]},
 				{"name":"Q-汇总","displayName":"Q 组合订阅","subscriptions":["ashan-transit","ashan-us-resi","ashan-jp-resi","ashan-other","ashan-china-leak","蜂窝云"]}
 			]}`))
 		case r.URL.Path == "/api/files":
@@ -163,16 +163,28 @@ func TestReconcileTopology_FileBindings(t *testing.T) {
 		t.Fatalf("ReconcileTopology failed: %v", err)
 	}
 
-	// 验证 ashan 和 Ashan 是否被自动修复并绑定回 ashan-纯净
-	if updatedFiles["ashan"]["sourceName"] != "ashan-纯净" {
-		t.Errorf("Expected ashan to be reconciled to ashan-纯净, got %v", updatedFiles["ashan"])
+	// 验证 ashan 和 Ashan 是否被自动修复并绑定回 ashan-master 全量全家桶集合
+	if updatedFiles["ashan"]["sourceName"] != "ashan-master" {
+		t.Errorf("Expected ashan to be reconciled to ashan-master, got %v", updatedFiles["ashan"])
 	}
-	if updatedFiles["Ashan"]["sourceName"] != "ashan-纯净" {
-		t.Errorf("Expected Ashan to be reconciled to ashan-纯净, got %v", updatedFiles["Ashan"])
+	if updatedFiles["Ashan"]["sourceName"] != "ashan-master" {
+		t.Errorf("Expected Ashan to be reconciled to ashan-master, got %v", updatedFiles["Ashan"])
 	}
 	// 验证 q 是否被自动修复并绑定回 Q-汇总
 	if updatedFiles["q"]["sourceName"] != "Q-汇总" {
 		t.Errorf("Expected q to be reconciled to Q-汇总, got %v", updatedFiles["q"])
+	}
+
+	// 验证 Q-汇总 混入的家宽节点是否被彻底剔除净化
+	if qCol, ok := updatedCollections["Q-汇总"]; ok {
+		subs, _ := qCol["subscriptions"].([]string)
+		for _, s := range subs {
+			if strings.Contains(s, "resi") || strings.Contains(s, "china-leak") {
+				t.Errorf("Expected residential subs to be purged from Q-汇总, found: %s", s)
+			}
+		}
+	} else {
+		t.Errorf("Expected Q-汇总 to be updated and cleansed")
 	}
 
 	if len(audit.ActionsTaken) < 3 {
@@ -197,14 +209,14 @@ func TestAuditTopology_FiveGroupQSummary(t *testing.T) {
 		case "/api/collections":
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"status":"success","data":[
-				{"name":"ashan-纯净","displayName":"Ashan 纯自建专线","subscriptions":["ashan-transit","ashan-us-resi","ashan-jp-resi","ashan-other"]},
-				{"name":"Q-汇总","displayName":"Q 组合订阅","subscriptions":["ashan-transit","ashan-us-resi","ashan-jp-resi","ashan-other","ashan-china-leak","蜂窝云"]}
+				{"name":"ashan-master","displayName":"Ashan 全量全家桶","subscriptions":["ashan-transit","ashan-us-resi","ashan-jp-resi","ashan-other","ashan-china-leak","蜂窝云"]},
+				{"name":"Q-汇总","displayName":"Q 骨干轻量组","subscriptions":["ashan-transit","蜂窝云"]}
 			]}`))
 		case "/api/files":
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"status":"success","data":[
-				{"name":"ashan","displayName":"ashan","sourceName":"ashan-纯净"},
-				{"name":"Ashan","displayName":"Ashan","sourceName":"ashan-纯净"},
+				{"name":"ashan","displayName":"ashan","sourceName":"ashan-master"},
+				{"name":"Ashan","displayName":"Ashan","sourceName":"ashan-master"},
 				{"name":"Q","displayName":"Q","sourceName":"Q-汇总"},
 				{"name":"q","displayName":"q","sourceName":"Q-汇总"}
 			]}`))

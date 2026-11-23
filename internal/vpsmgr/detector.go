@@ -16,6 +16,7 @@ import (
 
 type Detector struct {
 	ghChecker *GitHubChecker
+	mockSSH   func(inst *VPSInstance, cmd string) (string, error)
 }
 
 func NewDetector(gh *GitHubChecker) *Detector {
@@ -24,13 +25,30 @@ func NewDetector(gh *GitHubChecker) *Detector {
 	}
 }
 
+// SetMockSSH 用于单元测试模拟远程 SSH 执行
+func (d *Detector) SetMockSSH(fn func(inst *VPSInstance, cmd string) (string, error)) {
+	d.mockSSH = fn
+}
+
 // RunSSH 执行远程 SSH 命令并返回标准输出
 func (d *Detector) RunSSH(inst *VPSInstance, cmd string) (string, error) {
+	if d.mockSSH != nil {
+		return d.mockSSH(inst, cmd)
+	}
+
+	var authMethods []ssh.AuthMethod
+	if inst.SSHKey != "" {
+		if signer, err := ssh.ParsePrivateKey([]byte(inst.SSHKey)); err == nil {
+			authMethods = append(authMethods, ssh.PublicKeys(signer))
+		}
+	}
+	if inst.SSHPassword != "" {
+		authMethods = append(authMethods, ssh.Password(inst.SSHPassword))
+	}
+
 	config := &ssh.ClientConfig{
-		User: inst.SSHUser,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(inst.SSHPassword),
-		},
+		User:            inst.SSHUser,
+		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 		Timeout:         7 * time.Second,
 	}

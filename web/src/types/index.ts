@@ -198,19 +198,88 @@ export interface SubStoreManifest {
   scripts: SubStoreScriptInfo[];
 }
 
+export interface BackupSnapshot {
+  id: string;
+  file_name: string;
+  file_path: string;
+  created_at: string;
+  size_bytes: number;
+}
+
+export interface SmokeTestResult {
+  success: boolean;
+  latency_ms: number;
+  tested_at: string;
+  exit_ip?: string;
+  message?: string;
+  error?: string;
+}
+
 export interface SoftwareInfo {
   instance_id: string;
   instance_name: string;
   ip: string;
   software_type: string;
   deploy_mode: string;
+  container_name?: string;
+  image_id?: string;
+  config_path?: string;
   current_version: string;
   latest_version: string;
+  release_date?: string;
   has_update: boolean;
   active_ports: number[];
   status: string;
+  is_nat?: boolean;
+  nat_ports?: number[];
+  region?: string;
   error_message?: string;
   last_checked_at: string;
+  backups?: BackupSnapshot[];
+  last_smoke_test?: SmokeTestResult;
+}
+
+export interface RegisterInstanceRequest {
+  name: string;
+  ip: string;
+  ssh_port?: number;
+  ssh_user?: string;
+  ssh_password?: string;
+  ssh_key?: string;
+  provider_id?: string;
+  is_nat?: boolean;
+  nat_ports?: number[];
+  region?: string;
+}
+
+export interface UninstallRequest {
+  vps_id: string;
+  clean_substore?: boolean;
+  remove_data?: boolean;
+}
+
+export interface UninstallResponse {
+  success: boolean;
+  vps_id: string;
+  ip: string;
+  cleaned_containers: string[];
+  cleaned_directories: string[];
+  substore_removed_count: number;
+  message: string;
+}
+
+export interface SafeUpgradeResponse {
+  success: boolean;
+  vps_id: string;
+  ip: string;
+  software_type: string;
+  previous_version: string;
+  current_version: string;
+  rolled_back: boolean;
+  rollback_reason?: string;
+  backup_created?: string;
+  smoke_test?: SmokeTestResult;
+  message: string;
 }
 
 export interface BlockedAnalysisResult {

@@ -8,6 +8,10 @@ import {
   SoftwareInfo,
   BlockedAnalysisResult,
   PortHealResponse,
+  SafeUpgradeResponse,
+  BackupSnapshot,
+  RegisterInstanceRequest,
+  UninstallResponse,
   ExternalSubsResponse,
   ExternalSubDetail,
   SnapshotStatusResponse,
@@ -239,17 +243,56 @@ export const api = {
     });
   },
 
-  async installVPSProxy(nodeName: string, softwareType: string = 'sing-box'): Promise<any> {
+  async registerVPSInstance(data: RegisterInstanceRequest): Promise<{ status: string; message: string; instance: any }> {
+    return request('/api/vps/instance/register', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  async installVPSProxy(vpsId: string, software: string = 'sing-box'): Promise<any> {
     return request('/api/vps/manage/install', {
       method: 'POST',
-      body: JSON.stringify({ node_name: nodeName, software_type: softwareType }),
+      body: JSON.stringify({ vps_id: vpsId, software }),
+    });
+  },
+
+  async uninstallVPS(vpsId: string, cleanSubStore: boolean = true, removeData: boolean = true): Promise<{ status: string; result: UninstallResponse }> {
+    return request('/api/vps/manage/uninstall', {
+      method: 'POST',
+      body: JSON.stringify({ vps_id: vpsId, clean_substore: cleanSubStore, remove_data: removeData }),
     });
   },
 
   async updateVPSProxy(nodeName: string): Promise<any> {
     return request('/api/vps/manage/update', {
       method: 'POST',
-      body: JSON.stringify({ node_name: nodeName }),
+      body: JSON.stringify({ vps_id: nodeName }),
+    });
+  },
+
+  async safeUpgradeVPS(vpsId: string, nodeName?: string): Promise<{ status: string; result: SafeUpgradeResponse }> {
+    return request('/api/vps/safe-upgrade', {
+      method: 'POST',
+      body: JSON.stringify({ vps_id: vpsId, node_name: nodeName }),
+    });
+  },
+
+  async executeVPSLifecycleAction(vpsId: string, action: 'start' | 'stop' | 'restart' | 'backup'): Promise<{ status: string; action: string; instance: SoftwareInfo }> {
+    return request('/api/vps/lifecycle/action', {
+      method: 'POST',
+      body: JSON.stringify({ vps_id: vpsId, action }),
+    });
+  },
+
+  async getVPSBackups(vpsId: string): Promise<{ status: string; count: number; backups: BackupSnapshot[] }> {
+    return request(`/api/vps/backups?vps_id=${encodeURIComponent(vpsId)}`);
+  },
+
+  async restoreVPSBackup(vpsId: string, snapshotId: string): Promise<{ status: string; instance: SoftwareInfo; message: string }> {
+    return request('/api/vps/lifecycle/restore', {
+      method: 'POST',
+      body: JSON.stringify({ vps_id: vpsId, snapshot_id: snapshotId }),
     });
   },
 

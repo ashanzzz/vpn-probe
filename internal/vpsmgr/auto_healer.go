@@ -161,18 +161,48 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 	// 选定新端口
 	newPort := targetPort
 	if newPort <= 0 || newPort == oldPort {
-		for i := 0; i < 5; i++ {
-			candidate := GenerateRandomPort()
-			// 探查 VPS 上是否被占用
-			checkCmd := fmt.Sprintf("ss -tulpn | grep -q ':%d ' && echo 'busy' || echo 'free'", candidate)
-			out, err := h.detector.RunSSH(inst, checkCmd)
-			if err == nil && strings.TrimSpace(out) == "free" {
-				newPort = candidate
-				break
+		if inst != nil && inst.IsNAT && len(inst.NATPorts) > 0 {
+			// NAT VPS: 严格受限在分配的 nat_ports 端口池中挑选
+			for _, candidate := range inst.NATPorts {
+				if candidate == oldPort {
+					continue
+				}
+				checkCmd := fmt.Sprintf("ss -tulpn | grep -q ':%d ' && echo 'busy' || echo 'free'", candidate)
+				out, err := h.detector.RunSSH(inst, checkCmd)
+				if err == nil && strings.TrimSpace(out) == "free" {
+					newPort = candidate
+					break
+				}
 			}
-		}
-		if newPort <= 0 || newPort == oldPort {
-			newPort = GenerateRandomPort()
+			if newPort <= 0 || newPort == oldPort {
+				// 如果都检测不到空闲，兜底选第一个非旧端口
+				for _, candidate := range inst.NATPorts {
+					if candidate != oldPort {
+						newPort = candidate
+						break
+					}
+				}
+			}
+			if newPort <= 0 || newPort == oldPort {
+				resp.Message = fmt.Sprintf("NAT VPS %s has no available alternative ports in pool: %v", inst.IP, inst.NATPorts)
+				return resp, fmt.Errorf("%s", resp.Message)
+			}
+			logger.Infof("[AUTO-HEAL] NAT VPS %s selected new port %d from nat_ports pool", inst.IP, newPort)
+		} else {
+			// 普通独立 IP VPS: 在安全随机范围 [20000, 60000] 生成
+			for i := 0; i < 5; i++ {
+				candidate := GenerateRandomPort()
+				// 探查 VPS 上是否被占用
+				checkCmd := fmt.Sprintf("ss -tulpn | grep -q ':%d ' && echo 'busy' || echo 'free'", candidate)
+				out, err := h.detector.RunSSH(inst, checkCmd)
+				if err == nil && strings.TrimSpace(out) == "free" {
+					newPort = candidate
+					break
+				}
+			}
+			if newPort <= 0 || newPort == oldPort {
+				newPort = GenerateRandomPort()
+			}
 		}
 	}
 	resp.NewPort = newPort
@@ -294,6 +324,72 @@ func (h *AutoHealer) updateSubStoreSubscription(ctx context.Context, oldPort, ne
 	}
 
 	return h.substoreClient.UpdateSubscriptionNodes(ctx, "ashan's vps", updatedLinks)
+}
+
+// AddNodeToSubStore 将新安装节点追加同步至 SubStore 主订阅
+func (h *AutoHealer) AddNodeToSubStore(ctx context.Context, newURL string) error {
+	if h.substoreClient == nil || newURL == "" {
+		return nil
+	}
+	content, err := h.substoreClient.GetSubscriptionContent(ctx, "ashan's vps")
+	if err != nil {
+		// 若获取失败，直接新建列表并更新
+		return h.substoreClient.UpdateSubscriptionNodes(ctx, "ashan's vps", []string{newURL})
+	}
+
+	lines := strings.Split(content, "\n")
+	var updatedLinks []string
+	var found bool
+	for _, line := range lines {
+		lineTrim := strings.TrimSpace(line)
+		if lineTrim == "" {
+			continue
+		}
+		if lineTrim == newURL {
+			found = true
+		}
+		updatedLinks = append(updatedLinks, lineTrim)
+	}
+	if !found {
+		updatedLinks = append(updatedLinks, newURL)
+	}
+
+	return h.substoreClient.UpdateSubscriptionNodes(ctx, "ashan's vps", updatedLinks)
+}
+
+// RemoveNodeFromSubStore 从 SubStore 订阅中下架属于指定 IP 的所有节点
+func (h *AutoHealer) RemoveNodeFromSubStore(ctx context.Context, targetIP string) (int, error) {
+	if h.substoreClient == nil || targetIP == "" {
+		return 0, nil
+	}
+	content, err := h.substoreClient.GetSubscriptionContent(ctx, "ashan's vps")
+	if err != nil {
+		return 0, fmt.Errorf("get sub content: %w", err)
+	}
+
+	lines := strings.Split(content, "\n")
+	var remainingLinks []string
+	var removedCount int
+
+	for _, line := range lines {
+		lineTrim := strings.TrimSpace(line)
+		if lineTrim == "" {
+			continue
+		}
+		if strings.Contains(lineTrim, targetIP) {
+			removedCount++
+		} else {
+			remainingLinks = append(remainingLinks, lineTrim)
+		}
+	}
+
+	if removedCount > 0 {
+		if err := h.substoreClient.UpdateSubscriptionNodes(ctx, "ashan's vps", remainingLinks); err != nil {
+			return 0, fmt.Errorf("update sub after removing node: %w", err)
+		}
+	}
+
+	return removedCount, nil
 }
 
 // updateLocalConfigYAML 更新本地 config.yaml 中的节点链接

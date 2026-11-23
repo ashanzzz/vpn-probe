@@ -10,7 +10,10 @@ type VPSInstance struct {
 	SSHPort     int    `json:"ssh_port"`
 	SSHUser     string `json:"ssh_user"`
 	SSHPassword string `json:"ssh_password"`
+	SSHKey      string `json:"ssh_key,omitempty"`
 	ProviderID  string `json:"provider_id"`
+	IsNAT       bool   `json:"is_nat"`
+	NATPorts    []int  `json:"nat_ports,omitempty"`
 	Status      string `json:"status"`
 	Region      string `json:"region"`
 }
@@ -135,4 +138,36 @@ type SafeUpgradeResponse struct {
 	BackupCreated   string           `json:"backup_created,omitempty"`
 	SmokeTest       *SmokeTestResult `json:"smoke_test,omitempty"`
 	Message         string           `json:"message"`
+}
+
+// RegisterInstanceRequest 纳管/注册全新 VPS 或 NAT VPS 请求
+type RegisterInstanceRequest struct {
+	Name        string `json:"name"`
+	IP          string `json:"ip"`
+	SSHPort     int    `json:"ssh_port"`
+	SSHUser     string `json:"ssh_user"`
+	SSHPassword string `json:"ssh_password"`
+	SSHKey      string `json:"ssh_key,omitempty"`
+	ProviderID  string `json:"provider_id,omitempty"`
+	IsNAT       bool   `json:"is_nat"`
+	NATPorts    []int  `json:"nat_ports,omitempty"`
+	Region      string `json:"region,omitempty"`
+}
+
+// UninstallRequest 彻底卸载指定 VPS 代理容器请求
+type UninstallRequest struct {
+	VPSID          string `json:"vps_id"`
+	CleanSubStore  bool   `json:"clean_substore"`   // 默认 true
+	RemoveData     bool   `json:"remove_data"`      // 默认 true
+}
+
+// UninstallResponse 卸载响应
+type UninstallResponse struct {
+	Success              bool     `json:"success"`
+	VPSID                string   `json:"vps_id"`
+	IP                   string   `json:"ip"`
+	CleanedContainers    []string `json:"cleaned_containers"`
+	CleanedDirectories   []string `json:"cleaned_directories"`
+	SubStoreRemovedCount int      `json:"substore_removed_count"`
+	Message              string   `json:"message"`
 }

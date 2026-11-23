@@ -76,7 +76,9 @@ func (s *Store) initSchema() error {
 	// 动态兼容已有数据库结构
 	_, _ = s.db.Exec("ALTER TABLE probe_history ADD COLUMN status_text TEXT")
 	_, _ = s.db.Exec("ALTER TABLE probe_history ADD COLUMN diagnostic_json TEXT")
-	return nil
+
+	// 初始化动态多选选项卡与嵌套节点组数据表及默认预设
+	return s.InitTabTables()
 }
 
 // SaveResult 保存一条检测记录

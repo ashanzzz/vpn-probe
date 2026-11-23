@@ -17,6 +17,7 @@ import (
 	"vpn-probe/internal/config"
 	"vpn-probe/internal/logger"
 	"vpn-probe/internal/mcp"
+	"vpn-probe/internal/model"
 	"vpn-probe/internal/monitor"
 	"vpn-probe/internal/probe"
 	"vpn-probe/internal/rules"
@@ -110,6 +111,9 @@ func runServer(args []string) {
 	}
 
 	vpsMgr := vpsmgr.NewManager(cfg, subClient, *configPath)
+	vpsMgr.SetProbeFunc(func(ctx context.Context, link string) *model.NodeProbeResult {
+		return engine.ProbeOne(ctx, link, true, false, 8)
+	})
 
 	sched := monitor.NewScheduler(cfg, engine, st, subClient)
 	sched.SetVPSManager(vpsMgr)

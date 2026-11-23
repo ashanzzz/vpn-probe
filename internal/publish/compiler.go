@@ -117,6 +117,20 @@ function resolveProxyName(targetName, allNames) {
   if (trimmed === 'DIRECT' || trimmed === 'REJECT') return trimmed;
   if (allNames.has(trimmed)) return trimmed;
   if (allNames.has(targetName)) return targetName;
+  if (!trimmed.includes('➔')) {
+    const trimmedLower = trimmed.toLowerCase();
+    for (const name of allNames) {
+      const nameLower = (name || '').toLowerCase();
+      if (nameLower === trimmedLower) return name;
+      if (nameLower.endsWith(trimmedLower)) {
+        const pfx = nameLower.slice(0, nameLower.length - trimmedLower.length).trim();
+        if (!/[a-zA-Z0-9\u4e00-\u9fa5]/.test(pfx)) return name;
+      } else if (trimmedLower.endsWith(nameLower)) {
+        const pfx = trimmedLower.slice(0, trimmedLower.length - nameLower.length).trim();
+        if (!/[a-zA-Z0-9\u4e00-\u9fa5]/.test(pfx)) return name;
+      }
+    }
+  }
   if (trimmed.includes('➔')) {
     let raw = trimmed;
     const pipeIdx = raw.indexOf('|');

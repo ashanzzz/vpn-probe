@@ -1088,14 +1088,16 @@ func MatchNodeName(a, b string) bool {
 	if a == b || strings.EqualFold(a, b) {
 		return true
 	}
-	if strings.HasSuffix(a, b) {
-		prefix := strings.TrimSpace(strings.TrimSuffix(a, b))
+	lowerA := strings.ToLower(a)
+	lowerB := strings.ToLower(b)
+	if strings.HasSuffix(lowerA, lowerB) {
+		prefix := strings.TrimSpace(lowerA[:len(lowerA)-len(lowerB)])
 		if isEmojiOrSymbolPrefix(prefix) {
 			return true
 		}
 	}
-	if strings.HasSuffix(b, a) {
-		prefix := strings.TrimSpace(strings.TrimSuffix(b, a))
+	if strings.HasSuffix(lowerB, lowerA) {
+		prefix := strings.TrimSpace(lowerB[:len(lowerB)-len(lowerA)])
 		if isEmojiOrSymbolPrefix(prefix) {
 			return true
 		}

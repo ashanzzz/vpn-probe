@@ -537,12 +537,18 @@ func EvaluateFault(
 		statusText = "【境外阻断或单向异常】国内TCP连通但境外探测不可达"
 		actionType = "CHECK_NETWORK_ROUTING"
 		tip = fmt.Sprintf("【境外路由/探针异常】目标 %s:%d 在境内可正常建立TCP握手，说明机器在线且代理软件正常监听；但境外探针(%s)连接失败。通常为境外上游路由故障、探针源受限或机房上联海外阻断，严禁误判为关机或盲目重启！", host, port, abroadSource)
+	} else if pingOK {
+		// 海外也不通、国内也不通，但国内能 Ping 通 -> VPS 在线，但端口未开放或代理进程崩溃
+		faultType = model.FaultMachineDown
+		statusText = "【服务未运行】主机在线(Ping通)但端口无响应/进程异常"
+		actionType = "CHECK_PROXY_PROCESS"
+		tip = fmt.Sprintf("【服务未运行】目标主机 %s 在线(Ping通)，但端口 %d 全球海外(%s)与国内均无法连接。VPS未关机且网络可达，通常为代理进程(sing-box/xray)未启动、异常崩溃或监听端口不匹配，请登录主机检查进程！", host, port, abroadSource)
 	} else {
-		// 海外也不通、国内也不通 -> 真正离线
+		// 海外也不通、国内也不通、Ping 也不通 -> 真正离线
 		faultType = model.FaultMachineDown
 		statusText = "【离线】机子关机/软件崩溃/线路中断"
 		actionType = "CHECK_SERVER_AND_PROCESS"
-		tip = fmt.Sprintf("【真正离线】全球海外探针(%s)与国内均无法连接该端口，非GFW封锁。换端口无效！请单独排查：1. VPS是否关机或欠费；2. 机房宿主断网；3. sing-box进程崩溃退出。", abroadSource)
+		tip = fmt.Sprintf("【真正离线】全球海外探针(%s)与国内均无法连接该端口，且国内Ping不可达。非GFW封锁，换端口无效！请单独排查：1. VPS是否关机或欠费；2. 机房宿主断网；3. 网络上游中断。", abroadSource)
 	}
 	return
 }

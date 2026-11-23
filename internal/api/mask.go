@@ -10,6 +10,8 @@ var (
 	reSocksUserPass = regexp.MustCompile(`^(socks5?://(?:[^:@]+:)?)([^@]+)(@.+)`)
 	// 正则匹配 hysteria://pass@host:port 或 hysteria2://pass@host:port
 	reHysteriaPass = regexp.MustCompile(`^((?:hysteria2?|hy2)://)([^@]+)(@.+)`)
+	// 正则匹配 tuic://uuid:password@host:port 或 tuic://password@host:port
+	reTuicPass = regexp.MustCompile(`^(tuic://(?:[^:@]+:)?)([^@]+)(@.+)`)
 	// 正则匹配 vless://uuid@host:port
 	reVlessUUID = regexp.MustCompile(`^(vless://)([^@]+)(@.+)`)
 	// 正则匹配 trojan://pass@host:port
@@ -39,6 +41,9 @@ func MaskNodeURL(raw string) string {
 
 	case strings.HasPrefix(lower, "hysteria://") || strings.HasPrefix(lower, "hysteria2://") || strings.HasPrefix(lower, "hy2://"):
 		res = reHysteriaPass.ReplaceAllString(res, "${1}******${3}")
+
+	case strings.HasPrefix(lower, "tuic://"):
+		res = reTuicPass.ReplaceAllString(res, "${1}******${3}")
 
 	case strings.HasPrefix(lower, "vless://"):
 		res = reVlessUUID.ReplaceAllStringFunc(res, func(m string) string {

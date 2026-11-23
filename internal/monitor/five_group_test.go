@@ -463,6 +463,9 @@ func TestMatchNodeName_NonASCIICollisionProtection(t *testing.T) {
 	emojiCases := [][2]string{
 		{"JP-Tokyo", "🇯🇵 JP-Tokyo"},
 		{"🇯🇵 JP-Tokyo", "JP-Tokyo"},
+		{"jp-tokyo", "🇯🇵 JP-Tokyo"},
+		{"🇯🇵 JP-Tokyo", "jp-tokyo"},
+		{"lz-tw-hinet-家宽", "🇹🇼 LZ-TW-HiNet-家宽"},
 		{"LZ-TW-HiNet-家宽", "🇹🇼 LZ-TW-HiNet-家宽"},
 		{"US-LAX", "🚀 US-LAX"},
 		{"Node-01", "✨ | Node-01"},

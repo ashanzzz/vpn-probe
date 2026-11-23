@@ -250,6 +250,38 @@ func (sm *SnapshotManager) Warmup(ctx context.Context, fileNames []string) map[s
 	return results
 }
 
+// makeWarmupContext 创建带超时且监听停止通道的上下文，确保进程退出或 Stop() 时立即中断在途网络请求
+func (sm *SnapshotManager) makeWarmupContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	if sm == nil || sm.stopChan == nil {
+		return ctx, cancel
+	}
+
+	select {
+	case <-sm.stopChan:
+		cancel()
+		return ctx, cancel
+	default:
+	}
+
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-sm.stopChan:
+			cancel()
+		case <-done:
+		}
+	}()
+
+	var once sync.Once
+	return ctx, func() {
+		once.Do(func() {
+			close(done)
+		})
+		cancel()
+	}
+}
+
 // TriggerAsyncWarmup 异步触发一次预烘焙（带去重防抖与防协程堆积控制）
 func (sm *SnapshotManager) TriggerAsyncWarmup(fileNames []string) {
 	sm.asyncMu.Lock()
@@ -275,7 +307,7 @@ func (sm *SnapshotManager) TriggerAsyncWarmup(fileNames []string) {
 			sm.asyncMu.Unlock()
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := sm.makeWarmupContext(5 * time.Minute)
 		defer cancel()
 		sm.Warmup(ctx, targets)
 	}(newTargets)
@@ -291,7 +323,7 @@ func (sm *SnapshotManager) StartAutoWarmup(interval time.Duration, fileNames []s
 		// 启动后 5 秒立即执行初次预烘焙
 		select {
 		case <-time.After(5 * time.Second):
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			ctx, cancel := sm.makeWarmupContext(5 * time.Minute)
 			sm.Warmup(ctx, fileNames)
 			cancel()
 		case <-sm.stopChan:
@@ -304,7 +336,7 @@ func (sm *SnapshotManager) StartAutoWarmup(interval time.Duration, fileNames []s
 		for {
 			select {
 			case <-ticker.C:
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				ctx, cancel := sm.makeWarmupContext(5 * time.Minute)
 				sm.Warmup(ctx, fileNames)
 				cancel()
 			case <-sm.stopChan:

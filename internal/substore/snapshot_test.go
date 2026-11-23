@@ -227,3 +227,40 @@ func TestSnapshotManager_WarmupContextCancellation(t *testing.T) {
 		t.Errorf("expected context.Canceled for all entries, got %v", results)
 	}
 }
+
+func TestSnapshotManager_MakeWarmupContextCancellation(t *testing.T) {
+	tmpDir := t.TempDir()
+	client := NewClient(&config.SubStoreConfig{Enabled: false})
+	sm := NewSnapshotManager(client, tmpDir)
+
+	ctx, cancel := sm.makeWarmupContext(10 * time.Second)
+	defer cancel()
+
+	if ctx.Err() != nil {
+		t.Fatalf("expected context to be alive, got %v", ctx.Err())
+	}
+
+	// Trigger manager stop
+	sm.Stop()
+
+	// Wait briefly for cancellation to propagate
+	select {
+	case <-ctx.Done():
+		if ctx.Err() != context.Canceled {
+			t.Errorf("expected context.Canceled, got %v", ctx.Err())
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected makeWarmupContext to cancel when sm.Stop() is called")
+	}
+
+	// 验证 cancel() 幂等性：重复调用绝不 panic (close of closed channel)
+	cancel()
+	cancel()
+
+	// 验证对已 Stop 的 manager 调用 makeWarmupContext 立即返回已取消 context
+	stoppedCtx, stoppedCancel := sm.makeWarmupContext(10 * time.Second)
+	defer stoppedCancel()
+	if stoppedCtx.Err() != context.Canceled {
+		t.Errorf("expected stopped manager to return immediately canceled context, got %v", stoppedCtx.Err())
+	}
+}

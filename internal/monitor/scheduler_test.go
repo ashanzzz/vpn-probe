@@ -540,3 +540,30 @@ func TestScheduler_RunSpeedTestAll_ConcurrencyAndCloning(t *testing.T) {
 		t.Errorf("GetStatus should return decoupled shallow copies of NodeState")
 	}
 }
+
+func TestScheduler_RunAllChecks_ConcurrencySafety(t *testing.T) {
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			Enabled: true,
+			Nodes: []config.MonitoredNode{
+				{Name: "Transit-01", URL: "vless://u1@1.1.1.1:443#Transit-01", IsSelf: true},
+			},
+		},
+	}
+	s := NewScheduler(cfg, nil, nil, nil)
+
+	var wg sync.WaitGroup
+	// 并发触发 10 个 RunAllChecks 与 SyncFiveGroupsNow，验证互斥保护与竞态安全
+	for i := 0; i < 10; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = s.RunAllChecks(context.Background(), false)
+		}()
+		go func() {
+			defer wg.Done()
+			_ = s.SyncFiveGroupsNow(context.Background())
+		}()
+	}
+	wg.Wait()
+}

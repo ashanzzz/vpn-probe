@@ -54,6 +54,16 @@ func CompileScript(groups []model.CustomGroupDef, atoms []model.AtomNode, target
 		}
 
 		matches := monitor.MatchAtoms(atoms, filter)
+		if isQ {
+			// For Q: strictly enforce backbone transit only across all filter modes (including manual selection)
+			cleanMatches := make([]model.AtomNode, 0, len(matches))
+			for _, a := range matches {
+				if a.Kind == "transit" {
+					cleanMatches = append(cleanMatches, a)
+				}
+			}
+			matches = cleanMatches
+		}
 		seenNames := map[string]bool{}
 		names := make([]string, 0, len(matches))
 		for _, a := range matches {

@@ -1196,6 +1196,9 @@ func (s *APIServer) Shutdown(timeout time.Duration) error {
 	if s.snapshotMgr != nil {
 		s.snapshotMgr.Stop()
 	}
+	if s.policyPublisher != nil {
+		s.policyPublisher.Close()
+	}
 	return s.app.ShutdownWithTimeout(timeout)
 }
 

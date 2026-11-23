@@ -118,6 +118,9 @@ func MatchAtoms(atoms []model.AtomNode, f model.GroupFilter) []model.AtomNode {
 		if (f.ExcludeChinaLeak || f.CleanOnly) && a.ChinaExit {
 			continue
 		}
+		if (f.ChinaLeakOnly || f.LeakOnly) && !a.ChinaExit {
+			continue
+		}
 		if f.OnlineOnly && !a.Online {
 			continue
 		}

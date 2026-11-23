@@ -128,13 +128,17 @@ func (p Publisher) Apply(ctx context.Context, script string, verify func([]byte)
 	}, progress)
 }
 
-// matchMemberName matches expected raw node name with actual proxy name, handling R2 aliases
+// matchMemberName matches expected raw node name with actual proxy name symmetrically, handling R2 aliases
 func matchMemberName(expected string, actual string) bool {
 	if expected == actual {
 		return true
 	}
-	if strings.Contains(expected, "➔") || strings.HasPrefix(expected, "链式|") {
-		raw := strings.TrimPrefix(expected, "链式|")
+	return matchChainAlias(expected, actual) || matchChainAlias(actual, expected)
+}
+
+func matchChainAlias(full string, alias string) bool {
+	if strings.Contains(full, "➔") || strings.HasPrefix(full, "链式|") {
+		raw := strings.TrimPrefix(full, "链式|")
 		parts := strings.Split(raw, "➔")
 		if len(parts) == 2 {
 			transit := strings.TrimSpace(parts[0])
@@ -154,7 +158,7 @@ func matchMemberName(expected string, actual string) bool {
 					break
 				}
 			}
-			if prefix != "" && suffix != "" && strings.HasPrefix(actual, prefix) && strings.Contains(actual, suffix) {
+			if prefix != "" && suffix != "" && strings.HasPrefix(alias, prefix) && strings.Contains(alias, suffix) {
 				return true
 			}
 		}

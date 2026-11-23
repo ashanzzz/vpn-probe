@@ -585,12 +585,7 @@ func LoadCustomChains() ([]CustomChainBind, error) {
 func SaveCustomChains(chains []CustomChainBind) error {
 	customChainsMu.Lock()
 	defer customChainsMu.Unlock()
-	_ = os.MkdirAll(filepath.Dir(customChainsFile), 0755)
-	data, err := json.MarshalIndent(chains, "", "  ")
-	if err != nil {
-		return err
-	}
-	return atomicWriteFile(customChainsFile, data, 0644)
+	return writeAtomicJSON(customChainsFile, chains)
 }
 
 // BindExplicitChain 显式创建一条“指定线路机拉指定家宽机”的定制连接 (满足用户 API 灵活拉线路需求)
@@ -709,12 +704,7 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 		chains = append(chains, bind)
 	}
 
-	_ = os.MkdirAll(filepath.Dir(customChainsFile), 0755)
-	bytes, err := json.MarshalIndent(chains, "", "  ")
-	if err != nil {
-		return bind, err
-	}
-	if err := atomicWriteFile(customChainsFile, bytes, 0644); err != nil {
+	if err := writeAtomicJSON(customChainsFile, chains); err != nil {
 		return bind, err
 	}
 
@@ -746,25 +736,10 @@ func (o *Orchestrator) UnbindExplicitChain(target string) error {
 		return fmt.Errorf("custom chain target '%s' not found", target)
 	}
 
-	_ = os.MkdirAll(filepath.Dir(customChainsFile), 0755)
-	bytes, err := json.MarshalIndent(newChains, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := atomicWriteFile(customChainsFile, bytes, 0644); err != nil {
+	if err := writeAtomicJSON(customChainsFile, newChains); err != nil {
 		return err
 	}
 
 	logger.Sync("[CHAIN-UNBIND] ✂️ Custom chain removed for target: %s", target)
 	return nil
-}
-
-// atomicWriteFile 原子写入文件，通过临时文件加重命名保证断电和崩溃时不出现 0 字节损坏
-func atomicWriteFile(filename string, data []byte, perm os.FileMode) error {
-	_ = os.MkdirAll(filepath.Dir(filename), 0755)
-	tmp := filename + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filename)
 }

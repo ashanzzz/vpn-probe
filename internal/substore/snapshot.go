@@ -432,12 +432,31 @@ func SanitizeRenderedYAML(data []byte) []byte {
 	return data
 }
 
-// atomicWriteFile 原子写入文件，通过临时文件加重命名保证断电和崩溃时不出现 0 字节损坏
+// atomicWriteFile 原子写入文件，通过独立临时文件加物理落盘(Sync)与原子重命名保证并发安全与零字节防御
 func atomicWriteFile(filename string, data []byte, perm os.FileMode) error {
-	_ = os.MkdirAll(filepath.Dir(filename), 0755)
-	tmp := filename + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	dir := filepath.Dir(filename)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	return os.Rename(tmp, filename)
+	f, err := os.CreateTemp(dir, ".snapshot-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := f.Name()
+	defer os.Remove(tmpName)
+	defer f.Close()
+
+	if err := f.Chmod(perm); err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, filename)
 }

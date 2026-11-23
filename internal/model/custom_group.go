@@ -55,6 +55,8 @@ type GroupFilter struct {
 	Exclude            []string    `json:"exclude,omitempty"`
 	OnlineOnly         bool        `json:"online_only,omitempty"`
 	CleanOnly          bool        `json:"clean_only,omitempty"`
+	ChinaLeakOnly      bool        `json:"china_leak_only,omitempty"`
+	LeakOnly           bool        `json:"leak_only,omitempty"`
 	IncludeTransit     bool        `json:"include_transit"`
 	IncludeResidential bool        `json:"include_residential"`
 	IncludeChain       bool        `json:"include_chain"`
@@ -189,9 +191,9 @@ func DefaultCustomGroups() []CustomGroupDef {
 			Order:       99,
 			AddToEntry:  false,
 			Filter: GroupFilter{
-				Mode:             "filter",
-				CleanOnly:        false,
-				ExcludeChinaLeak: false,
+				Mode:          "filter",
+				Kinds:         []string{"transit", "residential", "chain"},
+				ChinaLeakOnly: true,
 			},
 		},
 	}

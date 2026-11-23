@@ -2072,9 +2072,10 @@ func (s *APIServer) handleGetAtoms(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "orchestrator not initialized"})
 	}
 	filter := monitor.AtomQueryFilter{
-		Country:   c.Query("country"),
-		Kind:      c.Query("kind"),
-		CleanOnly: c.QueryBool("clean_only", false),
+		Country:       c.Query("country"),
+		Kind:          c.Query("kind"),
+		CleanOnly:     c.QueryBool("clean_only", false),
+		ChinaLeakOnly: c.QueryBool("china_leak_only", false) || c.QueryBool("leak_only", false),
 	}
 	atoms := s.orchestrator.QueryAtoms(filter)
 	reveal := c.QueryBool("reveal", false)

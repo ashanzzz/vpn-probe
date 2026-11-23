@@ -1,8 +1,10 @@
 package api
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -185,5 +187,80 @@ func TestIPLockout(t *testing.T) {
 	resp, _ := app.Test(req)
 	if resp.StatusCode != fiber.StatusTooManyRequests {
 		t.Fatalf("expected locked IP to return 429, got %d", resp.StatusCode)
+	}
+}
+
+func TestAuthMiddleware_FailureTrackerPruning(t *testing.T) {
+	ResetAuthTracker()
+	now := time.Now()
+
+	// 1. 模拟注入 150 个已过期超过 10 分钟窗口的陈旧扫描 IP
+	globalTracker.mu.Lock()
+	for i := 1; i <= 150; i++ {
+		fakeIP := fmt.Sprintf("192.168.100.%d", i)
+		globalTracker.failures[fakeIP] = &failureRecord{
+			count:       2,
+			firstFailAt: now.Add(-15 * time.Minute),
+			lockedUntil: now.Add(-14 * time.Minute),
+		}
+	}
+	if len(globalTracker.failures) != 150 {
+		globalTracker.mu.Unlock()
+		t.Fatalf("expected 150 failure records, got %d", len(globalTracker.failures))
+	}
+	globalTracker.mu.Unlock()
+
+	// 2. 触发一次新的失败，触发自动清理
+	globalTracker.recordFailure("10.0.0.1")
+
+	globalTracker.mu.Lock()
+	remaining := len(globalTracker.failures)
+	globalTracker.mu.Unlock()
+
+	if remaining > 10 {
+		t.Fatalf("expected expired records to be pruned, remaining: %d", remaining)
+	}
+
+	// 3. 验证 isLocked 懒清理：注入一个过期条目，查询时自动移除
+	globalTracker.mu.Lock()
+	globalTracker.failures["10.0.0.2"] = &failureRecord{
+		count:       1,
+		firstFailAt: now.Add(-12 * time.Minute),
+		lockedUntil: now.Add(-11 * time.Minute),
+	}
+	globalTracker.mu.Unlock()
+
+	locked, _ := globalTracker.isLocked("10.0.0.2")
+	if locked {
+		t.Fatal("expected expired IP to not be locked")
+	}
+
+	globalTracker.mu.Lock()
+	_, exists := globalTracker.failures["10.0.0.2"]
+	globalTracker.mu.Unlock()
+	if exists {
+		t.Fatal("expected expired IP to be pruned upon isLocked call")
+	}
+
+	// 4. 验证极端高频扫描下的硬上限 (500 条) 淘汰
+	globalTracker.mu.Lock()
+	for i := 1; i <= 550; i++ {
+		fakeIP := fmt.Sprintf("172.16.%d.%d", i/256, i%256)
+		globalTracker.failures[fakeIP] = &failureRecord{
+			count:       1,
+			firstFailAt: now.Add(time.Duration(-i) * time.Second),
+			lockedUntil: now.Add(60 * time.Second),
+		}
+	}
+	globalTracker.mu.Unlock()
+
+	globalTracker.recordFailure("10.99.99.99")
+
+	globalTracker.mu.Lock()
+	hardCapRemaining := len(globalTracker.failures)
+	globalTracker.mu.Unlock()
+
+	if hardCapRemaining > 505 {
+		t.Fatalf("expected hard cap pruning to keep records bounded <= 505, got %d", hardCapRemaining)
 	}
 }

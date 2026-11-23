@@ -1147,6 +1147,7 @@ func (s *APIServer) setupRoutes() {
 	s.app.Get("/api/v1/publish-jobs/latest", s.handleGetLatestPublishJob)
 	s.app.Get("/api/v1/publish-jobs/:id", s.handleGetPublishJob)
 	s.app.Post("/api/v1/publish-jobs/:id/retry", s.handleRetryPublishJob)
+	s.app.Get("/api/v1/subscriptions/:name/inspect", s.handleSubscriptionInspect)
 
 	// 6. 挂载远程 AI 专用的 MCP over SSE 传输接口
 	if s.mcpServer != nil && s.mcpServer.GetServer() != nil {

@@ -19,6 +19,7 @@ import {
   CategoriesSummary,
   BackupSnapshot,
   SafeUpgradeResponse,
+  SubscriptionInspectResponse,
 } from '../types';
 
 const TOKEN_KEY = 'vpn_probe_admin_token';
@@ -379,6 +380,10 @@ export const api = {
   async retryPublishJob(id:string): Promise<PublishJob & {job_id:string}> {return request(`/api/v1/publish-jobs/${encodeURIComponent(id)}/retry`,{method:'POST'});},
   async saveNodeMetadata(id:string,meta:{infra_type:string;tags:string[]}): Promise<any> {
     return request(`/api/orchestration/atoms/${encodeURIComponent(id)}/metadata`,{method:'PATCH',body:JSON.stringify(meta)});
+  },
+
+  async getSubscriptionInspect(name: string): Promise<SubscriptionInspectResponse> {
+    return request(`/api/v1/subscriptions/${encodeURIComponent(name)}/inspect`);
   },
 
   async evaluateGroup(filter: GroupFilter, reveal = false): Promise<{ status: string; count: number; nodes: string[] }> {

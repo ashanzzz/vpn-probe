@@ -452,3 +452,49 @@ export interface CustomChainBind {
   chain_url: string;
   created_at: string;
 }
+
+export interface ProxyInspectSummary {
+  name: string;
+  type: string;
+  country?: string;
+  kind?: 'transit' | 'residential' | 'chain' | 'airport' | string;
+  is_self_hosted: boolean;
+  latency_ms: number;
+  online: boolean;
+  tags?: string[];
+}
+
+export interface GroupInspectItem {
+  name: string;
+  display_name: string;
+  type: string;
+  is_external: boolean;
+  category: string;
+  tags: string[];
+  proxies: ProxyInspectSummary[];
+  proxy_count: number;
+  rule_count: number;
+  custom_def?: CustomGroupDef;
+}
+
+export interface RuleInspectItem {
+  type: string;
+  payload: string;
+  target: string;
+  provider?: string;
+  raw: string;
+}
+
+export interface SubscriptionInspectResponse {
+  status: string;
+  subscription: string;
+  total_proxies: number;
+  total_groups: number;
+  self_groups: number;
+  ext_groups: number;
+  groups: GroupInspectItem[];
+  rules: RuleInspectItem[];
+  rule_providers: string[];
+  routing_script?: string;
+  updated_at: string;
+}

@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { api, getStoredToken } from '../api/client';
 import { PolicyGroupStudio } from './PolicyGroupStudio';
+import { SubscriptionTopologyDrawer } from './SubscriptionTopologyDrawer';
 import { 
   SubStoreMode, 
   SubStoreModeInfo, 
@@ -61,6 +62,7 @@ export const SubStoreHub: React.FC = () => {
   const [scriptContent, setScriptContent] = useState<string>('');
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const [drawerSubName, setDrawerSubName] = useState<string | null>(null);
 
   // Modal for Adding External Subscription
   const [showAddExtModal, setShowAddExtModal] = useState(false);
@@ -604,6 +606,14 @@ export const SubStoreHub: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              <button
+                onClick={() => setDrawerSubName('Q')}
+                className="px-2.5 py-1 rounded-lg border border-blue-200 bg-blue-100/70 hover:bg-blue-200 text-blue-800 text-xs font-semibold flex items-center space-x-1.5 transition shadow-2xs flex-shrink-0"
+              >
+                <Layers className="w-3.5 h-3.5 text-blue-700" />
+                <span>拓扑与分流</span>
+              </button>
             </div>
 
             <div className="text-2xs text-slate-600 bg-white/80 p-2.5 rounded-lg border border-blue-100 space-y-1">
@@ -658,6 +668,14 @@ export const SubStoreHub: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              <button
+                onClick={() => setDrawerSubName('ashan')}
+                className="px-2.5 py-1 rounded-lg border border-purple-200 bg-purple-100/70 hover:bg-purple-200 text-purple-800 text-xs font-semibold flex items-center space-x-1.5 transition shadow-2xs flex-shrink-0"
+              >
+                <Layers className="w-3.5 h-3.5 text-purple-700" />
+                <span>拓扑与分流</span>
+              </button>
             </div>
 
             <div className="text-2xs text-slate-600 bg-white/80 p-2.5 rounded-lg border border-purple-100 space-y-1">
@@ -814,9 +832,19 @@ export const SubStoreHub: React.FC = () => {
                 <div key={idx} className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-slate-900 font-mono text-xs">{share.name}</span>
-                    <span className="text-2xs px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-mono">
-                      {share.type || 'file'}
-                    </span>
+                    <div className="flex items-center space-x-1.5">
+                      <button
+                        onClick={() => setDrawerSubName(share.name)}
+                        className="text-2xs px-2 py-0.5 rounded border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-medium transition flex items-center space-x-1"
+                        title="查看分组与分流拓扑"
+                      >
+                        <Layers className="w-3 h-3 text-indigo-600" />
+                        <span>拓扑透视</span>
+                      </button>
+                      <span className="text-2xs px-2 py-0.5 rounded bg-blue-100 text-blue-800 font-mono">
+                        {share.type || 'file'}
+                      </span>
+                    </div>
                   </div>
                   <div className="p-2 bg-white rounded border border-slate-200 font-mono text-2xs text-slate-600 break-all select-all flex items-center justify-between">
                     <span className="truncate pr-2">{share.full_url || share.url}</span>
@@ -1151,6 +1179,23 @@ export const SubStoreHub: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+      {/* 4. SubStore Subscription Topology & Routing Drawer */}
+      {drawerSubName && (
+        <SubscriptionTopologyDrawer
+          subscriptionName={drawerSubName}
+          availableSubscriptions={
+            Array.from(new Set([
+              'ashan', 
+              'Q', 
+              'ashan-master', 
+              'ashan-纯净',
+              ...(manifest?.share_links?.map(s => s.name) || [])
+            ])).filter(Boolean)
+          }
+          onClose={() => setDrawerSubName(null)}
+          onSelectSubscription={(name) => setDrawerSubName(name)}
+        />
       )}
     </div>
   );

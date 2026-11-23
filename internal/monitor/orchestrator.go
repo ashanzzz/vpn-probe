@@ -179,7 +179,10 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 			// 匹配关联中转专线延迟与送中状态
 			if transitPart != "" {
 				for _, t := range transits {
-					if t.Name == transitPart || strings.Contains(transitPart, t.Name) || strings.Contains(t.Name, transitPart) {
+					if t == nil || strings.TrimSpace(t.Name) == "" {
+						continue
+					}
+					if MatchNodeName(transitPart, t.Name) {
 						chainLatency += t.LatencyMs
 						if t.ChinaExit {
 							chainChinaExit = true
@@ -192,7 +195,10 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 			// 匹配关联目标家宽节点的真实反向隧道状态、延迟与送中状态
 			if targetPart != "" {
 				for _, r := range uniqueResis {
-					if r.Name == targetPart || strings.Contains(targetPart, r.Name) || strings.Contains(r.Name, targetPart) {
+					if r == nil || strings.TrimSpace(r.Name) == "" {
+						continue
+					}
+					if MatchNodeName(targetPart, r.Name) {
 						testedAt = r.TestedAt
 						if r.Diagnostic != nil && r.Diagnostic.AbroadRTTMs > 0 {
 							chainLatency += r.Diagnostic.AbroadRTTMs
@@ -260,7 +266,17 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 			continue
 		}
 		landingName := strings.TrimSpace(parts[1])
-		if landing, ok := landings[landingName]; ok {
+		landing, ok := landings[landingName]
+		if !ok && landingName != "" {
+			for k, v := range landings {
+				if MatchNodeName(k, landingName) {
+					landing = v
+					ok = true
+					break
+				}
+			}
+		}
+		if ok {
 			if atoms[i].InfraType == "" {
 				atoms[i].InfraType = landing.InfraType
 			}
@@ -275,7 +291,17 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 		if pipeIdx := strings.Index(transitName, "|"); pipeIdx != -1 {
 			transitName = strings.TrimSpace(transitName[pipeIdx+1:])
 		}
-		if tr, ok := transitMap[transitName]; ok {
+		tr, trOk := transitMap[transitName]
+		if !trOk && transitName != "" {
+			for k, v := range transitMap {
+				if MatchNodeName(k, transitName) {
+					tr = v
+					trOk = true
+					break
+				}
+			}
+		}
+		if trOk {
 			if tr.ChinaExit {
 				atoms[i].ChinaExit = true
 			}

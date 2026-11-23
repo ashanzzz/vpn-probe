@@ -221,6 +221,9 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 			} else if strings.Contains(gName, "家宽") {
 				category = "self_resi"
 				tags = append(tags, "自建·家宽全家桶")
+			} else if strings.Contains(gName, "其他") {
+				category = "self_resi"
+				tags = append(tags, "自建·其他家宽")
 			} else if strings.Contains(gName, "送中") && gName != "不送中" {
 				category = "self_china_leak"
 				tags = append(tags, "自建·送中隔离")

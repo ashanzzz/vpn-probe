@@ -49,6 +49,9 @@ proxy-groups:
   - name: "自建-美国和美国家宽"
     type: select
     proxies: ["LZ-US-Pavlov-家宽", "美西 ACCK 洛杉矶 4837 — VLESS Reality", "LAX-US-Pavlov-家宽", "链式|东京软银 ➔ 未知家宽01"]
+  - name: "自建-其他"
+    type: select
+    proxies: ["LZ-US-Pavlov-家宽"]
   - name: "外部-节点"
     type: select
     proxies: ["蜂窝云-美区01"]
@@ -140,8 +143,8 @@ rule-providers:
 	if out.TotalProxies != 5 {
 		t.Errorf("expected 5 proxies, got %d", out.TotalProxies)
 	}
-	if out.TotalGroups != 3 {
-		t.Errorf("expected 3 groups, got %d", out.TotalGroups)
+	if out.TotalGroups != 4 {
+		t.Errorf("expected 4 groups, got %d", out.TotalGroups)
 	}
 	if len(out.Rules) != 3 {
 		t.Errorf("expected 3 rules, got %d", len(out.Rules))
@@ -153,8 +156,27 @@ rule-providers:
 	}
 
 	// Verify group classification and proxy alias resolution
-	var foundSelf, foundExt bool
+	var foundSelf, foundExt, foundOther bool
 	for _, g := range out.Groups {
+		if g.Name == "自建-其他" {
+			foundOther = true
+			if g.IsExternal {
+				t.Errorf("expected 自建-其他 to have IsExternal=false")
+			}
+			if g.Category != "self_resi" {
+				t.Errorf("expected 自建-其他 to have Category='self_resi', got %q", g.Category)
+			}
+			hasTag := false
+			for _, tag := range g.Tags {
+				if tag == "自建·其他家宽" {
+					hasTag = true
+					break
+				}
+			}
+			if !hasTag {
+				t.Errorf("expected 自建-其他 to have tag '自建·其他家宽', got %v", g.Tags)
+			}
+		}
 		if g.Name == "自建-美国和美国家宽" {
 			foundSelf = true
 			if g.IsExternal {
@@ -201,7 +223,7 @@ rule-providers:
 			}
 		}
 	}
-	if !foundSelf || !foundExt {
-		t.Errorf("missing expected groups: foundSelf=%v, foundExt=%v", foundSelf, foundExt)
+	if !foundSelf || !foundExt || !foundOther {
+		t.Errorf("missing expected groups: foundSelf=%v, foundExt=%v, foundOther=%v", foundSelf, foundExt, foundOther)
 	}
 }

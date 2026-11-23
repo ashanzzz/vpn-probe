@@ -22,6 +22,8 @@ func TestOrchestratorEvaluationAndQuery(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "custom_groups.json")
 	restore := SetCustomGroupsFileForTest(tmpFile)
 	defer restore()
+	tmpChains := filepath.Join(t.TempDir(), "custom_chains.json")
+	defer SetCustomChainsFileForTest(tmpChains)()
 
 	h := healer.NewHealer(nil, nil)
 	sch := &Scheduler{
@@ -685,6 +687,74 @@ func TestBindExplicitChain_ExactMatchPrecedence(t *testing.T) {
 	}
 	if bind.TransitName != "JP-Tokyo" {
 		t.Fatalf("expected exact match 'JP-Tokyo', got '%s'", bind.TransitName)
+	}
+}
+
+func TestOrchestrator_CollectAtoms_LandingEmojiFallbackInheritance(t *testing.T) {
+	tmpChains := filepath.Join(t.TempDir(), "custom_chains.json")
+	defer SetCustomChainsFileForTest(tmpChains)()
+	tmpGroups := filepath.Join(t.TempDir(), "custom_groups.json")
+	defer SetCustomGroupsFileForTest(tmpGroups)()
+
+	sch := &Scheduler{
+		healer:     healer.NewHealer(nil, nil),
+		nodeStates: make(map[string]*NodeState),
+	}
+	sch.nodeStates["transit-1"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "transit-1",
+			Name:        "🇯🇵 JP-Tokyo-Softbank", // 带 emoji
+			OriginalURL: "vless://u1@1.1.1.1:443#JP-Tokyo-Softbank",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   false,
+		},
+	}
+	sch.nodeStates["resi-1"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "resi-1",
+			Name:        "🇺🇸 LZ-US-Pavlov-家宽", // 带 emoji
+			OriginalURL: "socks5://u:***@167.104.167.151:1001#LZ-US-Pavlov-家宽",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   true, // 落地送中！
+		},
+	}
+
+	customChains := []CustomChainBind{
+		{
+			ID:              "bind-emoji-fallback",
+			TransitName:     "JP-Tokyo-Softbank", // 无 emoji
+			ResidentialName: "LZ-US-Pavlov-家宽",  // 无 emoji
+			ChainName:       "链式|JP-Tokyo-Softbank ➔ LZ-US-Pavlov-家宽",
+			ChainURL:        "vless://u1@1.1.1.1:443?dialerProxy=JP-Tokyo-Softbank#链式|JP-Tokyo-Softbank ➔ LZ-US-Pavlov-家宽",
+		},
+	}
+	if err := SaveCustomChains(customChains); err != nil {
+		t.Fatalf("failed to save custom chains: %v", err)
+	}
+
+	orc := NewOrchestrator(sch)
+	atoms := orc.CollectAtoms()
+
+	// 查找 chain 节点
+	var chainAtom *model.AtomNode
+	for i := range atoms {
+		if atoms[i].Kind == "chain" && atoms[i].Name == "链式|JP-Tokyo-Softbank ➔ LZ-US-Pavlov-家宽" {
+			chainAtom = &atoms[i]
+			break
+		}
+	}
+
+	if chainAtom == nil {
+		t.Fatalf("expected chain atom to be generated, got none in %d atoms", len(atoms))
+	}
+
+	// 验证链式节点通过 fallback 模糊比对成功继承了送中状态
+	if !chainAtom.ChinaExit {
+		t.Fatalf("expected chain atom to inherit ChinaExit=true from residential landing with emoji prefix, got false")
 	}
 }
 

@@ -2,6 +2,8 @@ package monitor
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -276,4 +278,219 @@ func TestScheduler_RefreshNodes_ConcurrentRace(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestRefreshNodesFromSubStore_FiveGroups(t *testing.T) {
+	// 模拟 SubStore 返回 5 组自建策略组，包含线路机、家宽直连机与链式代理
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/subs" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success","data":[
+				{"name":"ashan-transit","displayName":"线路机","content":"vless://u1@1.1.1.1:443#Transit-01\nvless://u2@2.2.2.2:443#Transit-02"},
+				{"name":"ashan-us-resi","displayName":"美区全家桶","content":"vless://u1@1.1.1.1:443#Transit-01\nvless://u3@167.104.167.151:41000#LZ-US-Pavlov-家宽\nvless://u3@167.104.167.151:41000?dialerProxy=Transit-01#链式|Transit-01 ➔ LZ-US-Pavlov-家宽"},
+				{"name":"ashan-jp-resi","displayName":"日区全家桶","content":"vless://u4@167.104.167.151:42000#LZ-JP-SoftBank-家宽"},
+				{"name":"ashan-other","displayName":"其他全家桶","content":""},
+				{"name":"ashan-china-leak","displayName":"送中隔离","content":""},
+				{"name":"蜂窝云","displayName":"外部机场","content":"vless://airport@8.8.8.8:443#Airport-Node"}
+			]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			Enabled: true,
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     mockServer.URL,
+		},
+	}
+
+	sc := substore.NewClient(&cfg.SubStore)
+	s := NewScheduler(cfg, nil, nil, sc)
+
+	err := s.RefreshNodesFromSubStore(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error from RefreshNodesFromSubStore, got: %v", err)
+	}
+
+	status := s.GetStatus()
+	// 期望 4 个原子节点：Transit-01, Transit-02, LZ-US-Pavlov-家宽, LZ-JP-SoftBank-家宽
+	// 外部机场 'Airport-Node' 与链式代理 '链式|...' 必须彻底排除
+	if len(status) != 4 {
+		t.Fatalf("expected 4 base self-hosted nodes, got %d: %+v", len(status), status)
+	}
+
+	// 验证链式代理未进入探针列表
+	for k := range status {
+		if strings.Contains(k, "链式") || strings.Contains(k, "➔") {
+			t.Errorf("chain node %s should have been filtered out from monitor", k)
+		}
+		if strings.Contains(k, "Airport") {
+			t.Errorf("external airport node %s must never be monitored", k)
+		}
+	}
+
+	// 验证类型区分
+	if status["Transit-01"].LastResult.NodeType != "transit" {
+		t.Errorf("expected Transit-01 to have NodeType 'transit', got: %s", status["Transit-01"].LastResult.NodeType)
+	}
+	if status["Transit-02"].LastResult.NodeType != "transit" {
+		t.Errorf("expected Transit-02 to have NodeType 'transit', got: %s", status["Transit-02"].LastResult.NodeType)
+	}
+	if status["LZ-US-Pavlov-家宽"].LastResult.NodeType != "residential" {
+		t.Errorf("expected LZ-US-Pavlov-家宽 to have NodeType 'residential', got: %s", status["LZ-US-Pavlov-家宽"].LastResult.NodeType)
+	}
+	if status["LZ-JP-SoftBank-家宽"].LastResult.NodeType != "residential" {
+		t.Errorf("expected LZ-JP-SoftBank-家宽 to have NodeType 'residential', got: %s", status["LZ-JP-SoftBank-家宽"].LastResult.NodeType)
+	}
+}
+
+func TestRefreshNodesFromSubStore_LegacyFallback(t *testing.T) {
+	// 模拟旧版本 SubStore 仅存在旧三层独立订阅 (ashan-transit-direct, ashan-resi-direct)
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/subs" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success","data":[
+				{"name":"ashan-transit-direct","displayName":"线路机直连","content":"vless://u1@1.1.1.1:443#Legacy-Transit-01"},
+				{"name":"ashan-resi-direct","displayName":"家宽直连","content":"vless://u2@167.104.167.151:41000#LZ-Legacy-Resi-01"}
+			]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			Enabled: true,
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     mockServer.URL,
+		},
+	}
+
+	sc := substore.NewClient(&cfg.SubStore)
+	s := NewScheduler(cfg, nil, nil, sc)
+
+	err := s.RefreshNodesFromSubStore(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error from RefreshNodesFromSubStore fallback, got: %v", err)
+	}
+
+	status := s.GetStatus()
+	if len(status) != 2 {
+		t.Fatalf("expected 2 nodes from legacy fallback, got %d", len(status))
+	}
+	if _, ok := status["Legacy-Transit-01"]; !ok {
+		t.Errorf("missing Legacy-Transit-01 in status")
+	}
+	if _, ok := status["LZ-Legacy-Resi-01"]; !ok {
+		t.Errorf("missing LZ-Legacy-Resi-01 in status")
+	}
+}
+
+func TestRefreshNodesFromSubStore_EmptyPreservesExisting(t *testing.T) {
+	// 模拟 SubStore 连接失败或返回空，验证不清除已有静态节点
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			Enabled: true,
+			Nodes: []config.MonitoredNode{
+				{Name: "Static-Node-01", URL: "vless://u@1.1.1.1:443#Static-Node-01", IsSelf: true},
+			},
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     mockServer.URL,
+		},
+	}
+
+	sc := substore.NewClient(&cfg.SubStore)
+	s := NewScheduler(cfg, nil, nil, sc)
+
+	// 初始应有 1 个静态节点
+	if len(s.GetStatus()) != 1 {
+		t.Fatalf("expected 1 initial static node, got %d", len(s.GetStatus()))
+	}
+
+	// 触发刷新失败
+	_ = s.RefreshNodesFromSubStore(context.Background())
+
+	// 必须保留原有节点
+	if len(s.GetStatus()) != 1 {
+		t.Fatalf("expected 1 node preserved after failure, got %d", len(s.GetStatus()))
+	}
+}
+
+func TestRefreshNodesFromSubStore_PruneDynamicNodes(t *testing.T) {
+	// 验证当动态自建家宽节点从 SubStore 移除后，能够正常被 Prune，而静态配置的自建节点不受影响
+	subsJSON := `{"status":"success","data":[
+		{"name":"ashan-transit","displayName":"线路机","content":"vless://u1@1.1.1.1:443#Transit-01"},
+		{"name":"ashan-us-resi","displayName":"美区全家桶","content":"vless://u2@167.104.167.151:41000#LZ-US-To-Be-Pruned"}
+	]}`
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/subs" {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(subsJSON))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			Enabled: true,
+			Nodes: []config.MonitoredNode{
+				{Name: "Static-Transit", URL: "vless://u@3.3.3.3:443#Static-Transit", IsSelf: true},
+			},
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     mockServer.URL,
+		},
+	}
+
+	sc := substore.NewClient(&cfg.SubStore)
+	s := NewScheduler(cfg, nil, nil, sc)
+
+	// 第一次同步：拉入 Transit-01 和 LZ-US-To-Be-Pruned，加上静态节点共 3 个
+	_ = s.RefreshNodesFromSubStore(context.Background())
+	if len(s.GetStatus()) != 3 {
+		t.Fatalf("expected 3 nodes after initial sync, got %d", len(s.GetStatus()))
+	}
+
+	// 模拟 SubStore 删除了 LZ-US-To-Be-Pruned，仅保留 Transit-01
+	subsJSON = `{"status":"success","data":[
+		{"name":"ashan-transit","displayName":"线路机","content":"vless://u1@1.1.1.1:443#Transit-01"}
+	]}`
+
+	// 第二次同步：LZ-US-To-Be-Pruned 必须被正常剪枝删除，仅保留 Static-Transit 与 Transit-01 共 2 个节点
+	_ = s.RefreshNodesFromSubStore(context.Background())
+	status := s.GetStatus()
+	if len(status) != 2 {
+		t.Fatalf("expected 2 nodes after pruning, got %d", len(status))
+	}
+	if _, ok := status["LZ-US-To-Be-Pruned"]; ok {
+		t.Errorf("expected LZ-US-To-Be-Pruned to be pruned from monitor")
+	}
+	if _, ok := status["Transit-01"]; !ok {
+		t.Errorf("expected Transit-01 to remain")
+	}
+	if _, ok := status["Static-Transit"]; !ok {
+		t.Errorf("expected Static-Transit to remain")
+	}
 }

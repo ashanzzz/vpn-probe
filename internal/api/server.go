@@ -1676,7 +1676,7 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 				// 1. 直连专线：必须 Online == true
 				// 2. 住宅家宽：国内明文直连受阻为常态，只要境外反向穿透隧道畅通 (AbroadReachable == true) 即判定健康 (经自建专线链式中继)
 				isHealthy := false
-				isResidential := lastRes.NodeType == "residential" || strings.Contains(nodeName, "家宽") || strings.Contains(nodeName, "LZ-") || lastRes.Protocol == "socks" || lastRes.Protocol == "socks5"
+				isResidential := lastRes.NodeType == "residential" || model.IsResidentialNode(nodeName, lastRes.OriginalURL, lastRes.Protocol)
 				if isResidential {
 					if lastRes.Online || (lastRes.Diagnostic != nil && lastRes.Diagnostic.AbroadReachable && lastRes.Diagnostic.FaultType == model.FaultResidentialDirectBlocked) {
 						isHealthy = true

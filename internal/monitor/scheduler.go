@@ -587,11 +587,26 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 
 // RunSpeedTestAll 对所有在线线路机执行测速并按得分重排
 func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, durationSec int) []*model.NodeProbeResult {
+	if s.engine == nil {
+		logger.Warnf("[SPEEDTEST] Probe engine is nil, skipping speed test")
+		return nil
+	}
+
+	type targetInfo struct {
+		key         string
+		name        string
+		originalURL string
+	}
+
 	s.mu.RLock()
-	var targets []*NodeState
-	for _, state := range s.nodeStates {
+	var targets []targetInfo
+	for k, state := range s.nodeStates {
 		if state.LastResult != nil && state.LastResult.Online && state.LastResult.NodeType == "transit" {
-			targets = append(targets, state)
+			targets = append(targets, targetInfo{
+				key:         k,
+				name:        state.LastResult.Name,
+				originalURL: state.LastResult.OriginalURL,
+			})
 		}
 	}
 	s.mu.RUnlock()
@@ -602,13 +617,21 @@ func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, duration
 
 	logger.Infof("[SPEEDTEST] Launching speed tests for %d active transit nodes...", len(targets))
 	for _, t := range targets {
-		res, err := s.engine.SpeedTestOne(ctx, t.LastResult.OriginalURL, isStream, durationSec)
+		res, err := s.engine.SpeedTestOne(ctx, t.originalURL, isStream, durationSec)
 		if err == nil && res != nil {
-			t.LastResult.Speed = res
-			t.LastResult.Score = res.Score
-			_ = s.store.SaveResult(ctx, t.LastResult)
+			s.mu.Lock()
+			if state, ok := s.nodeStates[t.key]; ok && state.LastResult != nil {
+				cloned := *state.LastResult
+				cloned.Speed = res
+				cloned.Score = res.Score
+				state.LastResult = &cloned
+				if s.store != nil {
+					_ = s.store.SaveResult(ctx, &cloned)
+				}
+			}
+			s.mu.Unlock()
 		} else {
-			logger.Warnf("[SPEEDTEST] Speed test for %s failed: %v", t.LastResult.Name, err)
+			logger.Warnf("[SPEEDTEST] Speed test for %s failed: %v", t.name, err)
 		}
 	}
 
@@ -637,7 +660,9 @@ func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, duration
 		}
 		fullMeshChains = mergeCustomChains(fullMeshChains)
 		fiveGroups := ClassifyIntoFiveGroups(ranked, allResis, fullMeshChains)
-		_ = s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
+		if err := s.substoreClient.SyncFiveGroups(ctx, fiveGroups); err != nil {
+			logger.Event(logger.LevelWarn, "substore", "sync_failed", fmt.Sprintf("speedtest sync error=%v", err))
+		}
 	}
 
 	return ranked
@@ -845,14 +870,18 @@ func getHostGroupKey(res *model.NodeProbeResult) string {
 	return name
 }
 
-// GetStatus 返回当前所有监控节点的实时健康度与分组
+// GetStatus 返回当前所有监控节点的实时健康度与分组 (返回结构体浅拷贝，防止并发读写冲突)
 func (s *Scheduler) GetStatus() map[string]*NodeState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	copyMap := make(map[string]*NodeState)
+	copyMap := make(map[string]*NodeState, len(s.nodeStates))
 	for k, v := range s.nodeStates {
-		copyMap[k] = v
+		if v == nil {
+			continue
+		}
+		st := *v
+		copyMap[k] = &st
 	}
 	return copyMap
 }

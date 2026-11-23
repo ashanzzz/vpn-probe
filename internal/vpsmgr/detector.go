@@ -37,6 +37,11 @@ func (d *Detector) SetSSHRunner(runner SSHRunnerFunc) {
 	d.sshRunner = runner
 }
 
+// SetMockSSH 用于单元测试模拟远程 SSH 执行 (SetSSHRunner 别名)
+func (d *Detector) SetMockSSH(fn SSHRunnerFunc) {
+	d.SetSSHRunner(fn)
+}
+
 func (d *Detector) getSSHRunner() SSHRunnerFunc {
 	d.mu.RLock()
 	defer d.mu.RUnlock()

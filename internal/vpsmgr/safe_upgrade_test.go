@@ -2,6 +2,7 @@ package vpsmgr
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -81,8 +82,27 @@ func TestManager_SafeUpgrade_Success(t *testing.T) {
 func TestManager_SafeUpgrade_SmokeFailure_TriggersRollback(t *testing.T) {
 	det := NewDetector(nil)
 	var rollbackOldImageCalled bool
+	var lastBackupFile string
 
 	det.SetMockSSH(func(inst *VPSInstance, cmd string) (string, error) {
+		if strings.Contains(cmd, "cp") && strings.Contains(cmd, "backups/config_") {
+			parts := strings.Fields(cmd)
+			for _, p := range parts {
+				if strings.Contains(p, "backups/config_") {
+					lastBackupFile = p
+				}
+			}
+			return "", nil
+		}
+		if strings.Contains(cmd, "stat -c '%n|%s|%y'") {
+			if lastBackupFile != "" {
+				return fmt.Sprintf("%s|1024|2026-11-23 10:15:00", lastBackupFile), nil
+			}
+			return "/opt/sb-mgr/backups/config_20261123_101500.json|1024|2026-11-23 10:15:00", nil
+		}
+		if strings.Contains(cmd, "stat -c") {
+			return "1024", nil
+		}
 		if strings.Contains(cmd, "docker inspect --format='{{.Image}}'") {
 			return "sha256:old-singbox-image-hash", nil
 		}
@@ -91,9 +111,6 @@ func TestManager_SafeUpgrade_SmokeFailure_TriggersRollback(t *testing.T) {
 		}
 		if strings.Contains(cmd, "sha256:old-singbox-image-hash") {
 			rollbackOldImageCalled = true
-		}
-		if strings.Contains(cmd, "stat -c") {
-			return "1024", nil
 		}
 		return "sb-mgr|ghcr.io/sagernet/sing-box:latest|Up 10 hours", nil
 	})

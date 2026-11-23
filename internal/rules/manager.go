@@ -385,6 +385,7 @@ func (m *Manager) GetBridgedConvertJS() string {
 
 	upstreamURL := convertUpstreamURL
 	client := &http.Client{Timeout: 5 * time.Second}
+	defer client.CloseIdleConnections()
 	resp, err := client.Get(upstreamURL)
 	if err == nil {
 		defer resp.Body.Close()

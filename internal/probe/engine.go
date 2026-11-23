@@ -159,7 +159,11 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 				}
 			}
 			isResi := strings.Contains(parsed.Tag, "家宽") || strings.Contains(strings.ToLower(parsed.Tag), "resi") || parsed.Protocol == "socks5"
-			diag := DiagnoseNode(diagCtx, serverHost, serverPort, protoDesc, false, e.sandboxMgr, peers, e.cfg, isResi, err)
+			diagErr := err
+			if sbLog != "" {
+				diagErr = fmt.Errorf("%w | sing-box: %s", err, sbLog)
+			}
+			diag := DiagnoseNode(diagCtx, serverHost, serverPort, protoDesc, false, e.sandboxMgr, peers, e.cfg, isResi, diagErr)
 			result.Diagnostic = diag
 			result.StatusText = diag.StatusText
 			result.ErrorMsg = fmt.Sprintf("离线 (%s)", diag.StatusText)

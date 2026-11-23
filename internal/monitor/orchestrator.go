@@ -497,8 +497,11 @@ func (o *Orchestrator) SyncAllCustomGroups(ctx context.Context) error {
 		if nodeCount == 0 {
 			nodes = []string{}
 		}
-		_ = o.scheduler.substoreClient.UpdateSubscriptionNodes(ctx, g.Name, nodes)
-		logger.Sync("[CUSTOM-GROUP] ✅ Synced dynamic custom group '%s' (%s) with %d nodes", g.Name, g.DisplayName, nodeCount)
+		if err := o.scheduler.substoreClient.UpdateSubscriptionNodes(ctx, g.Name, nodes); err != nil {
+			logger.Warnf("[CUSTOM-GROUP] Failed to sync dynamic custom group '%s': %v", g.Name, err)
+		} else {
+			logger.Sync("[CUSTOM-GROUP] ✅ Synced dynamic custom group '%s' (%s) with %d nodes", g.Name, g.DisplayName, nodeCount)
+		}
 	}
 
 	return nil

@@ -549,11 +549,15 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 			auditCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
 
-			req, _ := http.NewRequestWithContext(auditCtx, "GET", fmt.Sprintf("%s/api/file/%s", baseURL, fileName), nil)
+			req, err := http.NewRequestWithContext(auditCtx, "GET", fmt.Sprintf("%s/api/file/%s", baseURL, fileName), nil)
+			if err != nil {
+				return nil, err
+			}
 			c.setAuth(req)
 			req.Header.Set("User-Agent", "ClashX/1.90.0")
 
 			auditClient := &http.Client{Timeout: 120 * time.Second}
+			defer auditClient.CloseIdleConnections()
 			resp, err := auditClient.Do(req)
 			if err != nil {
 				return nil, err
@@ -730,7 +734,13 @@ func CheckShareDomains(ctx context.Context, fileName string, token string) []Sha
 
 			// 2. 发起 HTTP HEAD 请求测试分享端点响应 (带 8s 超时)
 			httpCtx, httpCancel := context.WithTimeout(ctx, 8*time.Second)
-			req, _ := http.NewRequestWithContext(httpCtx, "HEAD", url, nil)
+			defer httpCancel()
+			req, err := http.NewRequestWithContext(httpCtx, "HEAD", url, nil)
+			if err != nil {
+				check.Error = fmt.Sprintf("创建请求失败: %v", err)
+				results[idx] = check
+				return
+			}
 			req.Header.Set("User-Agent", "ClashX/1.90.0")
 
 			tr := &http.Transport{
@@ -739,9 +749,12 @@ func CheckShareDomains(ctx context.Context, fileName string, token string) []Sha
 			defer tr.CloseIdleConnections()
 			client := &http.Client{
 				Transport: tr,
+				Timeout:   8 * time.Second,
 			}
 			resp, httpErr := client.Do(req)
-			httpCancel()
+			if resp != nil && resp.Body != nil {
+				defer resp.Body.Close()
+			}
 
 			if httpErr != nil {
 				// TLS 握手已成功证明未被墙，HTTP 请求若因上游复杂脚本耗时较长则正常标记直连畅通
@@ -750,7 +763,6 @@ func CheckShareDomains(ctx context.Context, fileName string, token string) []Sha
 			} else {
 				check.StatusCode = resp.StatusCode
 				check.LatencyMs = time.Since(t0).Milliseconds()
-				_ = resp.Body.Close()
 			}
 
 			results[idx] = check

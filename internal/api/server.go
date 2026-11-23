@@ -1639,7 +1639,7 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 				isHealthy := false
 				isResidential := lastRes.NodeType == "residential" || strings.Contains(nodeName, "家宽") || strings.Contains(nodeName, "LZ-") || lastRes.Protocol == "socks" || lastRes.Protocol == "socks5"
 				if isResidential {
-					if lastRes.Online || (lastRes.Diagnostic != nil && lastRes.Diagnostic.AbroadReachable) {
+					if lastRes.Online || (lastRes.Diagnostic != nil && lastRes.Diagnostic.AbroadReachable && lastRes.Diagnostic.FaultType == model.FaultResidentialDirectBlocked) {
 						isHealthy = true
 						selfNodesResidentialChainedCount++
 					}

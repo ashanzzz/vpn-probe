@@ -198,10 +198,13 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 		// 集合不存在，调用 POST /api/collections 创建
 		createEndpoint := fmt.Sprintf("%s/api/collections", baseURL)
-		postReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(bodyBytes))
+		postReq, postReqErr := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(bodyBytes))
+		if postReqErr != nil {
+			return postReqErr
+		}
 		postReq.Header.Set("Content-Type", "application/json")
 		c.setAuth(postReq)
 		postResp, postErr := c.httpClient.Do(postReq)
@@ -211,9 +214,9 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 				return nil
 			}
 			postBody, _ := io.ReadAll(postResp.Body)
-			return fmt.Errorf("collection patch 404, fallback create returned %d: %s", postResp.StatusCode, string(postBody))
+			return fmt.Errorf("collection patch %d, fallback create returned %d: %s", resp.StatusCode, postResp.StatusCode, string(postBody))
 		}
-		return fmt.Errorf("collection patch 404, fallback create failed: %w", postErr)
+		return fmt.Errorf("collection patch %d, fallback create failed: %w", resp.StatusCode, postErr)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -265,10 +268,13 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 		// 文件配置不存在，调用 POST /api/files 创建
 		createEndpoint := fmt.Sprintf("%s/api/files", baseURL)
-		postReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(bodyBytes))
+		postReq, postReqErr := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(bodyBytes))
+		if postReqErr != nil {
+			return postReqErr
+		}
 		postReq.Header.Set("Content-Type", "application/json")
 		c.setAuth(postReq)
 		postResp, postErr := c.httpClient.Do(postReq)
@@ -278,9 +284,9 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 				return nil
 			}
 			postBody, _ := io.ReadAll(postResp.Body)
-			return fmt.Errorf("file patch 404, fallback create returned %d: %s", postResp.StatusCode, string(postBody))
+			return fmt.Errorf("file patch %d, fallback create returned %d: %s", resp.StatusCode, postResp.StatusCode, string(postBody))
 		}
-		return fmt.Errorf("file patch 404, fallback create failed: %w", postErr)
+		return fmt.Errorf("file patch %d, fallback create failed: %w", resp.StatusCode, postErr)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

@@ -428,3 +428,103 @@ func TestResolveFallbackURL(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_SyncFiveGroups_SuccessAndErrorPropagation(t *testing.T) {
+	// 1. 成功分支：所有订阅和合集均成功更新
+	successServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer successServer.Close()
+
+	cfgSuccess := &config.SubStoreConfig{
+		Enabled: true,
+		URL:     successServer.URL,
+	}
+	cSuccess := NewClient(cfgSuccess)
+	cSuccess.SetHTTPClient(successServer.Client())
+
+	payload := model.FiveGroupPayload{
+		TransitNodes: []string{"vless://transit-1"},
+		USResiNodes:  []string{"vless://us-1"},
+		JPResiNodes:  []string{"vless://jp-1"},
+		OtherNodes:   []string{"vless://other-1"},
+	}
+
+	err := cSuccess.SyncFiveGroups(context.Background(), payload)
+	if err != nil {
+		t.Fatalf("expected SyncFiveGroups to succeed, got error: %v", err)
+	}
+
+	// 2. 失败分支：部分订阅更新返回 500 错误，验证错误被正确收集与传播，而非静默吞咽
+	failServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "ashan-us-resi") {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"database disk full"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer failServer.Close()
+
+	cfgFail := &config.SubStoreConfig{
+		Enabled: true,
+		URL:     failServer.URL,
+	}
+	cFail := NewClient(cfgFail)
+	cFail.SetHTTPClient(failServer.Client())
+
+	failErr := cFail.SyncFiveGroups(context.Background(), payload)
+	if failErr == nil {
+		t.Fatalf("expected SyncFiveGroups to return error on failed subscription patch, got nil")
+	}
+	if !strings.Contains(failErr.Error(), "ashan-us-resi") {
+		t.Errorf("expected error message to mention 'ashan-us-resi', got: %v", failErr)
+	}
+}
+
+func TestClient_UpdateSubscription_RetryOn5xx(t *testing.T) {
+	// 模拟第一次返回 502 Bad Gateway，第二次返回 200 OK
+	attempts := 0
+	var mu sync.Mutex
+
+	retryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		current := attempts
+		mu.Unlock()
+
+		if current == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":"bad gateway"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer retryServer.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled: true,
+		URL:     retryServer.URL,
+	}
+	c := NewClient(cfg)
+	c.SetHTTPClient(retryServer.Client())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := c.UpdateSubscriptionNodes(ctx, "test-retry-sub", []string{"vless://node1"})
+	if err != nil {
+		t.Fatalf("expected retry on 502 to succeed on second attempt, got: %v", err)
+	}
+
+	mu.Lock()
+	totalAttempts := attempts
+	mu.Unlock()
+
+	if totalAttempts != 2 {
+		t.Errorf("expected exactly 2 attempts, got %d", totalAttempts)
+	}
+}

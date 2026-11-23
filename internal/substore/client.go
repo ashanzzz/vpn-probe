@@ -246,7 +246,20 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 		c.setAuth(req)
 
 		resp, lastErr = c.httpClient.Do(req)
-		if lastErr == nil {
+		if lastErr == nil && resp != nil {
+			// 若上游返回 5xx 服务端瞬态错误，在 attempt < 2 时主动释放 body 并退避重试
+			if resp.StatusCode >= 500 && attempt < 2 {
+				status := resp.StatusCode
+				resp.Body.Close()
+				lastErr = fmt.Errorf("transient server status %d", status)
+				logger.Warnf("[SUBSTORE] Update subscription '%s' attempt %d returned %d, retrying in 2s...", subName, attempt, status)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(2 * time.Second):
+				}
+				continue
+			}
 			break
 		}
 		if resp != nil && resp.Body != nil {
@@ -288,7 +301,7 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 			if postResp.StatusCode >= 200 && postResp.StatusCode < 300 {
 				return nil
 			}
-			postBody, _ := io.ReadAll(postResp.Body)
+			postBody, _ := io.ReadAll(io.LimitReader(postResp.Body, 1024*1024))
 			return fmt.Errorf("subscription patch %d, fallback create returned %d: %s", resp.StatusCode, postResp.StatusCode, string(postBody))
 		}
 		return fmt.Errorf("subscription patch %d, fallback create failed: %w", resp.StatusCode, postErr)
@@ -296,7 +309,7 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 		return fmt.Errorf("status %d: %s", resp.StatusCode, string(respBody))
 	}
 
@@ -417,12 +430,14 @@ func (c *Client) SyncFiveGroups(ctx context.Context, payload model.FiveGroupPayl
 		{"ashan-china-leak", "自建-送中", payload.ChinaLeakNodes},
 	}
 
+	var errs []string
 	for _, g := range groups {
 		content := g.Nodes
 		if len(content) == 0 {
 			content = []string{}
 		}
 		if err := c.updateSubStoreSubscription(ctx, g.SubName, content); err != nil {
+			errs = append(errs, fmt.Sprintf("update %s: %v", g.SubName, err))
 			logger.Warnf("[SUBSTORE] Update %s (%s): %v", g.SubName, g.DisplayName, err)
 		} else {
 			logger.Sync("[SUBSTORE] ✅ '%s' (%s) updated with %d nodes", g.SubName, g.DisplayName, len(g.Nodes))
@@ -439,6 +454,7 @@ func (c *Client) SyncFiveGroups(ctx context.Context, payload model.FiveGroupPayl
 		"ignoreFailedRemoteSub": "quiet",
 	}
 	if err := c.UpdateCollection(ctx, "ashan-master", masterPayload); err != nil {
+		errs = append(errs, fmt.Sprintf("reconcile ashan-master: %v", err))
 		logger.Warnf("[SUBSTORE] Reconcile ashan-master collection: %v", err)
 	}
 
@@ -451,9 +467,13 @@ func (c *Client) SyncFiveGroups(ctx context.Context, payload model.FiveGroupPayl
 		"ignoreFailedRemoteSub": "quiet",
 	}
 	if err := c.UpdateCollection(ctx, "ashan-纯净", purePayload); err != nil {
+		errs = append(errs, fmt.Sprintf("reconcile ashan-纯净: %v", err))
 		logger.Warnf("[SUBSTORE] Reconcile ashan-纯净 collection: %v", err)
 	}
 
+	if len(errs) > 0 {
+		return fmt.Errorf("substore 5-group sync errors: %s", strings.Join(errs, "; "))
+	}
 	return nil
 }
 
@@ -473,12 +493,14 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 
 	logger.Sync("[SUBSTORE] Starting 3-tier subscription sync...")
 
+	var errs []string
 	// 1. 同步 线路机-直连 (ashan-transit-direct)
 	transitContent := payload.TransitDirectNodes
 	if len(transitContent) == 0 {
 		transitContent = []string{}
 	}
 	if err := c.updateSubStoreSubscription(ctx, "ashan-transit-direct", transitContent); err != nil {
+		errs = append(errs, fmt.Sprintf("update ashan-transit-direct: %v", err))
 		logger.Warnf("[SUBSTORE] Update ashan-transit-direct: %v", err)
 	} else {
 		logger.Sync("[SUBSTORE] ✅ 'ashan-transit-direct' updated with %d transit nodes", len(payload.TransitDirectNodes))
@@ -490,6 +512,7 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 		resiContent = []string{}
 	}
 	if err := c.updateSubStoreSubscription(ctx, "ashan-resi-direct", resiContent); err != nil {
+		errs = append(errs, fmt.Sprintf("update ashan-resi-direct: %v", err))
 		logger.Warnf("[SUBSTORE] Update ashan-resi-direct: %v", err)
 	} else {
 		logger.Sync("[SUBSTORE] ✅ 'ashan-resi-direct' updated with %d residential nodes", len(payload.ResidentialNodes))
@@ -501,6 +524,7 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 		chainContent = []string{}
 	}
 	if err := c.updateSubStoreSubscription(ctx, "ashan-chain", chainContent); err != nil {
+		errs = append(errs, fmt.Sprintf("update ashan-chain: %v", err))
 		logger.Warnf("[SUBSTORE] Update ashan-chain: %v", err)
 	} else {
 		logger.Sync("[SUBSTORE] ✅ 'ashan-chain' updated with %d chain nodes", len(payload.ChainNodes))
@@ -515,9 +539,13 @@ func (c *Client) SyncThreeTier(ctx context.Context, payload ThreeTierPayload) er
 		"ignoreFailedRemoteSub": "quiet",
 	}
 	if err := c.UpdateCollection(ctx, "ashan-master", masterPayload); err != nil {
+		errs = append(errs, fmt.Sprintf("reconcile ashan-master: %v", err))
 		logger.Warnf("[SUBSTORE] Ensure ashan-master collection: %v", err)
 	}
 
+	if len(errs) > 0 {
+		return fmt.Errorf("substore 3-tier sync errors: %s", strings.Join(errs, "; "))
+	}
 	return nil
 }
 

@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -220,6 +219,45 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 		}
 	}
 
+	meta, err := LoadNodeMetadata()
+	if err != nil {
+		logger.Warnf("[ORCHESTRATOR] metadata load failed: %v", err)
+	}
+	for i := range atoms {
+		if m, ok := meta[atoms[i].ID]; ok {
+			atoms[i].InfraType = m.InfraType
+			atoms[i].Tags = append([]string(nil), m.Tags...)
+		}
+	}
+	// A chain inherits its landing's manually configured NAT/VPS classification
+	// and tags unless the chain itself has an explicit override.  A user-selected
+	// 'NAT residential' group can therefore include chains without hand-tagging
+	// every relay/landing combination.
+	landings := make(map[string]model.AtomNode)
+	for _, a := range atoms {
+		if a.Kind == "residential" {
+			landings[a.Name] = a
+		}
+	}
+	for i := range atoms {
+		if atoms[i].Kind != "chain" {
+			continue
+		}
+		parts := strings.SplitN(atoms[i].Name, "➔", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		landing, ok := landings[strings.TrimSpace(parts[1])]
+		if !ok {
+			continue
+		}
+		if atoms[i].InfraType == "" {
+			atoms[i].InfraType = landing.InfraType
+		}
+		if len(atoms[i].Tags) == 0 {
+			atoms[i].Tags = append([]string(nil), landing.Tags...)
+		}
+	}
 	return atoms
 }
 
@@ -247,63 +285,23 @@ func (o *Orchestrator) QueryAtoms(filter AtomQueryFilter) []model.AtomNode {
 	return filtered
 }
 
-// EvaluateGroup 根据自定义分组规则求值计算，输出满足公式的 URL 切片
+// EvaluateGroup returns URLs for compatibility with the existing preview API.
 func (o *Orchestrator) EvaluateGroup(filter model.GroupFilter) []string {
-	atoms := o.CollectAtoms()
-	var matchedURLs []string
-	seen := make(map[string]bool)
-
-	countrySet := make(map[string]bool)
-	for _, c := range filter.Countries {
-		countrySet[strings.ToUpper(strings.TrimSpace(c))] = true
-	}
-
-	var matchRegex *regexp.Regexp
-	if filter.CustomMatchRegex != "" {
-		if r, err := regexp.Compile(filter.CustomMatchRegex); err == nil {
-			matchRegex = r
-		} else {
-			logger.Warnf("[ORCHESTRATOR] Invalid custom match regex '%s': %v", filter.CustomMatchRegex, err)
+	matched := MatchAtoms(o.CollectAtoms(), filter)
+	links := make([]string, 0, len(matched))
+	seen := map[string]bool{}
+	for _, atom := range matched {
+		if !seen[atom.URL] {
+			seen[atom.URL] = true
+			links = append(links, atom.URL)
 		}
 	}
+	return links
+}
 
-	for _, a := range atoms {
-		// 1. 排除送中
-		if filter.ExcludeChinaLeak && a.ChinaExit {
-			continue
-		}
-
-		// 2. 国家匹配 (若设置了国家限制)
-		if len(countrySet) > 0 && !countrySet[a.Country] {
-			continue
-		}
-
-		// 3. 类型匹配 (线路机 / 家宽直连 / 链式中继)
-		kindMatched := false
-		if a.Kind == "transit" && filter.IncludeTransit {
-			kindMatched = true
-		} else if a.Kind == "residential" && filter.IncludeResidential {
-			kindMatched = true
-		} else if a.Kind == "chain" && filter.IncludeChain {
-			kindMatched = true
-		}
-
-		if !kindMatched {
-			continue
-		}
-
-		// 4. 正则匹配
-		if matchRegex != nil && !matchRegex.MatchString(a.Name) && !matchRegex.MatchString(a.URL) {
-			continue
-		}
-
-		if !seen[a.URL] {
-			seen[a.URL] = true
-			matchedURLs = append(matchedURLs, a.URL)
-		}
-	}
-
-	return matchedURLs
+// EvaluateGroupAtoms preserves stable IDs/names for the policy compiler.
+func (o *Orchestrator) EvaluateGroupAtoms(filter model.GroupFilter) []model.AtomNode {
+	return MatchAtoms(o.CollectAtoms(), filter)
 }
 
 // GetCategoriesSummary 结构化输出当前全局分类大盘
@@ -423,128 +421,128 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 	}
 }
 
-// LoadCustomGroups 从磁盘读取所有动态自定义分组配置
+// LoadCustomGroups fails visibly on corrupt JSON: never silently publish an empty policy.
 func LoadCustomGroups() ([]model.CustomGroupDef, error) {
 	customGroupsMu.RLock()
 	defer customGroupsMu.RUnlock()
-
-	if _, err := os.Stat(customGroupsFile); os.IsNotExist(err) {
+	b, err := os.ReadFile(customGroupsFile)
+	if os.IsNotExist(err) {
 		return []model.CustomGroupDef{}, nil
 	}
-
-	data, err := os.ReadFile(customGroupsFile)
 	if err != nil {
 		return nil, err
 	}
-
-	groups := make([]model.CustomGroupDef, 0)
-	if err := json.Unmarshal(data, &groups); err != nil {
-		return []model.CustomGroupDef{}, nil
+	groups := []model.CustomGroupDef{}
+	if err = json.Unmarshal(b, &groups); err != nil {
+		return nil, fmt.Errorf("decode custom groups: %w", err)
 	}
-	if groups == nil {
-		groups = make([]model.CustomGroupDef, 0)
-	}
-
 	return groups, nil
 }
 
-// SaveCustomGroup 保存或更新一个动态自定义分组定义
+// SaveCustomGroup is an atomic, validated upsert. Name is a stable immutable key.
 func SaveCustomGroup(def model.CustomGroupDef) error {
+	if def.Type == "" {
+		def.Type = "select"
+	}
+	if err := def.Validate(); err != nil {
+		return err
+	}
 	customGroupsMu.Lock()
 	defer customGroupsMu.Unlock()
-
 	groups := []model.CustomGroupDef{}
-	if data, err := os.ReadFile(customGroupsFile); err == nil {
-		_ = json.Unmarshal(data, &groups)
+	if b, err := os.ReadFile(customGroupsFile); err == nil {
+		if err = json.Unmarshal(b, &groups); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
 	}
-
-	nowStr := time.Now().Format("2006-01-02 15:04:05")
-	if def.CreatedAt == "" {
-		def.CreatedAt = nowStr
-	}
-	def.UpdatedAt = nowStr
-
+	now := time.Now().UTC().Format(time.RFC3339)
+	def.UpdatedAt = now
 	updated := false
 	for i, g := range groups {
 		if g.Name == def.Name {
+			def.CreatedAt = g.CreatedAt
 			groups[i] = def
 			updated = true
 			break
 		}
+		if g.DisplayName == def.DisplayName {
+			return fmt.Errorf("duplicate display_name %q", def.DisplayName)
+		}
+	}
+	if def.CreatedAt == "" {
+		def.CreatedAt = now
 	}
 	if !updated {
 		groups = append(groups, def)
 	}
-
-	_ = os.MkdirAll(filepath.Dir(customGroupsFile), 0755)
-	bytes, err := json.MarshalIndent(groups, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(customGroupsFile, bytes, 0644)
+	return writeAtomicJSON(customGroupsFile, groups)
 }
 
-// DeleteCustomGroup 删除一个动态自定义分组定义
 func DeleteCustomGroup(name string) error {
 	customGroupsMu.Lock()
 	defer customGroupsMu.Unlock()
-
 	groups := []model.CustomGroupDef{}
-	if data, err := os.ReadFile(customGroupsFile); err == nil {
-		_ = json.Unmarshal(data, &groups)
+	if b, err := os.ReadFile(customGroupsFile); err == nil {
+		if err = json.Unmarshal(b, &groups); err != nil {
+			return err
+		}
+	} else {
+		return err
 	}
-
-	var newGroups []model.CustomGroupDef
+	next := make([]model.CustomGroupDef, 0, len(groups))
 	found := false
 	for _, g := range groups {
 		if g.Name == name {
 			found = true
-			continue
+		} else {
+			next = append(next, g)
 		}
-		newGroups = append(newGroups, g)
 	}
-
 	if !found {
-		return fmt.Errorf("custom group '%s' not found", name)
+		return fmt.Errorf("custom group %q not found", name)
 	}
+	return writeAtomicJSON(customGroupsFile, next)
+}
 
-	_ = os.MkdirAll(filepath.Dir(customGroupsFile), 0755)
-	bytes, err := json.MarshalIndent(newGroups, "", "  ")
+// EnsureDefaultCustomGroups initializes baseline custom groups if none exist.
+func EnsureDefaultCustomGroups() error {
+	customGroupsMu.Lock()
+	defer customGroupsMu.Unlock()
+	b, err := os.ReadFile(customGroupsFile)
+	if err == nil {
+		var existing []model.CustomGroupDef
+		if json.Unmarshal(b, &existing) == nil && len(existing) > 0 {
+			return nil
+		}
+	}
+	defaults := model.DefaultCustomGroups()
+	now := time.Now().UTC().Format(time.RFC3339)
+	for i := range defaults {
+		defaults[i].CreatedAt = now
+		defaults[i].UpdatedAt = now
+	}
+	return writeAtomicJSON(customGroupsFile, defaults)
+}
+
+// SyncAllCustomGroups is kept only for legacy callers and now propagates real errors.
+func (o *Orchestrator) SyncAllCustomGroups(ctx context.Context) error {
+	if o.scheduler == nil || o.scheduler.substoreClient == nil {
+		return fmt.Errorf("substore client unavailable")
+	}
+	groups, err := LoadCustomGroups()
 	if err != nil {
 		return err
 	}
-
-	return os.WriteFile(customGroupsFile, bytes, 0644)
-}
-
-// SyncAllCustomGroups 评估并同步所有动态自定义分组至 Sub-Store
-func (o *Orchestrator) SyncAllCustomGroups(ctx context.Context) error {
-	if o.scheduler == nil || o.scheduler.substoreClient == nil {
-		return nil
-	}
-
-	groups, err := LoadCustomGroups()
-	if err != nil || len(groups) == 0 {
-		return nil
-	}
-
 	for _, g := range groups {
 		if !g.Enabled {
 			continue
 		}
-		nodes := o.EvaluateGroup(g.Filter)
-		nodeCount := len(nodes)
-		if nodeCount == 0 {
-			nodes = []string{}
-		}
-		if err := o.scheduler.substoreClient.UpdateSubscriptionNodes(ctx, g.Name, nodes); err != nil {
-			logger.Warnf("[CUSTOM-GROUP] Failed to sync dynamic custom group '%s': %v", g.Name, err)
-		} else {
-			logger.Sync("[CUSTOM-GROUP] ✅ Synced dynamic custom group '%s' (%s) with %d nodes", g.Name, g.DisplayName, nodeCount)
+		if err := o.scheduler.substoreClient.UpdateSubscriptionNodes(ctx, g.Name, o.EvaluateGroup(g.Filter)); err != nil {
+			return fmt.Errorf("sync %s: %w", g.Name, err)
 		}
 	}
-
 	return nil
 }
 

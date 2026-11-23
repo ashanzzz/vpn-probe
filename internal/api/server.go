@@ -26,6 +26,7 @@ import (
 	"vpn-probe/internal/model"
 	"vpn-probe/internal/monitor"
 	"vpn-probe/internal/probe"
+	"vpn-probe/internal/publish"
 	"vpn-probe/internal/rules"
 	"vpn-probe/internal/speedtest"
 	"vpn-probe/internal/store"
@@ -45,8 +46,10 @@ type APIServer struct {
 	mcpServer      *mcp.MCPServer
 	scheduler      *monitor.Scheduler
 	rulesMgr       *rules.Manager
-	vpsMgr         *vpsmgr.Manager
-	orchestrator   *monitor.Orchestrator
+	vpsMgr           *vpsmgr.Manager
+	orchestrator     *monitor.Orchestrator
+	policyPublisher  *publish.Manager
+	publishInitError error
 }
 
 // SetConfigPath 设置配置文件路径以支持运行时热改写保存
@@ -147,6 +150,7 @@ func NewAPIServer(
 		orchestrator:   monitor.NewOrchestrator(sched),
 	}
 
+	server.initPublisher()
 	server.setupRoutes()
 	return server
 }
@@ -1132,6 +1136,17 @@ func (s *APIServer) setupRoutes() {
 	s.app.Get("/api/substore/profiles", s.handleGetProfiles)
 	s.app.Post("/api/substore/profiles/reset", s.handleResetProfiles)
 	s.app.Post("/api/substore/profiles/:name", s.handleUpdateProfile)
+
+	// 5.7 用户自定义策略组与异步发布 API (PolicyGroupStudio)
+	s.app.Patch("/api/orchestration/atoms/:id/metadata", s.handleUpdateAtomMetadata)
+	s.app.Get("/api/v1/policy-groups", s.handlePolicyGroupList)
+	s.app.Post("/api/v1/policy-groups", s.handlePolicyGroupUpsert)
+	s.app.Put("/api/v1/policy-groups/:id", s.handlePolicyGroupUpsert)
+	s.app.Delete("/api/v1/policy-groups/:id", s.handlePolicyGroupDelete)
+	s.app.Post("/api/v1/policy-groups/preview", s.handlePolicyGroupPreview)
+	s.app.Get("/api/v1/publish-jobs/latest", s.handleGetLatestPublishJob)
+	s.app.Get("/api/v1/publish-jobs/:id", s.handleGetPublishJob)
+	s.app.Post("/api/v1/publish-jobs/:id/retry", s.handleRetryPublishJob)
 
 	// 6. 挂载远程 AI 专用的 MCP over SSE 传输接口
 	if s.mcpServer != nil && s.mcpServer.GetServer() != nil {

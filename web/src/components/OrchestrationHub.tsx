@@ -24,6 +24,7 @@ import {
   Info
 } from 'lucide-react';
 import { api } from '../api/client';
+import { PolicyGroupStudio } from './PolicyGroupStudio';
 import { 
   CategoriesSummary, 
   CategoryStat, 
@@ -586,94 +587,8 @@ export const OrchestrationHub: React.FC<OrchestrationHubProps> = ({ onRefreshGlo
         </div>
       </div>
 
-      {/* 3. 中部：自定义分组工作台 (Custom Group Studio) */}
-      <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 flex items-center space-x-2">
-              <Sliders className="w-4 h-4 text-emerald-600" />
-              <span>动态自定义策略分组 (Custom Groups)</span>
-            </h3>
-            <p className="text-xs text-slate-500">
-              通过公式积木自由组合国家、角色与纯净度，实时试算并一键同步到 Sub-Store。
-            </p>
-          </div>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-2xs transition flex items-center space-x-1 self-start sm:self-auto"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>新增策略组</span>
-          </button>
-        </div>
-
-        {summary?.custom_groups && summary.custom_groups.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {summary.custom_groups.map(cg => (
-              <div key={cg.name} className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 hover:bg-white transition space-y-3">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h4 className="font-bold text-slate-900 text-sm">{cg.display_name}</h4>
-                    <span className="text-2xs font-mono text-slate-400">{cg.name}</span>
-                  </div>
-                  <span className="px-2 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-100 text-emerald-800">
-                    {cg.count} 节点
-                  </span>
-                </div>
-
-                {/* 规则标签展示 */}
-                <div className="flex flex-wrap gap-1.5 text-2xs">
-                  {cg.filter?.countries?.map(c => (
-                    <span key={c} className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 font-mono">
-                      {c}
-                    </span>
-                  ))}
-                  {cg.filter?.kinds?.map(k => (
-                    <span key={k} className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 font-mono">
-                      {k}
-                    </span>
-                  ))}
-                  {cg.filter?.clean_only && (
-                    <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-mono">
-                      仅纯净
-                    </span>
-                  )}
-                  {cg.filter?.keywords?.map(kw => (
-                    <span key={kw} className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 font-mono">
-                      +{kw}
-                    </span>
-                  ))}
-                </div>
-
-                <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs">
-                  <span className="text-2xs text-slate-400 font-mono">
-                    {cg.created_at ? cg.created_at.split(' ')[0] : '已生效'}
-                  </span>
-                  <button
-                    onClick={() => handleDeleteGroup(cg.name)}
-                    disabled={actionLoading === `del_${cg.name}`}
-                    className="text-red-500 hover:text-red-700 text-xs flex items-center space-x-1"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>删除</span>
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-8 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-            <Sliders className="w-8 h-8 mx-auto text-slate-300 mb-2" />
-            <p className="text-xs text-slate-500 mb-2">暂无自定义策略组，点击右上角快速创建</p>
-            <button
-              onClick={() => setShowCreateModal(true)}
-              className="text-xs text-emerald-600 hover:text-emerald-700 font-semibold"
-            >
-              + 立即创建第一个流媒体/业务策略组
-            </button>
-          </div>
-        )}
-      </div>
+      {/* Client-visible groups are exclusively user-defined via PolicyGroupStudio */}
+      <PolicyGroupStudio />
 
       {/* 4. 底部：线路➔家宽链式中继定制管理 (Custom Chain Matrix) */}
       <div className="bg-white border border-slate-200/80 rounded-2xl p-5 shadow-xs">

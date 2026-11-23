@@ -15,6 +15,7 @@ import {
   AtomNode,
   GroupFilter,
   CustomGroupDef,
+  PublishJob,
   CategoriesSummary,
   BackupSnapshot,
   SafeUpgradeResponse,
@@ -199,11 +200,11 @@ export const api = {
     });
   },
 
-  async getSubStoreNodes(name: string = "ashan-transit"): Promise<{ status: string; subscription: string; count: number; nodes: string[]; raw_content?: string }> {
+  async getSubStoreNodes(name: string = "ashan's vps"): Promise<{ status: string; subscription: string; count: number; nodes: string[]; raw_content?: string }> {
     return request(`/api/substore/nodes?name=${encodeURIComponent(name)}`);
   },
 
-  async updateSubStoreNodes(name: string = "ashan-transit", links: string[]): Promise<any> {
+  async updateSubStoreNodes(name: string = "ashan's vps", links: string[]): Promise<any> {
     return request('/api/substore/nodes', {
       method: 'POST',
       body: JSON.stringify({ name, links }),
@@ -359,6 +360,25 @@ export const api = {
 
   async getCategoriesSummary(): Promise<CategoriesSummary> {
     return request('/api/orchestration/categories');
+  },
+
+  async createPolicyGroup(def: CustomGroupDef): Promise<{status:string;job_id:string;revision:number}> {
+    return request('/api/v1/policy-groups', {method:'POST',body:JSON.stringify(def)});
+  },
+  async updatePolicyGroup(id:string,def:CustomGroupDef): Promise<{status:string;job_id:string;revision:number}> {
+    return request(`/api/v1/policy-groups/${encodeURIComponent(id)}`, {method:'PUT',body:JSON.stringify(def)});
+  },
+  async removePolicyGroup(id:string): Promise<{status:string;job_id:string;revision:number}> {
+    return request(`/api/v1/policy-groups/${encodeURIComponent(id)}`, {method:'DELETE'});
+  },
+  async previewPolicyGroup(def:CustomGroupDef): Promise<{count:number;nodes:{id:string;name:string}[]}> {
+    return request('/api/v1/policy-groups/preview',{method:'POST',body:JSON.stringify(def)});
+  },
+  async latestPublishJob(): Promise<PublishJob & {status:string}> {return request('/api/v1/publish-jobs/latest');},
+  async getPublishJob(id:string): Promise<PublishJob> {return request(`/api/v1/publish-jobs/${encodeURIComponent(id)}`);},
+  async retryPublishJob(id:string): Promise<PublishJob & {job_id:string}> {return request(`/api/v1/publish-jobs/${encodeURIComponent(id)}/retry`,{method:'POST'});},
+  async saveNodeMetadata(id:string,meta:{infra_type:string;tags:string[]}): Promise<any> {
+    return request(`/api/orchestration/atoms/${encodeURIComponent(id)}/metadata`,{method:'PATCH',body:JSON.stringify(meta)});
   },
 
   async evaluateGroup(filter: GroupFilter, reveal = false): Promise<{ status: string; count: number; nodes: string[] }> {

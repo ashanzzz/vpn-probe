@@ -345,15 +345,25 @@ export interface AtomNode {
   protocol: string;
   country: string;
   kind: 'transit' | 'residential' | 'chain';
+  infra_type?: InfraType;
+  tags?: string[];
   china_exit: boolean;
   latency_ms: number;
   online: boolean;
   tested_at: string;
 }
 
+export type InfraType = 'nat_resi' | 'vps_resi' | 'nat_line' | 'vps_line' | 'commercial';
 export interface GroupFilter {
+  mode?: 'filter' | 'manual';
+  node_ids?: string[];
   countries?: string[];
-  kinds?: string[]; // 'transit' | 'residential' | 'chain'
+  kinds?: string[];
+  infra_types?: string[];
+  tags_any?: string[];
+  tags_all?: string[];
+  exclude_tags?: string[];
+  online_only?: boolean;
   clean_only?: boolean;
   keywords?: string[];
   exclude?: string[];
@@ -362,15 +372,28 @@ export interface GroupFilter {
   include_residential?: boolean;
   include_chain?: boolean;
   exclude_china_leak?: boolean;
-  protocols?: string[];
   custom_match_regex?: string;
+  protocols?: string[];
 }
 
 export interface CustomGroupDef {
   name: string;
   display_name: string;
   enabled: boolean;
+  type?: 'select' | 'url-test' | 'fallback' | 'load-balance' | string;
+  order?: number;
+  add_to_entry?: boolean;
   filter: GroupFilter;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PublishJob {
+  id: string;
+  revision: number;
+  status: 'queued' | 'running' | 'verifying' | 'succeeded' | 'failed' | 'superseded' | string;
+  attempts?: number;
+  error?: string;
   created_at?: string;
   updated_at?: string;
 }

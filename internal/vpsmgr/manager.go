@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -87,10 +88,23 @@ func NewManager(cfg *config.Config, sc *substore.Client, configPath string) *Man
 	det := NewDetector(gh)
 	heal := NewAutoHealer(det, sc, configPath)
 
+	vpsHubURL := os.Getenv("VPS_HUB_URL")
+	if vpsHubURL == "" {
+		vpsHubURL = "http://192.168.8.11:3338"
+	}
+	vpsHubUser := os.Getenv("VPS_HUB_USER")
+	if vpsHubUser == "" {
+		vpsHubUser = "ashan"
+	}
+	vpsHubPass := os.Getenv("VPS_HUB_PASS")
+	if vpsHubPass == "" {
+		vpsHubPass = "Woo@@@204317"
+	}
+
 	m := &Manager{
-		vpsHubURL:      "http://192.168.8.11:3338",
-		vpsHubUser:     "ashan",
-		vpsHubPass:     "Woo@@@204317",
+		vpsHubURL:      vpsHubURL,
+		vpsHubUser:     vpsHubUser,
+		vpsHubPass:     vpsHubPass,
 		detector:       det,
 		ghChecker:      gh,
 		healer:         heal,

@@ -226,4 +226,22 @@ rule-providers:
 	if !foundSelf || !foundExt || !foundOther {
 		t.Errorf("missing expected groups: foundSelf=%v, foundExt=%v, foundOther=%v", foundSelf, foundExt, foundOther)
 	}
+
+	// 3. Test route aliases (/api/subscription/:name/inspect, /api/subscriptions/:name/inspect, /api/v1/subscription/:name/inspect)
+	aliases := []string{
+		"/api/subscription/test-sub/inspect",
+		"/api/subscriptions/test-sub/inspect",
+		"/api/v1/subscription/test-sub/inspect",
+	}
+	for _, aliasPath := range aliases {
+		reqAlias := httptest.NewRequest(http.MethodGet, aliasPath, nil)
+		reqAlias.Header.Set("Authorization", "Bearer test-auth-token")
+		respAlias, err := server.app.Test(reqAlias)
+		if err != nil {
+			t.Fatalf("alias request %s failed: %v", aliasPath, err)
+		}
+		if respAlias.StatusCode != http.StatusOK {
+			t.Errorf("expected 200 for alias %s, got %d", aliasPath, respAlias.StatusCode)
+		}
+	}
 }

@@ -142,14 +142,11 @@ function resolveProxyName(targetName, allNames) {
   return null;
 }
 
-// Remove previously user-defined groups or old-style duplicate user groups, preserving baseline system groups unless overridden
+// Remove previously user-defined groups from top-level proxy-groups so they can be re-appended with fresh specifications
 const vpnGroups = vpnExisting.filter(g => g && !vpnDefined.has(g.name));
 for (const g of vpnGroups) {
-  if (Array.isArray(g.proxies)) {
-    g.proxies = g.proxies.filter(n => !vpnDefined.has(n));
-    if (g.proxies.length === 0) {
-      g.proxies = ['DIRECT'];
-    }
+  if (Array.isArray(g.proxies) && g.proxies.length === 0) {
+    g.proxies = ['DIRECT'];
   }
 }
 
@@ -178,7 +175,8 @@ for (const spec of vpnUserGroups) {
 
 const vpnEntry = vpnGroups.find(g => g.name === '选择代理');
 if (vpnEntry) {
-  const current = Array.isArray(vpnEntry.proxies) ? vpnEntry.proxies : [];
+  const allowedAdditions = new Set(vpnUserGroups.filter(g => g.add_to_entry).map(g => g.name));
+  const current = Array.isArray(vpnEntry.proxies) ? vpnEntry.proxies.filter(n => !vpnDefined.has(n) || allowedAdditions.has(n)) : [];
   const additions = vpnUserGroups.filter(g => g.add_to_entry).map(g => g.name);
   const next = [...new Set(current.concat(additions))];
   vpnEntry.proxies = next.includes('自动选择') ? ['自动选择', ...next.filter(n => n !== '自动选择')] : next;

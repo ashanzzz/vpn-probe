@@ -90,6 +90,17 @@ func TestDiagnosisLogic(t *testing.T) {
 			wantActionType: "CHANGE_IP_OR_CDN",
 		},
 		{
+			name:           "国内通境外不通: 国内TCP通但境外探针不通 (不误判为机子关机或真正离线)",
+			port:           33338,
+			protocol:       "vless",
+			domesticTCPOK:  true,
+			abroadOK:       false,
+			pingOK:         true,
+			wantFault:      model.FaultNetworkCongestion,
+			wantStatusText: "【境外阻断或单向异常】国内TCP连通但境外探测不可达",
+			wantActionType: "CHECK_NETWORK_ROUTING",
+		},
+		{
 			name:           "真正离线: 全球海外和国内都不通 (机子关机/软件崩溃/线路中断)",
 			port:           33338,
 			protocol:       "vless",

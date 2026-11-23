@@ -42,6 +42,24 @@ func (m *Manager) SetProbeFunc(fn NodeProbeFunc) {
 	m.probeFunc = fn
 }
 
+// SetInstancesForTest 注入单测实例列表
+func (m *Manager) SetInstancesForTest(insts []*VPSInstance) {
+	m.instancesMu.Lock()
+	defer m.instancesMu.Unlock()
+	cloned := make([]*VPSInstance, len(insts))
+	for idx, inst := range insts {
+		clone := *inst
+		cloned[idx] = &clone
+	}
+	m.instances = cloned
+}
+
+// SetDetectorForTest 注入单测探查器
+func (m *Manager) SetDetectorForTest(det *Detector) {
+	m.detector = det
+	m.backupMgr = NewBackupManager(det)
+}
+
 func (m *Manager) getProbeFunc() NodeProbeFunc {
 	m.probeMu.RLock()
 	defer m.probeMu.RUnlock()
@@ -213,18 +231,20 @@ func (m *Manager) refreshFromVPSHub() {
 			sshUser = "root"
 		}
 
-		// 更新或追加
+		// 更新或追加 (采用 Copy-on-Write 替换指针，避免与其他并发读取的 Goroutine 发生 Data Race)
 		var updated bool
-		for _, inst := range m.instances {
+		for idx, inst := range m.instances {
 			if inst.ID == hi.ID || inst.IP == hi.IP {
-				inst.Name = hi.Name
-				inst.SSHPort = sshPort
-				inst.SSHUser = sshUser
+				updatedInst := *inst
+				updatedInst.Name = hi.Name
+				updatedInst.SSHPort = sshPort
+				updatedInst.SSHUser = sshUser
 				if pass != "" {
-					inst.SSHPassword = pass
+					updatedInst.SSHPassword = pass
 				}
-				inst.Status = hi.Status
-				inst.Region = hi.Region
+				updatedInst.Status = hi.Status
+				updatedInst.Region = hi.Region
+				m.instances[idx] = &updatedInst
 				updated = true
 				break
 			}
@@ -249,7 +269,10 @@ func (m *Manager) refreshFromVPSHub() {
 func (m *Manager) ListVPSInstances(ctx context.Context) []*SoftwareInfo {
 	m.instancesMu.RLock()
 	insts := make([]*VPSInstance, len(m.instances))
-	copy(insts, m.instances)
+	for idx, inst := range m.instances {
+		clone := *inst
+		insts[idx] = &clone
+	}
 	m.instancesMu.RUnlock()
 
 	var wg sync.WaitGroup
@@ -305,7 +328,8 @@ func (m *Manager) HealPort(ctx context.Context, nodeName string, targetPort int,
 	var matchedInst *VPSInstance
 	for _, inst := range m.instances {
 		if inst.IP == targetIP {
-			matchedInst = inst
+			clone := *inst
+			matchedInst = &clone
 			break
 		}
 	}
@@ -318,18 +342,26 @@ func (m *Manager) HealPort(ctx context.Context, nodeName string, targetPort int,
 	return m.healer.ExecutePortHeal(ctx, matchedInst, targetRes.Name, targetRes.OriginalURL, targetPort)
 }
 
-// InstallSoftware 在指定 VPS 上全自动一键部署 sing-box 或 3x-ui
-func (m *Manager) InstallSoftware(ctx context.Context, vpsID string, software string) (string, error) {
+// findInstance 统一根据 ID, IP 或 Name 查找 VPS 实例 (返回独立 Clone 副本以保证跨 Goroutine 读写安全)
+func (m *Manager) findInstance(target string) *VPSInstance {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return nil
+	}
 	m.instancesMu.RLock()
-	var inst *VPSInstance
+	defer m.instancesMu.RUnlock()
 	for _, i := range m.instances {
-		if i.ID == vpsID || i.IP == vpsID {
-			inst = i
-			break
+		if i.ID == target || i.IP == target || strings.EqualFold(i.Name, target) || strings.Contains(strings.ToLower(i.Name), strings.ToLower(target)) {
+			clone := *i
+			return &clone
 		}
 	}
-	m.instancesMu.RUnlock()
+	return nil
+}
 
+// InstallSoftware 在指定 VPS 上全自动一键部署 sing-box 或 3x-ui
+func (m *Manager) InstallSoftware(ctx context.Context, vpsID string, software string) (string, error) {
+	inst := m.findInstance(vpsID)
 	if inst == nil {
 		return "", fmt.Errorf("VPS instance '%s' not found", vpsID)
 	}
@@ -396,16 +428,7 @@ docker run -d --name sb-mgr --restart always --net=host -v /opt/sb-mgr:/etc/sing
 
 // UpdateSoftware 升级指定 VPS 上的代理软件至最新镜像并平滑重启
 func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, error) {
-	m.instancesMu.RLock()
-	var inst *VPSInstance
-	for _, i := range m.instances {
-		if i.ID == vpsID || i.IP == vpsID {
-			inst = i
-			break
-		}
-	}
-	m.instancesMu.RUnlock()
-
+	inst := m.findInstance(vpsID)
 	if inst == nil {
 		return "", fmt.Errorf("VPS instance '%s' not found", vpsID)
 	}
@@ -426,6 +449,185 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 	}
 
 	return fmt.Sprintf("Successfully updated container '%s' on %s to latest", softInfo.ContainerName, inst.IP), nil
+}
+
+// CreateBackup 为指定 VPS 创建配置快照
+func (m *Manager) CreateBackup(ctx context.Context, vpsID string) (*BackupSnapshot, error) {
+	inst := m.findInstance(vpsID)
+	if inst == nil {
+		return nil, fmt.Errorf("VPS instance '%s' not found", vpsID)
+	}
+	softInfo := m.detector.InspectVPS(ctx, inst)
+	return m.backupMgr.CreateBackup(inst, softInfo)
+}
+
+// ListBackups 列出指定 VPS 当前所有历史快照
+func (m *Manager) ListBackups(ctx context.Context, vpsID string) ([]*BackupSnapshot, error) {
+	inst := m.findInstance(vpsID)
+	if inst == nil {
+		return nil, fmt.Errorf("VPS instance '%s' not found", vpsID)
+	}
+	softInfo := m.detector.InspectVPS(ctx, inst)
+	return m.backupMgr.ListBackups(inst, softInfo)
+}
+
+// RestoreBackup 从指定快照还原配置
+func (m *Manager) RestoreBackup(ctx context.Context, vpsID string, snapshotID string) error {
+	inst := m.findInstance(vpsID)
+	if inst == nil {
+		return fmt.Errorf("VPS instance '%s' not found", vpsID)
+	}
+	softInfo := m.detector.InspectVPS(ctx, inst)
+	return m.backupMgr.RestoreBackup(inst, softInfo, snapshotID)
+}
+
+// PerformLifecycleAction 处理容器或服务的生命周期操作 (start, stop, restart, backup)
+func (m *Manager) PerformLifecycleAction(ctx context.Context, req *LifecycleActionRequest) (string, error) {
+	if req == nil || req.VPSID == "" {
+		return "", fmt.Errorf("vps_id is required")
+	}
+
+	inst := m.findInstance(req.VPSID)
+	if inst == nil {
+		return "", fmt.Errorf("VPS instance '%s' not found", req.VPSID)
+	}
+
+	softInfo := m.detector.InspectVPS(ctx, inst)
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+
+	switch action {
+	case "backup":
+		snap, err := m.backupMgr.CreateBackup(inst, softInfo)
+		if err != nil {
+			return "", fmt.Errorf("backup failed: %w", err)
+		}
+		return fmt.Sprintf("Created snapshot %s (%d bytes)", snap.FileName, snap.SizeBytes), nil
+
+	case "start", "stop", "restart":
+		var cmd string
+		if softInfo.DeployMode == "native" {
+			svc := softInfo.SoftwareType
+			if svc == "3x-ui" {
+				svc = "x-ui"
+			}
+			cmd = fmt.Sprintf("systemctl %s %s 2>/dev/null || service %s %s 2>/dev/null", action, svc, svc, action)
+		} else {
+			cName := softInfo.ContainerName
+			if cName == "" {
+				if softInfo.SoftwareType == "3x-ui" {
+					cName = "3x-ui"
+				} else {
+					cName = "sb-mgr"
+				}
+			}
+			cmd = fmt.Sprintf("docker %s %s", action, cName)
+		}
+
+		out, err := m.detector.RunSSH(inst, cmd)
+		if err != nil {
+			return out, fmt.Errorf("execute lifecycle action '%s' on %s failed: %w", action, inst.IP, err)
+		}
+		return fmt.Sprintf("Successfully executed '%s' on %s", action, inst.IP), nil
+
+	default:
+		return "", fmt.Errorf("unsupported lifecycle action: %s (allowed: start, stop, restart, backup)", req.Action)
+	}
+}
+
+// PerformSafeUpgrade 安全升级：升级前自动创建配置快照，升级后执行真实出网冒烟测试，若冒烟失败则原子回滚！
+func (m *Manager) PerformSafeUpgrade(ctx context.Context, req *SafeUpgradeRequest) (*SafeUpgradeResponse, error) {
+	if req == nil || req.VPSID == "" {
+		return nil, fmt.Errorf("vps_id is required")
+	}
+
+	inst := m.findInstance(req.VPSID)
+	if inst == nil {
+		return nil, fmt.Errorf("VPS instance '%s' not found", req.VPSID)
+	}
+
+	softInfo := m.detector.InspectVPS(ctx, inst)
+	prevVer := softInfo.CurrentVersion
+
+	resp := &SafeUpgradeResponse{
+		VPSID:           inst.ID,
+		IP:              inst.IP,
+		SoftwareType:    softInfo.SoftwareType,
+		PreviousVersion: prevVer,
+	}
+
+	// 1. 升级前自动执行快照备份
+	snap, err := m.backupMgr.CreateBackup(inst, softInfo)
+	if err != nil {
+		logger.Warnf("[SAFE-UPGRADE] Pre-upgrade backup failed on %s: %v, continuing with caution", inst.IP, err)
+	} else {
+		resp.BackupCreated = snap.FileName
+	}
+
+	// 2. 执行升级更新
+	msg, updateErr := m.UpdateSoftware(ctx, req.VPSID)
+	if updateErr != nil {
+		resp.Success = false
+		resp.Message = fmt.Sprintf("Update command failed: %v (output: %s)", updateErr, msg)
+		return resp, updateErr
+	}
+
+	// 3. 升级后重新探查版本
+	postInfo := m.detector.InspectVPS(ctx, inst)
+	resp.CurrentVersion = postInfo.CurrentVersion
+
+	// 4. 执行出网冒烟测试 (Smoke Test)
+	probeFn := m.getProbeFunc()
+	nodeTarget := req.NodeName
+	if nodeTarget == "" {
+		nodeTarget = inst.Name
+	}
+	if probeFn != nil && nodeTarget != "" {
+		smokeRes := probeFn(ctx, nodeTarget)
+		smoke := &SmokeTestResult{
+			Success:  smokeRes != nil && smokeRes.Online,
+			TestedAt: time.Now().Format("2006-01-02 15:04:05"),
+		}
+		if smokeRes != nil {
+			smoke.LatencyMs = int64(smokeRes.LatencyMs)
+			smoke.ExitIP = smokeRes.ExitIP
+			if !smokeRes.Online {
+				smoke.Error = "Smoke test probe offline or handshake failed"
+				if smokeRes.Diagnostic != nil {
+					smoke.Error = smokeRes.Diagnostic.StatusText
+				}
+			}
+		} else {
+			smoke.Error = "Smoke test returned nil result"
+		}
+		resp.SmokeTest = smoke
+
+		// 5. 若冒烟失败，执行自动故障回滚或报告失败
+		if !smoke.Success {
+			resp.Success = false
+			if snap != nil {
+				logger.Warnf("[SAFE-UPGRADE] ⚠️ Smoke test failed after upgrade on %s! Initiating automatic rollback to snapshot %s...", inst.IP, snap.FileName)
+				rollbackErr := m.backupMgr.RestoreBackup(inst, softInfo, snap.ID)
+				if rollbackErr != nil {
+					resp.RolledBack = false
+					resp.RollbackReason = fmt.Sprintf("Smoke test failed (%s), but rollback also failed: %v", smoke.Error, rollbackErr)
+					resp.Message = "Upgrade failed smoke test; automatic rollback failed!"
+				} else {
+					resp.RolledBack = true
+					resp.RollbackReason = fmt.Sprintf("Smoke test failed: %s. Successfully rolled back to %s.", smoke.Error, snap.FileName)
+					resp.Message = "Upgrade rolled back automatically due to failed smoke test."
+				}
+			} else {
+				resp.RolledBack = false
+				resp.RollbackReason = fmt.Sprintf("Smoke test failed: %s (no pre-upgrade backup snapshot available)", smoke.Error)
+				resp.Message = "Upgrade failed smoke test and no snapshot was available for rollback!"
+			}
+			return resp, nil
+		}
+	}
+
+	resp.Success = true
+	resp.Message = fmt.Sprintf("Successfully upgraded %s from %s to %s", inst.IP, prevVer, resp.CurrentVersion)
+	return resp, nil
 }
 
 // DailyCheckUpdates 每日定时巡检全量 VPS 软件是否有新版本

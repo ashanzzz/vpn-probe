@@ -16,6 +16,8 @@ import {
   GroupFilter,
   CustomGroupDef,
   CategoriesSummary,
+  BackupSnapshot,
+  SafeUpgradeResponse,
 } from '../types';
 
 const TOKEN_KEY = 'vpn_probe_admin_token';
@@ -242,14 +244,39 @@ export const api = {
   async installVPSProxy(nodeName: string, softwareType: string = 'sing-box'): Promise<any> {
     return request('/api/vps/manage/install', {
       method: 'POST',
-      body: JSON.stringify({ node_name: nodeName, software_type: softwareType }),
+      body: JSON.stringify({ vps_id: nodeName, node_name: nodeName, software: softwareType, software_type: softwareType }),
     });
   },
 
   async updateVPSProxy(nodeName: string): Promise<any> {
     return request('/api/vps/manage/update', {
       method: 'POST',
-      body: JSON.stringify({ node_name: nodeName }),
+      body: JSON.stringify({ vps_id: nodeName, node_name: nodeName }),
+    });
+  },
+
+  async performVPSLifecycle(vpsId: string, action: 'start' | 'stop' | 'restart' | 'backup'): Promise<{ status: string; message: string }> {
+    return request<{ status: string; message: string }>('/api/vps/lifecycle', {
+      method: 'POST',
+      body: JSON.stringify({ vps_id: vpsId, action }),
+    });
+  },
+
+  async getVPSBackups(vpsId: string): Promise<{ status: string; total: number; backups: BackupSnapshot[] }> {
+    return request<{ status: string; total: number; backups: BackupSnapshot[] }>(`/api/vps/backups/${encodeURIComponent(vpsId)}`);
+  },
+
+  async restoreVPSBackup(vpsId: string, snapshotId: string): Promise<{ status: string; message: string }> {
+    return request<{ status: string; message: string }>('/api/vps/restore', {
+      method: 'POST',
+      body: JSON.stringify({ vps_id: vpsId, snapshot_id: snapshotId }),
+    });
+  },
+
+  async safeUpgradeVPS(vpsId: string, nodeName?: string): Promise<SafeUpgradeResponse> {
+    return request<SafeUpgradeResponse>('/api/vps/upgrade/safe', {
+      method: 'POST',
+      body: JSON.stringify({ vps_id: vpsId, node_name: nodeName }),
     });
   },
 

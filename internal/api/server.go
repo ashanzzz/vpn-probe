@@ -1135,6 +1135,10 @@ func (s *APIServer) setupRoutes() {
 	s.app.Post("/api/vps/manage/update", s.handleVPSUpdate)
 	s.app.Get("/api/vps/blocked-analysis", s.handleBlockedAnalysis)
 	s.app.Post("/api/vps/heal/port", s.handleHealPort)
+	s.app.Post("/api/vps/lifecycle", s.handleVPSLifecycle)
+	s.app.Get("/api/vps/backups/:vps_id", s.handleVPSListBackups)
+	s.app.Post("/api/vps/restore", s.handleVPSRestore)
+	s.app.Post("/api/vps/upgrade/safe", s.handleVPSSafeUpgrade)
 
 	// 8. 挂载 React 前端单页应用静态资源 (支持 //go:embed 编译内嵌与 SPA 回退)
 	subFS, err := fs.Sub(web.DistFS, "dist")
@@ -1708,13 +1712,26 @@ func (s *APIServer) handleVPSInstall(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
 	}
 	var req struct {
-		VPSID    string `json:"vps_id"`
-		Software string `json:"software"`
+		VPSID        string `json:"vps_id"`
+		NodeName     string `json:"node_name"`
+		Software     string `json:"software"`
+		SoftwareType string `json:"software_type"`
 	}
-	if err := c.BodyParser(&req); err != nil || req.VPSID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "vps_id is required"})
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
 	}
-	msg, err := s.vpsMgr.InstallSoftware(c.Context(), req.VPSID, req.Software)
+	targetID := req.VPSID
+	if targetID == "" {
+		targetID = req.NodeName
+	}
+	if targetID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "vps_id or node_name is required"})
+	}
+	software := req.Software
+	if software == "" {
+		software = req.SoftwareType
+	}
+	msg, err := s.vpsMgr.InstallSoftware(c.Context(), targetID, software)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error(), "output": msg})
 	}
@@ -1727,12 +1744,20 @@ func (s *APIServer) handleVPSUpdate(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
 	}
 	var req struct {
-		VPSID string `json:"vps_id"`
+		VPSID    string `json:"vps_id"`
+		NodeName string `json:"node_name"`
 	}
-	if err := c.BodyParser(&req); err != nil || req.VPSID == "" {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "vps_id is required"})
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
 	}
-	msg, err := s.vpsMgr.UpdateSoftware(c.Context(), req.VPSID)
+	targetID := req.VPSID
+	if targetID == "" {
+		targetID = req.NodeName
+	}
+	if targetID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "vps_id or node_name is required"})
+	}
+	msg, err := s.vpsMgr.UpdateSoftware(c.Context(), targetID)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error(), "output": msg})
 	}
@@ -1794,6 +1819,104 @@ func (s *APIServer) handleHealPort(c *fiber.Ctx) error {
 		defer cancel()
 		s.scheduler.RunAllChecks(checkCtx, true)
 	}()
+	return c.JSON(resp)
+}
+
+// 7.6 容器与服务生命周期操作 (start, stop, restart, backup)
+func (s *APIServer) handleVPSLifecycle(c *fiber.Ctx) error {
+	if s.vpsMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
+	}
+	var req struct {
+		VPSID    string `json:"vps_id"`
+		NodeName string `json:"node_name"`
+		Action   string `json:"action"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
+	}
+	targetID := req.VPSID
+	if targetID == "" {
+		targetID = req.NodeName
+	}
+	if targetID == "" || req.Action == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "vps_id or node_name and action are required"})
+	}
+	msg, err := s.vpsMgr.PerformLifecycleAction(c.Context(), &vpsmgr.LifecycleActionRequest{
+		VPSID:  targetID,
+		Action: req.Action,
+	})
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+	return c.JSON(fiber.Map{"status": "ok", "message": msg})
+}
+
+// 7.7 列出指定 VPS 配置快照
+func (s *APIServer) handleVPSListBackups(c *fiber.Ctx) error {
+	if s.vpsMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
+	}
+	vpsID := c.Params("vps_id")
+	if vpsID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "vps_id is required"})
+	}
+	snaps, err := s.vpsMgr.ListBackups(c.Context(), vpsID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+	if snaps == nil {
+		snaps = []*vpsmgr.BackupSnapshot{}
+	}
+	return c.JSON(fiber.Map{"status": "ok", "total": len(snaps), "backups": snaps})
+}
+
+// 7.8 从历史快照还原配置
+func (s *APIServer) handleVPSRestore(c *fiber.Ctx) error {
+	if s.vpsMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
+	}
+	var req struct {
+		VPSID      string `json:"vps_id"`
+		NodeName   string `json:"node_name"`
+		SnapshotID string `json:"snapshot_id"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid request body"})
+	}
+	targetID := req.VPSID
+	if targetID == "" {
+		targetID = req.NodeName
+	}
+	if targetID == "" || req.SnapshotID == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "vps_id or node_name and snapshot_id are required"})
+	}
+	err := s.vpsMgr.RestoreBackup(c.Context(), targetID, req.SnapshotID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+	}
+	return c.JSON(fiber.Map{"status": "ok", "message": fmt.Sprintf("Successfully restored snapshot '%s'", req.SnapshotID)})
+}
+
+// 7.9 工业级安全升级 (升级前快照 + 升级后冒烟测试 + 失败自动回滚)
+func (s *APIServer) handleVPSSafeUpgrade(c *fiber.Ctx) error {
+	if s.vpsMgr == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
+	}
+	var req vpsmgr.SafeUpgradeRequest
+	if err := c.BodyParser(&req); err != nil || (req.VPSID == "" && req.NodeName == "") {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "vps_id or node_name is required"})
+	}
+	if req.VPSID == "" {
+		req.VPSID = req.NodeName
+	}
+	resp, err := s.vpsMgr.PerformSafeUpgrade(c.Context(), &req)
+	if err != nil {
+		if resp == nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"status": "error", "message": err.Error()})
+		}
+		return c.Status(fiber.StatusInternalServerError).JSON(resp)
+	}
 	return c.JSON(resp)
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"vpn-probe/internal/config"
@@ -54,20 +55,24 @@ func TestManager_GetBlockedAnalysis(t *testing.T) {
 }
 
 func TestManager_RefreshFromVPSHub(t *testing.T) {
-	loginStatus := http.StatusOK
-	instancesStatus := http.StatusOK
+	var loginStatus atomic.Int32
+	var instancesStatus atomic.Int32
+	loginStatus.Store(http.StatusOK)
+	instancesStatus.Store(http.StatusOK)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/auth/login" {
-			w.WriteHeader(loginStatus)
-			if loginStatus == http.StatusOK {
+			st := int(loginStatus.Load())
+			w.WriteHeader(st)
+			if st == http.StatusOK {
 				_ = json.NewEncoder(w).Encode(map[string]string{"token": "test-jwt-token"})
 			}
 			return
 		}
 		if r.URL.Path == "/api/instances" {
-			w.WriteHeader(instancesStatus)
-			if instancesStatus == http.StatusOK {
+			st := int(instancesStatus.Load())
+			w.WriteHeader(st)
+			if st == http.StatusOK {
 				data := map[string]any{
 					"instances": []map[string]any{
 						{
@@ -107,11 +112,11 @@ func TestManager_RefreshFromVPSHub(t *testing.T) {
 	}
 
 	// 2. 登录失败 (401 Unauthorized) 验证安全返回且不崩溃、不泄漏
-	loginStatus = http.StatusUnauthorized
+	loginStatus.Store(http.StatusUnauthorized)
 	m.refreshFromVPSHub()
 
 	// 3. 实例列表拉取失败 (500 Internal Server Error) 验证安全返回
-	loginStatus = http.StatusOK
-	instancesStatus = http.StatusInternalServerError
+	loginStatus.Store(http.StatusOK)
+	instancesStatus.Store(http.StatusInternalServerError)
 	m.refreshFromVPSHub()
 }

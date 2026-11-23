@@ -8,14 +8,20 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 	"vpn-probe/internal/logger"
 )
 
+// SSHRunnerFunc 自定义 SSH 命令执行器 (支持单测 Mock 与沙箱隔离)
+type SSHRunnerFunc func(inst *VPSInstance, cmd string) (string, error)
+
 type Detector struct {
 	ghChecker *GitHubChecker
+	sshRunner SSHRunnerFunc
+	mu        sync.RWMutex
 }
 
 func NewDetector(gh *GitHubChecker) *Detector {
@@ -24,8 +30,25 @@ func NewDetector(gh *GitHubChecker) *Detector {
 	}
 }
 
+// SetSSHRunner 注入自定义 SSH 执行器 (单测/Mock 专用)
+func (d *Detector) SetSSHRunner(runner SSHRunnerFunc) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.sshRunner = runner
+}
+
+func (d *Detector) getSSHRunner() SSHRunnerFunc {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.sshRunner
+}
+
 // RunSSH 执行远程 SSH 命令并返回标准输出
 func (d *Detector) RunSSH(inst *VPSInstance, cmd string) (string, error) {
+	if runner := d.getSSHRunner(); runner != nil {
+		return runner(inst, cmd)
+	}
+
 	config := &ssh.ClientConfig{
 		User: inst.SSHUser,
 		Auth: []ssh.AuthMethod{

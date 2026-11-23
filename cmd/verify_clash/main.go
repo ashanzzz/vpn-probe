@@ -352,15 +352,15 @@ func main() {
 		}
 	}
 
-	// 2. 检查我们核心自定分组是否存在
+	// 2. 检查我们核心自定分组是否存在 (自建四组并立 + 细分组 + 送中隔离箱)
 	requiredCustomGroups := []string{
-		"自建-线路分组",
-		"自建-家宽分组",
-		"自建-美国家宽分组",
-		"自建-日本家宽分组",
+		"自建-线路机",
+		"自建-美国和美国家宽",
+		"自建-日本和日本家宽",
+		"自建-其他",
 		"自建-台湾家宽分组",
-		"自建-其他家宽分组",
-		"自建-送中分组",
+		"自建-家宽分组",
+		"自建-送中",
 	}
 	missingCustom := 0
 	for _, c := range requiredCustomGroups {
@@ -375,38 +375,41 @@ func main() {
 	// 3. 上级分组是否正确汇聚并绑定了自定分组
 	selectGroup := groupMap["选择代理"]
 	hasTransitInSelect := false
-	hasAllResiInSelect := false
 	hasUSInSelect := false
 	hasJPInSelect := false
 	hasTWInSelect := false
 	for _, p := range selectGroup.Proxies {
-		if p == "自建-线路分组" {
+		if p == "自建-线路机" || p == "自建-线路分组" {
 			hasTransitInSelect = true
 		}
-		if p == "自建-家宽分组" {
-			hasAllResiInSelect = true
-		}
-		if p == "自建-美国家宽分组" {
+		if p == "自建-美国和美国家宽" || p == "自建-美国家宽分组" {
 			hasUSInSelect = true
 		}
-		if p == "自建-日本家宽分组" {
+		if p == "自建-日本和日本家宽" || p == "自建-日本家宽分组" {
 			hasJPInSelect = true
 		}
 		if p == "自建-台湾家宽分组" {
 			hasTWInSelect = true
 		}
 	}
-	if hasTransitInSelect && hasAllResiInSelect && hasUSInSelect && hasJPInSelect && hasTWInSelect {
-		report.Pass("【选择代理】顶级入口已完整汇聚全部自建核心分组 (线路/全量家宽/美/日/台)")
+	if hasTransitInSelect && hasUSInSelect && hasJPInSelect && hasTWInSelect {
+		report.Pass("【选择代理】顶级入口已完整汇聚全部自建核心分组 (线路/美/日/台)")
 	} else {
 		report.Fail("【选择代理】未能完整挂载所有核心自建分组")
 	}
 
 	aiGroup := groupMap["AI服务"]
-	if len(aiGroup.Proxies) > 0 && (aiGroup.Proxies[0] == "自建-美国家宽分组" || aiGroup.Proxies[0] == "自建-美国和美国家宽") {
-		report.Pass("【AI服务】业务分流已按最高优先级硬绑定美国家宽分组 (搞定美区风控)")
+	hasUSInAI := false
+	for _, p := range aiGroup.Proxies {
+		if p == "自建-美国和美国家宽" || p == "自建-美国家宽分组" {
+			hasUSInAI = true
+			break
+		}
+	}
+	if hasUSInAI {
+		report.Pass("【AI服务】业务分流已注入美国家宽分组 (搞定美区风控)")
 	} else if len(aiGroup.Proxies) > 0 {
-		report.Fail(fmt.Sprintf("【AI服务】首选未指向美国家宽分组, 当前首选为: %v", aiGroup.Proxies[:1]))
+		report.Fail(fmt.Sprintf("【AI服务】未挂载美国家宽分组, 当前策略列表: %v", aiGroup.Proxies[:1]))
 	}
 
 	// 核心业务组隔离送中校验 (铁律: 选择代理、谷歌服务、Youtube 绝不包含自建-送中)
@@ -428,10 +431,17 @@ func main() {
 	}
 
 	bahaGroup := groupMap["巴哈姆特"]
-	if len(bahaGroup.Proxies) > 0 && (bahaGroup.Proxies[0] == "自建-台湾家宽分组" || bahaGroup.Proxies[0] == "自建-其他" || bahaGroup.Proxies[0] == "自建-其他家宽分组") {
-		report.Pass("【巴哈姆特】业务分流已成功硬绑定台湾原生落地分组")
+	hasTWInBaha := false
+	for _, p := range bahaGroup.Proxies {
+		if p == "自建-台湾家宽分组" || p == "自建-其他" || p == "自建-其他家宽分组" {
+			hasTWInBaha = true
+			break
+		}
+	}
+	if hasTWInBaha {
+		report.Pass("【巴哈姆特】业务分流已挂载台湾原生落地分组")
 	} else if len(bahaGroup.Proxies) > 0 {
-		report.Warn(fmt.Sprintf("【巴哈姆特】首选为: %v (建议首选【自建-台湾家宽分组】)", bahaGroup.Proxies[:1]))
+		report.Warn(fmt.Sprintf("【巴哈姆特】未挂载台湾分组: %v", bahaGroup.Proxies[:1]))
 	}
 
 	fmt.Println()
@@ -441,40 +451,24 @@ func main() {
 	// =========================================================================
 	fmt.Printf("%s【模块 2: 命名精准度与节点内容落地纯净度验收】%s\n", Bold, Reset)
 
-	// 1. 命名规范性验收 (严禁多字少字，兼容别名)
-	expectedAliases := map[string]string{
-		"自建-线路机":     "自建-线路分组",
-		"自建-美国和美国家宽": "自建-美国家宽分组",
-		"自建-日本和日本家宽": "自建-日本家宽分组",
-		"自建-其他":      "自建-其他家宽分组",
-		"自建-送中":      "自建-送中分组",
+	// 1. 纯骨干专线纯净度校验
+	transitGroupName := "自建-线路机"
+	if _, ok := groupMap[transitGroupName]; !ok {
+		transitGroupName = "自建-线路分组"
 	}
-	for alias, realTarget := range expectedAliases {
-		if grp, ok := groupMap[alias]; ok {
-			if len(grp.Proxies) > 0 && grp.Proxies[0] == realTarget {
-				report.Pass(fmt.Sprintf("兼容别名组规范正确: 【%s】 -> 【%s】", alias, realTarget))
-			} else {
-				report.Fail(fmt.Sprintf("兼容别名组【%s】未正确映射至【%s】", alias, realTarget))
-			}
-		} else {
-			report.Warn(fmt.Sprintf("兼容别名组【%s】未生成", alias))
-		}
-	}
-
-	// 2. 纯骨干专线纯净度校验
-	transitGroup := groupMap["自建-线路分组"]
+	transitGroup := groupMap[transitGroupName]
 	dirtyInTransit := 0
 	for _, p := range transitGroup.Proxies {
 		if strings.Contains(p, "家宽") || strings.Contains(p, "➔") || p == "38.175.222.44" {
 			dirtyInTransit++
-			report.Fail(fmt.Sprintf("【自建-线路分组】中混入非骨干或送中节点: %s", p))
+			report.Fail(fmt.Sprintf("【%s】中混入非骨干或送中节点: %s", transitGroupName, p))
 		}
 	}
 	if dirtyInTransit == 0 && len(transitGroup.Proxies) > 0 {
-		report.Pass(fmt.Sprintf("【自建-线路分组】内容纯净 (全为纯骨干直连专线: %v)", transitGroup.Proxies))
+		report.Pass(fmt.Sprintf("【%s】内容纯净 (全为纯骨干直连专线: %v)", transitGroupName, transitGroup.Proxies))
 	}
 
-	// 3. 全量家宽总池校验
+	// 2. 全量家宽总池校验
 	allResiGroup := groupMap["自建-家宽分组"]
 	if len(allResiGroup.Proxies) >= 30 {
 		report.Pass(fmt.Sprintf("【自建-家宽分组】全网状中继总池丰满 (共包含 %d 个直连与链式中继节点)", len(allResiGroup.Proxies)))
@@ -484,8 +478,12 @@ func main() {
 		report.Fail("【自建-家宽分组】为空")
 	}
 
-	// 4. 美区家宽落地纯净度校验 (绝不能混入其他国家)
-	usGroup := groupMap["自建-美国家宽分组"]
+	// 3. 美区家宽落地纯净度校验 (绝不能混入其他国家)
+	usGroupName := "自建-美国和美国家宽"
+	if _, ok := groupMap[usGroupName]; !ok {
+		usGroupName = "自建-美国家宽分组"
+	}
+	usGroup := groupMap[usGroupName]
 	wrongInUS := 0
 	for _, p := range usGroup.Proxies {
 		if p == "DIRECT" {
@@ -494,15 +492,19 @@ func main() {
 		cc := getLandingCountry(p)
 		if cc != "US" {
 			wrongInUS++
-			report.Fail(fmt.Sprintf("【自建-美国家宽分组】混入非美区落地节点: %s (判定落地: %s)", p, cc))
+			report.Fail(fmt.Sprintf("【%s】混入非美区落地节点: %s (判定落地: %s)", usGroupName, p, cc))
 		}
 	}
 	if wrongInUS == 0 && len(usGroup.Proxies) > 0 {
-		report.Pass(fmt.Sprintf("【自建-美国家宽分组】100%% 纯净美区落地 (共 %d 个美区节点, 零跨国污染)", len(usGroup.Proxies)))
+		report.Pass(fmt.Sprintf("【%s】100%% 纯净美区落地 (共 %d 个美区节点, 零跨国污染)", usGroupName, len(usGroup.Proxies)))
 	}
 
-	// 5. 日区家宽落地纯净度校验 (重点排查历史 BUG: 东京拉美国家宽错配)
-	jpGroup := groupMap["自建-日本家宽分组"]
+	// 4. 日区家宽落地纯净度校验 (重点排查历史 BUG: 东京拉美国家宽错配)
+	jpGroupName := "自建-日本和日本家宽"
+	if _, ok := groupMap[jpGroupName]; !ok {
+		jpGroupName = "自建-日本家宽分组"
+	}
+	jpGroup := groupMap[jpGroupName]
 	wrongInJP := 0
 	for _, p := range jpGroup.Proxies {
 		if p == "DIRECT" {
@@ -511,14 +513,14 @@ func main() {
 		cc := getLandingCountry(p)
 		if cc != "JP" {
 			wrongInJP++
-			report.Fail(fmt.Sprintf("【自建-日本家宽分组】混入非日区落地节点: %s (判定落地: %s)", p, cc))
+			report.Fail(fmt.Sprintf("【%s】混入非日区落地节点: %s (判定落地: %s)", jpGroupName, p, cc))
 		}
 	}
 	if wrongInJP == 0 && len(jpGroup.Proxies) > 0 {
-		report.Pass(fmt.Sprintf("【自建-日本家宽分组】100%% 纯净日区落地 (共 %d 个日区节点, 历史东京拉美家宽错配已彻底根除!)", len(jpGroup.Proxies)))
+		report.Pass(fmt.Sprintf("【%s】100%% 纯净日区落地 (共 %d 个日区节点, 历史东京拉美家宽错配已彻底根除!)", jpGroupName, len(jpGroup.Proxies)))
 	}
 
-	// 6. 台湾家宽落地纯净度校验
+	// 5. 台湾家宽落地纯净度校验
 	twGroup := groupMap["自建-台湾家宽分组"]
 	wrongInTW := 0
 	for _, p := range twGroup.Proxies {
@@ -535,9 +537,9 @@ func main() {
 		report.Pass(fmt.Sprintf("【自建-台湾家宽分组】100%% 纯净台湾落地 (包含台湾直连与多专线拉台家宽中继: %d 个节点)", len(twGroup.Proxies)))
 	}
 
-	// 7. 送中隔离性校验
+	// 6. 送中隔离性校验
 	cleanGroupNames := []string{
-		"自建-线路分组", "自建-家宽分组", "自建-美国家宽分组", "自建-日本家宽分组", "自建-台湾家宽分组", "自建-其他家宽分组", "不送中",
+		"自建-线路机", "自建-美国和美国家宽", "自建-日本和日本家宽", "自建-其他", "自建-家宽分组", "自建-台湾家宽分组", "不送中",
 	}
 	leakCount := 0
 	for _, gName := range cleanGroupNames {

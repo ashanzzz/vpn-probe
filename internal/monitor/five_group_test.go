@@ -358,3 +358,138 @@ func TestClassifyIntoFiveGroups_NilAndEmptyNameEdgeCases(t *testing.T) {
 		t.Fatalf("clean chain was falsely quarantined due to substring collision or empty name! USResiNodes: %v, ChinaLeakNodes: %v", payload.USResiNodes, payload.ChinaLeakNodes)
 	}
 }
+
+func TestClassifyIntoFiveGroups_EmojiAndPrefixDualContainmentLeak(t *testing.T) {
+	// 测试当 transit 节点名称包含 emoji 前缀（如 🇯🇵 JP-Tokyo-Softbank），而链式标签不带 emoji（或反过来）时，
+	// 双向包含送中核验能够精准阻断送中中继，并隔离至 ChinaLeakNodes
+	transits := []*model.NodeProbeResult{
+		{
+			ID:          "jp-sb",
+			Name:        "🇯🇵 JP-Tokyo-Softbank", // 真实节点带有国旗 emoji
+			OriginalURL: "vless://u1@1.1.1.1:443#%F0%9F%87%AF%F0%9F%87%B5%20JP-Tokyo-Softbank",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   true, // 中继送中！
+		},
+		{
+			ID:          "us-lax",
+			Name:        "US-LAX-4837",
+			OriginalURL: "vless://u2@2.2.2.2:443#US-LAX-4837",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   false,
+		},
+	}
+
+	resis := []*model.NodeProbeResult{
+		{
+			ID:          "us-pavlov",
+			Name:        "LZ-US-Pavlov-家宽",
+			OriginalURL: "socks5://u:***@167.104.167.151:1001#LZ-US-Pavlov-家宽",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   false,
+		},
+		{
+			ID:          "tw-hinet",
+			Name:        "🇹🇼 LZ-TW-HiNet-家宽", // 落地家宽带有 emoji
+			OriginalURL: "socks5://u:***@167.104.167.151:1002#LZ-TW-HiNet-家宽",
+			ExitCountry: "TW",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   true, // 落地家宽送中！
+		},
+	}
+
+	chains := []string{
+		// 链式 1: 中继带有 emoji 差异 (标签无 emoji，节点有 emoji) -> 必须被识别送中
+		"socks5://u:***@167.104.167.151:1001?dialerProxy=JP-Tokyo-Softbank#链式|JP-Tokyo-Softbank ➔ LZ-US-Pavlov-家宽",
+		// 链式 2: 落地带有 emoji 差异 (标签无 emoji，节点有 emoji) -> 必须被识别送中
+		"socks5://u:***@167.104.167.151:1002?dialerProxy=US-LAX-4837#链式|US-LAX-4837 ➔ LZ-TW-HiNet-家宽",
+		// 链式 3: 纯洁链式 (美西中继拉美国家宽) -> 必须正常进入 USResiNodes
+		"socks5://u:***@167.104.167.151:1001?dialerProxy=US-LAX-4837#链式|US-LAX-4837 ➔ LZ-US-Pavlov-家宽",
+	}
+
+	payload := ClassifyIntoFiveGroups(transits, resis, chains)
+
+	// 验证链式 1 与链式 2 被精准隔离进 ChinaLeakNodes
+	leakedChain1Found := false
+	leakedChain2Found := false
+	for _, n := range payload.ChinaLeakNodes {
+		if strings.Contains(n, "JP-Tokyo-Softbank ➔ LZ-US-Pavlov-家宽") {
+			leakedChain1Found = true
+		}
+		if strings.Contains(n, "US-LAX-4837 ➔ LZ-TW-HiNet-家宽") {
+			leakedChain2Found = true
+		}
+	}
+	if !leakedChain1Found {
+		t.Fatalf("chain 1 with relay ChinaExit failed to be quarantined! ChinaLeakNodes: %v", payload.ChinaLeakNodes)
+	}
+	if !leakedChain2Found {
+		t.Fatalf("chain 2 with residential ChinaExit failed to be quarantined! ChinaLeakNodes: %v", payload.ChinaLeakNodes)
+	}
+
+	// 验证链式 1 与链式 2 没有泄漏至正常分组
+	for _, n := range payload.USResiNodes {
+		if strings.Contains(n, "JP-Tokyo-Softbank ➔ LZ-US-Pavlov-家宽") {
+			t.Fatalf("chain 1 leaked into USResiNodes!")
+		}
+	}
+	for _, n := range payload.OtherNodes {
+		if strings.Contains(n, "US-LAX-4837 ➔ LZ-TW-HiNet-家宽") {
+			t.Fatalf("chain 2 leaked into OtherNodes!")
+		}
+	}
+
+	// 验证干净链式 3 正常存在于 USResiNodes
+	cleanFound := false
+	for _, n := range payload.USResiNodes {
+		if strings.Contains(n, "US-LAX-4837 ➔ LZ-US-Pavlov-家宽") {
+			cleanFound = true
+			break
+		}
+	}
+	if !cleanFound {
+		t.Fatalf("clean chain 3 was not found in USResiNodes: %v", payload.USResiNodes)
+	}
+}
+
+func TestMatchNodeName_NonASCIICollisionProtection(t *testing.T) {
+	// 1. 验证 Emoji 与常见装饰符号前缀能正常匹配
+	emojiCases := [][2]string{
+		{"JP-Tokyo", "🇯🇵 JP-Tokyo"},
+		{"🇯🇵 JP-Tokyo", "JP-Tokyo"},
+		{"LZ-TW-HiNet-家宽", "🇹🇼 LZ-TW-HiNet-家宽"},
+		{"US-LAX", "🚀 US-LAX"},
+		{"Node-01", "✨ | Node-01"},
+		{"ExactMatch", "ExactMatch"},
+		{"case_insensitive", "CASE_INSENSITIVE"},
+	}
+	for _, pair := range emojiCases {
+		if !MatchNodeName(pair[0], pair[1]) {
+			t.Errorf("expected MatchNodeName(%q, %q) = true, got false", pair[0], pair[1])
+		}
+	}
+
+	// 2. 验证人类语言（如中文、英文、数字等）前缀绝不能被误判为 Emoji，杜绝子串碰撞误杀
+	textCollisionCases := [][2]string{
+		{"专线", "送中-专线"},
+		{"送中-专线", "专线"},
+		{"家宽", "美国家宽"},
+		{"东京软银", "香港-东京软银"},
+		{"BGP", "上海-BGP"},
+		{"Transit", "US-Leaked-Transit"},
+		{"Node-1", "Node-11"},
+		{"", "Node"},
+		{"Node", ""},
+	}
+	for _, pair := range textCollisionCases {
+		if MatchNodeName(pair[0], pair[1]) {
+			t.Errorf("expected MatchNodeName(%q, %q) = false (non-ASCII text prefix must not be treated as emoji), got true", pair[0], pair[1])
+		}
+	}
+}

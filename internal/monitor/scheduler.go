@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"vpn-probe/internal/config"
 	"vpn-probe/internal/healer"
@@ -1012,14 +1013,14 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 			targetPart = strings.TrimSpace(chainLabel[arrowIdx+len("➔"):])
 		}
 
-		// 检查中继专线或落地家宽是否有任一端送中 (严格匹配节点名称，防短 ID / 包含串误判)
+		// 检查中继专线或落地家宽是否有任一端送中 (严格匹配节点名称与 emoji 变体，防短 ID / 包含串误判)
 		chainLeaked := false
 		if transitPart != "" {
 			for _, t := range transits {
 				if t == nil || !t.ChinaExit || strings.TrimSpace(t.Name) == "" {
 					continue
 				}
-				if transitPart == t.Name || strings.Contains(transitPart, t.Name) {
+				if MatchNodeName(transitPart, t.Name) {
 					chainLeaked = true
 					break
 				}
@@ -1030,7 +1031,7 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 				if r == nil || !r.ChinaExit || strings.TrimSpace(r.Name) == "" {
 					continue
 				}
-				if targetPart == r.Name || strings.Contains(targetPart, r.Name) {
+				if MatchNodeName(targetPart, r.Name) {
 					chainLeaked = true
 					break
 				}
@@ -1075,4 +1076,42 @@ func (s *Scheduler) InjectNodeStateForTest(key string, res *model.NodeProbeResul
 		Config:     config.MonitoredNode{Name: key, URL: origURL, IsSelf: isSelf},
 		LastResult: res,
 	}
+}
+
+// MatchNodeName 精确匹配节点名称，安全兼容带有国旗/emoji 前缀的变体，杜绝子串碰撞误杀
+func MatchNodeName(a, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b || strings.EqualFold(a, b) {
+		return true
+	}
+	if strings.HasSuffix(a, b) {
+		prefix := strings.TrimSpace(strings.TrimSuffix(a, b))
+		if isEmojiOrSymbolPrefix(prefix) {
+			return true
+		}
+	}
+	if strings.HasSuffix(b, a) {
+		prefix := strings.TrimSpace(strings.TrimSuffix(b, a))
+		if isEmojiOrSymbolPrefix(prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isEmojiOrSymbolPrefix(prefix string) bool {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return true
+	}
+	for _, r := range prefix {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
 }

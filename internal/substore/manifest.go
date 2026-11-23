@@ -120,7 +120,7 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		ShareLinks:    make([]ShareLinkInfo, 0),
 		Scripts:       make(map[string]ScriptFileInfo),
 		ScriptList:    make([]string, 0),
-		SyncMechanism: "三层原子架构: ashan-transit-direct (线路机) + ashan-resi-direct (家宽) + ashan-chain (链式代理) -> ashan-纯净合集 -> ashan / Ashan 订阅文件",
+		SyncMechanism: "方案B五维策略组架构: ashan-transit (线路机) + 区域家宽全家桶 (ashan-us-resi, ashan-jp-resi, ashan-other) + ashan-china-leak (送中隔离) -> ashan-master / Q-汇总 -> ashan / Q 订阅文件",
 		UpdatedAt:     time.Now().Format("2006-01-02 15:04:05"),
 	}
 

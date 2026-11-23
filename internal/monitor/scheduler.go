@@ -250,29 +250,84 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 		return nil
 	}
 
-	// 核心逻辑限制：只针对自建 VPS 线路机 (ashan-transit-direct) 与 家宽机 (ashan-resi-direct)，外部机场连接绝不纳入探测
-	subsToPull := []string{"ashan-transit-direct", "ashan-resi-direct"}
-	var dynamicNodes []config.MonitoredNode
+	subs, err := s.substoreClient.GetSubscriptions(ctx)
+	if err != nil {
+		logger.Warnf("[MONITOR] Dynamic pull from SubStore failed: %v (falling back to static)", err)
+		return err
+	}
 
-	for _, subName := range subsToPull {
-		content, err := s.substoreClient.GetSubscriptionContent(ctx, subName)
-		if err != nil {
-			logger.Warnf("[MONITOR] Dynamic pull from SubStore sub '%s' failed: %v (falling back to static)", subName, err)
-			continue
+	subMap := make(map[string]string)
+	for _, sub := range subs {
+		subMap[sub.Name] = sub.Content
+	}
+
+	// 方案B五维自建策略组优先：自建线路机 (ashan-transit) 与 自建全家桶 (ashan-us-resi, ashan-jp-resi, ashan-other, ashan-china-leak)
+	fiveGroups := []string{
+		"ashan-transit",
+		"ashan-us-resi",
+		"ashan-jp-resi",
+		"ashan-other",
+		"ashan-china-leak",
+	}
+
+	var targetSubs []string
+	hasFiveGroup := false
+	for _, name := range fiveGroups {
+		if _, exists := subMap[name]; exists {
+			targetSubs = append(targetSubs, name)
+			hasFiveGroup = true
 		}
+	}
 
+	// 若未发现任何 5 组订阅，尝试向后兼容回退旧三层独立订阅
+	if !hasFiveGroup {
+		legacySubs := []string{"ashan-transit-direct", "ashan-resi-direct"}
+		for _, name := range legacySubs {
+			if _, exists := subMap[name]; exists {
+				targetSubs = append(targetSubs, name)
+			}
+		}
+	}
+
+	if len(targetSubs) == 0 {
+		s.mu.RLock()
+		existingCount := len(s.nodeStates)
+		s.mu.RUnlock()
+		logger.Warnf("[MONITOR] SubStore has no self-hosted subscriptions, preserving existing %d nodes", existingCount)
+		return nil
+	}
+
+	var dynamicNodes []config.MonitoredNode
+	seenEndpoints := make(map[string]bool)
+
+	for _, subName := range targetSubs {
+		content := subMap[subName]
 		lines := strings.Split(content, "\n")
-		subNodesCount := 0
 		for _, line := range lines {
 			trimmed := strings.TrimSpace(line)
 			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 				continue
 			}
+
+			// 彻底过滤链式中继（链式代理为运行时中转池动态组装，不作为基础原子直连探针）
+			if strings.Contains(trimmed, "dialerProxy=") || strings.Contains(trimmed, "➔") || strings.Contains(trimmed, "链式|") {
+				continue
+			}
+
 			parsed, parseErr := probe.ParseLink(trimmed)
 			if parseErr != nil {
 				continue
 			}
-			subNodesCount++
+
+			ep := parsed.Tag
+			if h, p, s := parseEndpoint(trimmed); h != "" {
+				ep = fmt.Sprintf("%s:%d:%s", h, p, s)
+			}
+			if seenEndpoints[ep] {
+				continue
+			}
+			seenEndpoints[ep] = true
+
 			dynamicNodes = append(dynamicNodes, config.MonitoredNode{
 				Name:   parsed.Tag,
 				URL:    trimmed,
@@ -311,7 +366,7 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 			}
 		}
 
-		isResi := strings.Contains(n.Name, "家宽") || strings.Contains(n.URL, "socks")
+		isResi := strings.Contains(n.Name, "家宽") || strings.Contains(n.URL, "socks") || strings.Contains(n.URL, "167.104.167.151") || strings.HasPrefix(n.Name, "LZ-")
 		nodeType := "transit"
 		if isResi {
 			nodeType = "residential"

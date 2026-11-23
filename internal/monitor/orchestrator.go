@@ -494,6 +494,13 @@ func SaveCustomGroup(def model.CustomGroupDef) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
+	// 严格校验 DisplayName 唯一性：不能与任何其他分组（无论在当前分组前还是后）的 DisplayName 冲突
+	for _, g := range groups {
+		if g.Name != def.Name && g.DisplayName == def.DisplayName {
+			return fmt.Errorf("duplicate display_name %q", def.DisplayName)
+		}
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	def.UpdatedAt = now
 	updated := false
@@ -503,9 +510,6 @@ func SaveCustomGroup(def model.CustomGroupDef) error {
 			groups[i] = def
 			updated = true
 			break
-		}
-		if g.DisplayName == def.DisplayName {
-			return fmt.Errorf("duplicate display_name %q", def.DisplayName)
 		}
 	}
 	if def.CreatedAt == "" {
@@ -631,6 +635,12 @@ func SaveCustomChains(chains []CustomChainBind) error {
 
 // BindExplicitChain 显式创建一条“指定线路机拉指定家宽机”的定制连接 (满足用户 API 灵活拉线路需求)
 func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomChainBind, error) {
+	transitName = strings.TrimSpace(transitName)
+	resiName = strings.TrimSpace(resiName)
+	if transitName == "" || resiName == "" {
+		return CustomChainBind{}, fmt.Errorf("transit and residential node names cannot be empty")
+	}
+
 	if o.scheduler == nil {
 		return CustomChainBind{}, fmt.Errorf("scheduler not available")
 	}
@@ -644,11 +654,19 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 			continue
 		}
 		res := s.LastResult
-		if strings.EqualFold(res.Name, transitName) || strings.EqualFold(res.ID, transitName) || strings.Contains(strings.ToLower(res.Name), strings.ToLower(transitName)) {
-			transitNode = res
+		if transitNode == nil || !strings.EqualFold(transitNode.Name, transitName) {
+			if strings.EqualFold(res.Name, transitName) || strings.EqualFold(res.ID, transitName) {
+				transitNode = res
+			} else if transitNode == nil && strings.Contains(strings.ToLower(res.Name), strings.ToLower(transitName)) {
+				transitNode = res
+			}
 		}
-		if strings.EqualFold(res.Name, resiName) || strings.EqualFold(res.ID, resiName) || strings.Contains(strings.ToLower(res.Name), strings.ToLower(resiName)) {
-			resiNode = res
+		if resiNode == nil || !strings.EqualFold(resiNode.Name, resiName) {
+			if strings.EqualFold(res.Name, resiName) || strings.EqualFold(res.ID, resiName) {
+				resiNode = res
+			} else if resiNode == nil && strings.Contains(strings.ToLower(res.Name), strings.ToLower(resiName)) {
+				resiNode = res
+			}
 		}
 	}
 	o.scheduler.mu.RUnlock()
@@ -755,6 +773,11 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 
 // UnbindExplicitChain 移除某条指定的显式中继或指定家宽的旧连接
 func (o *Orchestrator) UnbindExplicitChain(target string) error {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return fmt.Errorf("custom chain target cannot be empty")
+	}
+
 	customChainsMu.Lock()
 	defer customChainsMu.Unlock()
 

@@ -176,3 +176,185 @@ func TestMergeCustomChains(t *testing.T) {
 		t.Fatalf("expected merged custom chain 'LZ-SG-StarHub' to be present")
 	}
 }
+
+func TestClassifyIntoFiveGroups_ChainChinaExitQuarantine(t *testing.T) {
+	// 验证：当链式节点的中继或落地家宽端任一端送中，该链必须被送中隔离箱拦截，严禁漏入干净分组
+	transits := []*model.NodeProbeResult{
+		{
+			Name:        "US-Clean-Transit",
+			OriginalURL: "vless://u1@1.1.1.1:443#US-Clean-Transit",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   false,
+		},
+		{
+			Name:        "US-Leaked-Transit",
+			OriginalURL: "vless://u2@2.2.2.2:443#US-Leaked-Transit",
+			ExitCountry: "CN",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   true, // 送中中继
+		},
+	}
+	resis := []*model.NodeProbeResult{
+		{
+			Name:        "LZ-US-Clean-家宽",
+			OriginalURL: "socks5://u:***@167.104.167.151:1001#LZ-US-Clean-家宽",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   false,
+		},
+		{
+			Name:        "LZ-US-Leaked-家宽",
+			OriginalURL: "socks5://u:***@167.104.167.151:1002#LZ-US-Leaked-家宽",
+			ExitCountry: "CN",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   true, // 送中落地家宽
+		},
+	}
+
+	chains := []string{
+		// 1. 全干净链式
+		"socks5://u:***@167.104.167.151:1001?dialerProxy=US-Clean-Transit#链式|US-Clean-Transit ➔ LZ-US-Clean-家宽",
+		// 2. 落地送中链式
+		"socks5://u:***@167.104.167.151:1002?dialerProxy=US-Clean-Transit#链式|US-Clean-Transit ➔ LZ-US-Leaked-家宽",
+		// 3. 中继送中链式
+		"socks5://u:***@167.104.167.151:1001?dialerProxy=US-Leaked-Transit#链式|US-Leaked-Transit ➔ LZ-US-Clean-家宽",
+	}
+
+	payload := ClassifyIntoFiveGroups(transits, resis, chains)
+
+	// 验证 ChinaLeakNodes 应收拢：1 个送中线路机 + 1 个送中家宽 + 2 个送中链式 = 共 4 个送中项
+	if len(payload.ChinaLeakNodes) != 4 {
+		t.Fatalf("expected 4 nodes in ChinaLeakNodes, got %d: %v", len(payload.ChinaLeakNodes), payload.ChinaLeakNodes)
+	}
+
+	// 验证干净美区组只能包含干净节点，绝不能包含送中链
+	for _, n := range payload.USResiNodes {
+		if strings.Contains(n, "Leaked") {
+			t.Fatalf("leaking chain contaminated USResiNodes: %s", n)
+		}
+	}
+	// 验证唯一存活的干净链式进入了 USResiNodes
+	foundCleanChain := false
+	for _, n := range payload.USResiNodes {
+		if strings.Contains(n, "US-Clean-Transit ➔ LZ-US-Clean-家宽") {
+			foundCleanChain = true
+			break
+		}
+	}
+	if !foundCleanChain {
+		t.Fatalf("expected clean chain to be present in USResiNodes")
+	}
+}
+
+func TestClassifyIntoFiveGroups_ChainURLParameterSafety(t *testing.T) {
+	transits := []*model.NodeProbeResult{
+		{
+			Name:        "JP-SoftBank",
+			OriginalURL: "vless://u1@45.192.242.72:24444#JP-SoftBank",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   false,
+		},
+	}
+	resis := []*model.NodeProbeResult{
+		{
+			Name:        "LZ-JP-KDDI-家宽",
+			OriginalURL: "socks5://u:***@167.104.167.151:20640#LZ-JP-KDDI-家宽",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   false,
+		},
+	}
+
+	// URL query 参数中包含特殊字符 | 与复杂的 Reality 参数
+	chains := []string{
+		"vless://uuid@167.104.167.151:20640?encryption=none&pbk=key|split&sni=apple.com&dialerProxy=JP-SoftBank#链式|JP-SoftBank ➔ LZ-JP-KDDI-家宽",
+	}
+
+	payload := ClassifyIntoFiveGroups(transits, resis, chains)
+
+	if len(payload.JPResiNodes) != 3 { // 1 transit + 1 resi + 1 chain
+		t.Fatalf("expected 3 nodes in JPResiNodes, got %d: %v", len(payload.JPResiNodes), payload.JPResiNodes)
+	}
+	foundChain := false
+	for _, n := range payload.JPResiNodes {
+		if strings.Contains(n, "JP-SoftBank ➔ LZ-JP-KDDI-家宽") {
+			foundChain = true
+			break
+		}
+	}
+	if !foundChain {
+		t.Fatalf("expected complex URL chain to be safely resolved into JPResiNodes")
+	}
+}
+
+func TestClassifyIntoFiveGroups_NilAndEmptyNameEdgeCases(t *testing.T) {
+	// 验证：包含 nil 节点、包含空 Name 送中节点、包含短名称送中节点时，不会引发 panic 或误判隔离
+	transits := []*model.NodeProbeResult{
+		nil, // nil 节点防护
+		{
+			ID:          "1", // 短 ID 不得污染名字包含 "1" 的干净节点
+			Name:        "",  // 空 Name 送中节点防护
+			OriginalURL: "vless://u1@1.1.1.1:443#EmptyName",
+			ExitCountry: "CN",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   true,
+		},
+		{
+			ID:          "leak-transit",
+			Name:        "US-Leaked-Transit-Extra",
+			OriginalURL: "vless://u2@2.2.2.2:443#US-Leaked-Transit-Extra",
+			ExitCountry: "CN",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   true,
+		},
+		{
+			ID:          "clean-transit",
+			Name:        "Transit", // 名字为 "Transit"，恰为送中节点的子串，但不得被误杀
+			OriginalURL: "vless://u3@3.3.3.3:443#Transit",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   false,
+		},
+	}
+	resis := []*model.NodeProbeResult{
+		nil, // nil 节点防护
+		{
+			ID:          "resi-01",
+			Name:        "LZ-US-Resi-01", // 含有 "1"，不得被 ID="1" 误杀
+			OriginalURL: "socks5://u:***@167.104.167.151:1001#LZ-US-Resi-01",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   false,
+		},
+	}
+
+	chains := []string{
+		"socks5://u:***@167.104.167.151:1001?dialerProxy=Transit#链式|Transit ➔ LZ-US-Resi-01",
+	}
+
+	payload := ClassifyIntoFiveGroups(transits, resis, chains)
+
+	// 验证干净链进入 USResiNodes，没有发生误杀
+	foundCleanChain := false
+	for _, n := range payload.USResiNodes {
+		if strings.Contains(n, "Transit ➔ LZ-US-Resi-01") {
+			foundCleanChain = true
+			break
+		}
+	}
+	if !foundCleanChain {
+		t.Fatalf("clean chain was falsely quarantined due to substring collision or empty name! USResiNodes: %v, ChinaLeakNodes: %v", payload.USResiNodes, payload.ChinaLeakNodes)
+	}
+}

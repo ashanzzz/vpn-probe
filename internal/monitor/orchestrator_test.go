@@ -553,3 +553,138 @@ func TestOrchestrator_ChainWithoutTransitDoesNotMatchFirstTransit(t *testing.T) 
 	}
 }
 
+func TestSaveCustomGroup_DuplicateDisplayNameLaterInSlice(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := tmpDir + "/custom_groups.json"
+	revert := SetCustomGroupsFileForTest(customPath)
+	defer revert()
+
+	// 保存两个分组 g1 (Alpha) 与 g2 (Beta)
+	g1 := model.CustomGroupDef{
+		Name:        "g1",
+		DisplayName: "Alpha",
+		Enabled:     true,
+		Order:       10,
+	}
+	g2 := model.CustomGroupDef{
+		Name:        "g2",
+		DisplayName: "Beta",
+		Enabled:     true,
+		Order:       20,
+	}
+	if err := SaveCustomGroup(g1); err != nil {
+		t.Fatalf("save g1: %v", err)
+	}
+	if err := SaveCustomGroup(g2); err != nil {
+		t.Fatalf("save g2: %v", err)
+	}
+
+	// 试图将位于索引 0 的 g1 的 DisplayName 改为排在其后的 g2 的 "Beta"
+	g1Updated := model.CustomGroupDef{
+		Name:        "g1",
+		DisplayName: "Beta", // 冲突！
+		Enabled:     true,
+		Order:       10,
+	}
+	err := SaveCustomGroup(g1Updated)
+	if err == nil {
+		t.Fatalf("expected duplicate display_name error when updating g1 to match g2's display_name, but got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate display_name") {
+		t.Fatalf("expected error containing 'duplicate display_name', got: %v", err)
+	}
+}
+
+func TestUnbindExplicitChain_EmptyTargetSafety(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := tmpDir + "/custom_chains.json"
+	revert := SetCustomChainsFileForTest(customPath)
+	defer revert()
+
+	chains := []CustomChainBind{
+		{
+			ID:              "bind-1",
+			TransitName:     "TransitA",
+			ResidentialName: "ResiA",
+			ChainName:       "链式|TransitA ➔ ResiA",
+		},
+	}
+	if err := SaveCustomChains(chains); err != nil {
+		t.Fatalf("save custom chains: %v", err)
+	}
+
+	orc := NewOrchestrator(nil)
+
+	// 验证空 target / 纯空格不会误删除所有链
+	if err := orc.UnbindExplicitChain(""); err == nil {
+		t.Fatalf("expected error for empty target, got nil")
+	}
+	if err := orc.UnbindExplicitChain("   "); err == nil {
+		t.Fatalf("expected error for whitespace target, got nil")
+	}
+
+	// 验证链依然完好保存
+	saved, err := LoadCustomChains()
+	if err != nil {
+		t.Fatalf("load custom chains: %v", err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("expected 1 chain retained, got %d", len(saved))
+	}
+}
+
+func TestBindExplicitChain_ExactMatchPrecedence(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := tmpDir + "/custom_chains.json"
+	revert := SetCustomChainsFileForTest(customPath)
+	defer revert()
+
+	sch := &Scheduler{
+		nodeStates: make(map[string]*NodeState),
+	}
+	// 注入包含前缀模糊子串的两个节点：一个全字匹配，一个较长包含匹配
+	sch.nodeStates["jp-tokyo-partial"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "jp-tokyo-extended",
+			Name:        "JP-Tokyo-IIJ-Extended",
+			OriginalURL: "vless://u1@1.1.1.1:443#JP-Tokyo-IIJ-Extended",
+			NodeType:    "transit",
+			Online:      true,
+		},
+	}
+	sch.nodeStates["jp-tokyo-exact"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "jp-tokyo",
+			Name:        "JP-Tokyo",
+			OriginalURL: "vless://u2@2.2.2.2:443#JP-Tokyo",
+			NodeType:    "transit",
+			Online:      true,
+		},
+	}
+	sch.nodeStates["resi-exact"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "resi-1",
+			Name:        "LZ-US-Pavlov-家宽",
+			OriginalURL: "vless://u3@3.3.3.3:443#LZ-US-Pavlov-家宽",
+			NodeType:    "residential",
+			Online:      true,
+		},
+	}
+
+	orc := NewOrchestrator(sch)
+
+	// 验证入参非空
+	if _, err := orc.BindExplicitChain("", "LZ-US-Pavlov-家宽"); err == nil {
+		t.Fatalf("expected error for empty transitName")
+	}
+
+	// 验证精确匹配优先
+	bind, err := orc.BindExplicitChain("JP-Tokyo", "LZ-US-Pavlov-家宽")
+	if err != nil {
+		t.Fatalf("bind explicit chain: %v", err)
+	}
+	if bind.TransitName != "JP-Tokyo" {
+		t.Fatalf("expected exact match 'JP-Tokyo', got '%s'", bind.TransitName)
+	}
+}
+

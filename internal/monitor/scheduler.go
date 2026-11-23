@@ -932,14 +932,15 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 
 	// 2. 遍历所有自建节点，严格做送中隔离
 	leakURLs := make(map[string]bool)
+
 	for _, t := range transits {
-		if t.Online && t.ChinaExit {
+		if t != nil && t.Online && t.ChinaExit {
 			leakURLs[t.OriginalURL] = true
 			payload.ChinaLeakNodes = append(payload.ChinaLeakNodes, t.OriginalURL)
 		}
 	}
 	for _, r := range resis {
-		if r.Online && r.ChinaExit {
+		if r != nil && r.Online && r.ChinaExit {
 			leakURLs[r.OriginalURL] = true
 			payload.ChinaLeakNodes = append(payload.ChinaLeakNodes, r.OriginalURL)
 		}
@@ -955,7 +956,7 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 	// 4. 地域划分：美区 (US) 与 日区 (JP) 以及 其他 (Other)
 	// 4.1 线路机归类 (基于通用国别判定，绝不绑定具体运营商/机房)
 	for _, t := range transits {
-		if !t.Online || leakURLs[t.OriginalURL] || !activeTransitSet[t.OriginalURL] {
+		if t == nil || !t.Online || leakURLs[t.OriginalURL] || !activeTransitSet[t.OriginalURL] {
 			continue
 		}
 		country := model.ResolveCountry(t.ExitCountry, t.Name)
@@ -972,7 +973,7 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 	// 4.2 家宽直连归类 (自建-美国和美国家宽 / 自建-日本和日本家宽)
 	uniqueResis := deduplicateNodeResults(resis)
 	for _, r := range uniqueResis {
-		if leakURLs[r.OriginalURL] {
+		if r == nil || leakURLs[r.OriginalURL] {
 			continue
 		}
 		if !r.Online && r.Diagnostic != nil && r.Diagnostic.FaultType == model.FaultMachineDown {
@@ -989,18 +990,58 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 		}
 	}
 
-	// 4.3 链式中继归类 (依落地家宽端国别分类到对应的美区/日区/其他全家桶)
+	// 4.3 链式中继归类 (依落地家宽端国别分类到对应的美区/日区/其他全家桶，严格做双向送中隔离)
 	for _, ch := range chains {
-		decodedCh, err := url.QueryUnescape(ch)
-		if err != nil {
-			decodedCh = ch
+		chainName := ch
+		if hashIdx := strings.Index(ch, "#"); hashIdx != -1 {
+			chainName = ch[hashIdx+1:]
 		}
-		targetPart := decodedCh
-		if idx := strings.Index(decodedCh, "➔"); idx != -1 {
-			targetPart = decodedCh[idx+len("➔"):]
-		} else if hashIdx := strings.Index(decodedCh, "#"); hashIdx != -1 {
-			targetPart = decodedCh[hashIdx+1:]
+		if uName, err := url.QueryUnescape(chainName); err == nil {
+			chainName = uName
 		}
+
+		// 优先从标签名中解析中继与落地目标，避免 URL 参数/密码中的特殊符号干扰
+		chainLabel := chainName
+		if pipeIdx := strings.Index(chainLabel, "|"); pipeIdx != -1 {
+			chainLabel = strings.TrimSpace(chainLabel[pipeIdx+1:])
+		}
+		transitPart := ""
+		targetPart := chainLabel
+		if arrowIdx := strings.Index(chainLabel, "➔"); arrowIdx != -1 {
+			transitPart = strings.TrimSpace(chainLabel[:arrowIdx])
+			targetPart = strings.TrimSpace(chainLabel[arrowIdx+len("➔"):])
+		}
+
+		// 检查中继专线或落地家宽是否有任一端送中 (严格匹配节点名称，防短 ID / 包含串误判)
+		chainLeaked := false
+		if transitPart != "" {
+			for _, t := range transits {
+				if t == nil || !t.ChinaExit || strings.TrimSpace(t.Name) == "" {
+					continue
+				}
+				if transitPart == t.Name || strings.Contains(transitPart, t.Name) {
+					chainLeaked = true
+					break
+				}
+			}
+		}
+		if !chainLeaked && targetPart != "" {
+			for _, r := range resis {
+				if r == nil || !r.ChinaExit || strings.TrimSpace(r.Name) == "" {
+					continue
+				}
+				if targetPart == r.Name || strings.Contains(targetPart, r.Name) {
+					chainLeaked = true
+					break
+				}
+			}
+		}
+
+		if chainLeaked {
+			payload.ChinaLeakNodes = append(payload.ChinaLeakNodes, ch)
+			continue
+		}
+
 		country := model.ResolveCountry("", targetPart)
 		switch country {
 		case "US":

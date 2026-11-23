@@ -115,3 +115,20 @@ func TestMatchMemberName_Symmetric(t *testing.T) {
 		t.Fatalf("expected mismatch to return false")
 	}
 }
+
+func TestCompileScript_EmptyProxiesFallbackInScript(t *testing.T) {
+	script, err := CompileScript([]model.CustomGroupDef{
+		{
+			Name:        "test-group",
+			DisplayName: "Test Group",
+			Enabled:     true,
+			Type:        "select",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("CompileScript: %v", err)
+	}
+	if !strings.Contains(script, "g.proxies.length === 0") || !strings.Contains(script, "['DIRECT']") {
+		t.Fatalf("expected script to contain defensive empty proxies fallback to DIRECT")
+	}
+}

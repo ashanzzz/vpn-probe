@@ -147,6 +147,9 @@ const vpnGroups = vpnExisting.filter(g => g && !vpnDefined.has(g.name));
 for (const g of vpnGroups) {
   if (Array.isArray(g.proxies)) {
     g.proxies = g.proxies.filter(n => !vpnDefined.has(n));
+    if (g.proxies.length === 0) {
+      g.proxies = ['DIRECT'];
+    }
   }
 }
 

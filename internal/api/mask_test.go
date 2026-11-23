@@ -14,12 +14,30 @@ func TestMaskNodeURL(t *testing.T) {
 	}{
 		{
 			name:  "SOCKS5 with user and pass",
-			input: "socks5://user1:-n9U8PoHRK7uVb2zxcKpww@167.104.167.151:40981#LZ-JP-SoftBank-家宽",
+			input: "socks5://user1:realSecretPass123@167.104.167.151:40981#LZ-JP-SoftBank-家宽",
 			contains: []string{
 				"socks5://user1:******@167.104.167.151:40981",
 				"#LZ-JP-SoftBank-家宽",
 			},
-			omits: []string{"-n9U8PoHRK7uVb2zxcKpww"},
+			omits: []string{"realSecretPass123"},
+		},
+		{
+			name:  "SOCKS5 with pass only",
+			input: "socks5://singleSecretPass456@167.104.167.151:40981#LZ-JP-SoftBank-家宽",
+			contains: []string{
+				"socks5://******@167.104.167.151:40981",
+				"#LZ-JP-SoftBank-家宽",
+			},
+			omits: []string{"singleSecretPass456"},
+		},
+		{
+			name:  "Hysteria2 with password",
+			input: "hysteria2://myHy2SecretPassword@38.175.222.44:36565?sni=hy2.example.com#Hy2-Node",
+			contains: []string{
+				"hysteria2://******@38.175.222.44:36565",
+				"#Hy2-Node",
+			},
+			omits: []string{"myHy2SecretPassword"},
 		},
 		{
 			name:  "VLESS Reality with UUID, pbk, sid",

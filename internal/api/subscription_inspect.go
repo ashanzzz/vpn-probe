@@ -295,7 +295,7 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 						psum.Kind = "residential"
 						psum.IsSelfHosted = true
 						psum.Online = true
-					} else if strings.Contains(pName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(pName, "4837") {
+					} else if strings.Contains(pName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(pName, "Softbank") || strings.Contains(pName, "SoftBank") || strings.Contains(pName, "4837") || strings.Contains(pName, "LAX") || strings.Contains(pName, "洛杉矶") || strings.Contains(pName, "美西") {
 						psum.Kind = "transit"
 						psum.IsSelfHosted = true
 						psum.Online = true

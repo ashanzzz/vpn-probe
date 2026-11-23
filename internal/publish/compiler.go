@@ -113,17 +113,22 @@ const vpnNames = new Set(vpnCfg.proxies.map(p => p && p.name).filter(Boolean));
 const vpnDefined = new Set(vpnUserGroups.map(g => g.name));
 
 function resolveProxyName(targetName, allNames) {
+  const trimmed = (targetName || '').trim();
+  if (trimmed === 'DIRECT' || trimmed === 'REJECT') return trimmed;
+  if (allNames.has(trimmed)) return trimmed;
   if (allNames.has(targetName)) return targetName;
-  if (targetName.includes('➔') || targetName.startsWith('链式|')) {
-    const raw = targetName.replace(/^链式\|/, '');
+  if (trimmed.includes('➔')) {
+    let raw = trimmed;
+    const pipeIdx = raw.indexOf('|');
+    if (pipeIdx !== -1) raw = raw.slice(pipeIdx + 1);
     const parts = raw.split('➔');
     if (parts.length === 2) {
       const transit = parts[0].trim();
       const resi = parts[1].trim();
       let prefix = '';
-      if (transit.includes('4837') || transit.includes('LAX')) prefix = 'LAX-';
+      if (transit.includes('4837') || transit.includes('LAX') || transit.includes('洛杉矶') || transit.includes('美西')) prefix = 'LAX-';
       else if (transit.includes('IIJ')) prefix = 'IIJ-';
-      else if (transit.includes('Softbank') || transit.includes('SoftBank') || transit.includes('SB')) prefix = 'SB-';
+      else if (transit.includes('Softbank') || transit.includes('SoftBank') || transit.includes('SB') || transit.includes('软银')) prefix = 'SB-';
 
       let suffix = '';
       const keywords = ['Pavlov', 'Frontier', 'Verizon', 'BIGLOBE', 'KDDI', 'SoftBank', 'GLBB', 'StarHub', 'KT', 'HiNet'];
@@ -131,8 +136,11 @@ function resolveProxyName(targetName, allNames) {
         if (resi.includes(kw)) { suffix = kw; break; }
       }
       if (prefix && suffix) {
+        const prefixLower = prefix.toLowerCase();
+        const suffixLower = suffix.toLowerCase();
         for (const name of allNames) {
-          if (name.includes(prefix) && name.includes(suffix)) {
+          const nameLower = (name || '').toLowerCase();
+          if (nameLower.includes(prefixLower) && nameLower.includes(suffixLower)) {
             return name;
           }
         }

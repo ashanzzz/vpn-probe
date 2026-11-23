@@ -58,10 +58,20 @@ func TestOrchestrationEndpoints(t *testing.T) {
 	sch.InjectNodeStateForTest("US-Resi", &model.NodeProbeResult{
 		ID:          "2",
 		Name:        "LZ-US-Pavlov-家宽01",
-		OriginalURL: "socks5://u:p@1.2.3.4:1001#LZ-US-家宽01",
+		OriginalURL: "socks5://u:***@1.2.3.4:1001#LZ-US-家宽01",
 		ExitCountry: "US",
 		Online:      true,
 		NodeType:    "residential",
+		TestedAt:    time.Now(),
+	})
+	sch.InjectNodeStateForTest("CN-Leak", &model.NodeProbeResult{
+		ID:          "3",
+		Name:        "送中测试节点",
+		OriginalURL: "vless://u3@9.9.9.9:443#CN-Leak",
+		ExitCountry: "CN",
+		ChinaExit:   true,
+		Online:      true,
+		NodeType:    "transit",
 		TestedAt:    time.Now(),
 	})
 
@@ -87,6 +97,29 @@ func TestOrchestrationEndpoints(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 		if body.Count < 2 {
 			t.Errorf("expected at least 2 atoms, got %d", body.Count)
+		}
+	})
+
+	// 2.1 测试 GET /api/orchestration/atoms?china_leak_only=true
+	t.Run("GetAtoms_ChinaLeakOnly", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/orchestration/atoms?china_leak_only=true", nil)
+		req.Header.Set("Authorization", "Bearer admin-token-123")
+		resp, err := server.app.Test(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+
+		var body struct {
+			Status string           `json:"status"`
+			Count  int              `json:"count"`
+			Atoms  []model.AtomNode `json:"atoms"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		if body.Count != 1 || body.Atoms[0].Name != "送中测试节点" {
+			t.Errorf("expected 1 leak atom named '送中测试节点', got count=%d, atoms=%v", body.Count, body.Atoms)
 		}
 	})
 

@@ -90,6 +90,12 @@ func TestOrchestratorEvaluationAndQuery(t *testing.T) {
 		t.Fatalf("expected 1 clean US transit, got %v", usTransits)
 	}
 
+	// 1.1 测试原子查询：查询送中隔离节点 (ChinaLeakOnly)
+	leakedAtoms := orc.QueryAtoms(AtomQueryFilter{ChinaLeakOnly: true})
+	if len(leakedAtoms) != 1 || leakedAtoms[0].Name != "某送中机房" {
+		t.Fatalf("expected 1 leaked atom named '某送中机房', got %v", leakedAtoms)
+	}
+
 	// 2. 测试原子查询：查询美国家宽直连
 	usResis := orc.QueryAtoms(AtomQueryFilter{Country: "US", Kind: "residential", CleanOnly: true})
 	if len(usResis) != 1 || !strings.Contains(usResis[0].Name, "LZ-US") {

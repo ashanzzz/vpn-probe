@@ -128,8 +128,8 @@ func (p Publisher) Apply(ctx context.Context, script string, verify func([]byte)
 	}, progress)
 }
 
-// matchMemberName matches expected raw node name with actual proxy name symmetrically, handling R2 aliases
-func matchMemberName(expected string, actual string) bool {
+// MatchMemberName matches expected raw node name with actual proxy name symmetrically, handling R2 aliases
+func MatchMemberName(expected string, actual string) bool {
 	if expected == actual {
 		return true
 	}
@@ -234,7 +234,7 @@ func ValidateYAMLWithMembers(body []byte, wanted []string, required map[string][
 				found := false
 				for _, n := range g.Proxies {
 					for _, name := range candidates {
-						if matchMemberName(name, n) {
+						if MatchMemberName(name, n) {
 							found = true
 							break
 						}

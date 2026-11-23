@@ -50,9 +50,10 @@ func SetCustomChainsFileForTest(p string) func() {
 
 // AtomQueryFilter 原子节点查询过滤条件
 type AtomQueryFilter struct {
-	Country   string // US, JP, SG...
-	Kind      string // transit, residential, chain
-	CleanOnly bool   // 仅查询不送中的干净节点
+	Country       string // US, JP, SG...
+	Kind          string // transit, residential, chain
+	CleanOnly     bool   // 仅查询不送中的干净节点
+	ChinaLeakOnly bool   // 仅查询送中的节点
 }
 
 // Orchestrator 动态分组编排引擎与节点原子库
@@ -277,6 +278,9 @@ func (o *Orchestrator) QueryAtoms(filter AtomQueryFilter) []model.AtomNode {
 			continue
 		}
 		if filter.CleanOnly && a.ChinaExit {
+			continue
+		}
+		if filter.ChinaLeakOnly && !a.ChinaExit {
 			continue
 		}
 		filtered = append(filtered, a)

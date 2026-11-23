@@ -254,6 +254,7 @@ func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallTool
 	ipBlockedCount := 0
 	protocolErrorCount := 0
 	offlineCount := 0
+	congestionCount := 0
 	residentialChainCount := 0
 
 	for _, r := range records {
@@ -307,6 +308,8 @@ func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallTool
 				ipBlockedCount++
 			case model.FaultProtocolMismatch:
 				protocolErrorCount++
+			case model.FaultNetworkCongestion:
+				congestionCount++
 			case model.FaultMachineDown, model.FaultResidentialTunnelOffline, model.FaultTransitRelayDown:
 				offlineCount++
 			case model.FaultResidentialDirectBlocked:
@@ -321,6 +324,12 @@ func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallTool
 				aiInstruction = fmt.Sprintf("【端口被墙处置】海外节点(%s)连通且国内可Ping通。请登录目标VPS(%s)将端口%d更换为新端口，并重新提交自愈检测。", abroadSource, targetIP, targetPort)
 			case model.FaultProtocolMismatch:
 				aiInstruction = fmt.Sprintf("【配置错误处置】海外与国内TCP均通，说明端口未被墙，请勿更换端口！请核对客户端配置与VPS(%s)服务端的Reality公钥(pbk)或ShortID是否一致。", targetIP)
+			case model.FaultNetworkCongestion:
+				if tip != "" {
+					aiInstruction = tip
+				} else {
+					aiInstruction = fmt.Sprintf("【网络拥塞处置】目标VPS(%s)国内外TCP均已握手成功，仅应用层请求超时。机器与端口正常，请勿修改凭据或端口，保持观察等待链路抖动恢复。", targetIP)
+				}
 			case model.FaultIPBlocked:
 				aiInstruction = fmt.Sprintf("【IP被墙处置】海外通但国内全黑洞丢包，换端口无效。请更换VPS(%s)的IP或配置CDN反代救活。", targetIP)
 			case model.FaultMachineDown:
@@ -374,10 +383,17 @@ func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallTool
 		if offlineCount > 0 {
 			parts = append(parts, fmt.Sprintf("%d个真正离线", offlineCount))
 		}
+		if congestionCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d个网络拥塞/超时(无需换端口)", congestionCount))
+		}
 		overallPrompt = fmt.Sprintf("检测到 %d 个节点需要自愈或人工排查 (%s)。请按 nodes_requiring_action 列表中的 v2ray_link 与 ai_heal_instruction 执行处置。",
 			len(actionList), strings.Join(parts, ", "))
+	} else if residentialChainCount > 0 && congestionCount > 0 {
+		overallPrompt = fmt.Sprintf("检测到 %d 个住宅家宽节点直连受阻(已自动建立链式中继)，且有 %d 个节点出现跨境网络拥塞/抖动超时(机器正常无需换端口)，系统保持持续观测。", residentialChainCount, congestionCount)
 	} else if residentialChainCount > 0 {
 		overallPrompt = fmt.Sprintf("全网自建专线与核心节点健康，检测到 %d 个住宅家宽节点国内直连受阻但境外隧道正常，系统已自动全网状建立链式中继 (ashan-chain)，无需人工换端口或干预。", residentialChainCount)
+	} else if congestionCount > 0 {
+		overallPrompt = fmt.Sprintf("所有核心服务在线，检测到 %d 个节点出现跨境网络拥塞/抖动超时，机器与端口均正常，无需更换端口，系统保持持续观测。", congestionCount)
 	} else {
 		overallPrompt = "所有监控节点均正常在线，无需执行自愈操作。"
 	}
@@ -391,6 +407,7 @@ func (m *MCPServer) handleGetAISummary(ctx context.Context, request mcp.CallTool
 			"ip_blocked_nodes":        ipBlockedCount,
 			"protocol_error_nodes":    protocolErrorCount,
 			"offline_nodes":           offlineCount,
+			"congestion_nodes":        congestionCount,
 			"residential_chain_nodes": residentialChainCount,
 			"requires_healing_action": requiresHealing,
 			"ai_instruction":          overallPrompt,

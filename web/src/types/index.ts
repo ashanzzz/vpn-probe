@@ -1,12 +1,23 @@
 export type FaultType = 
   | 'PORT_BLOCKED' 
+  | 'port_blocked'
   | 'SERVER_BLOCKED' 
+  | 'server_blocked'
+  | 'ip_blocked'
   | 'MACHINE_DOWN' 
+  | 'machine_offline'
   | 'HEALTHY' 
+  | 'none'
   | 'PROTOCOL_MISMATCH' 
+  | 'protocol_mismatch'
   | 'RESIDENTIAL_TUNNEL_OFFLINE'
+  | 'residential_tunnel_offline'
   | 'TRANSIT_RELAY_DOWN'
+  | 'transit_relay_down'
   | 'RESIDENTIAL_DIRECT_BLOCKED'
+  | 'residential_direct_blocked'
+  | 'NETWORK_CONGESTION'
+  | 'network_congestion'
   | 'UNKNOWN';
 
 export type NodeType = 'transit' | 'residential' | 'cf_ws' | 'chain';

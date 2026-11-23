@@ -220,7 +220,7 @@ func TestDiagnosisLogic(t *testing.T) {
 			pingOK:         true,
 			isResi:         false,
 			probeErr:       errors.New("Client.Timeout exceeded while awaiting headers"),
-			wantFault:      model.FaultMachineDown,
+			wantFault:      model.FaultNetworkCongestion,
 			wantStatusText: "【网络拥塞超时】国内外TCP连通但应用层请求超时",
 			wantActionType: "CHECK_NETWORK_ROUTING",
 		},

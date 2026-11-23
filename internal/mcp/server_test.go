@@ -232,6 +232,85 @@ func TestMCPServer_AISummaryAndPortBlockedWithRecords(t *testing.T) {
 	}
 }
 
+func TestMCPServer_AISummaryResidentialAndCongestionCoexistence(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.DefaultConfig()
+	tmpDB := t.TempDir() + "/test-mcp-coexist.db"
+	st, err := store.NewStore(tmpDB)
+	if err != nil {
+		t.Fatalf("create store failed: %v", err)
+	}
+	defer st.Close()
+
+	// 保存 1 个住宅家宽直连受阻记录
+	resiRecord := &model.NodeProbeResult{
+		ID:          "mcp-resi-1",
+		Name:        "Resi-Direct",
+		OriginalURL: "vless://uuid@10.0.0.1:443#Resi-Direct",
+		Online:      false,
+		Diagnostic: &model.DiagnosticInfo{
+			TargetIP:   "10.0.0.1",
+			TargetPort: 443,
+			FaultType:  model.FaultResidentialDirectBlocked,
+			StatusText: "【仅境外通】",
+		},
+	}
+	// 保存 1 个网络拥塞超时记录
+	congRecord := &model.NodeProbeResult{
+		ID:          "mcp-cong-1",
+		Name:        "HK-Congestion",
+		OriginalURL: "vless://uuid@10.0.0.2:443#HK-Congestion",
+		Online:      false,
+		Diagnostic: &model.DiagnosticInfo{
+			TargetIP:   "10.0.0.2",
+			TargetPort: 443,
+			FaultType:  model.FaultNetworkCongestion,
+			StatusText: "【网络拥塞超时】",
+		},
+	}
+
+	if err := st.SaveResult(ctx, resiRecord); err != nil {
+		t.Fatalf("save resi record failed: %v", err)
+	}
+	if err := st.SaveResult(ctx, congRecord); err != nil {
+		t.Fatalf("save cong record failed: %v", err)
+	}
+
+	ms := NewMCPServer(cfg, nil, st, nil)
+	res, err := ms.handleGetAISummary(ctx, mcp_sdk.CallToolRequest{})
+	if err != nil || res.IsError {
+		t.Fatalf("handleGetAISummary failed: %v", err)
+	}
+
+	text := res.Content[0].(mcp_sdk.TextContent).Text
+	var summaryMap map[string]any
+	if err := json.Unmarshal([]byte(text), &summaryMap); err != nil {
+		t.Fatalf("unmarshal summaryMap failed: %v", err)
+	}
+
+	summary := summaryMap["summary"].(map[string]any)
+	if summary["requires_healing_action"] != false {
+		t.Errorf("expected requires_healing_action=false, got %v", summary["requires_healing_action"])
+	}
+	if int(summary["residential_chain_nodes"].(float64)) != 1 {
+		t.Errorf("expected residential_chain_nodes=1, got %v", summary["residential_chain_nodes"])
+	}
+	if int(summary["congestion_nodes"].(float64)) != 1 {
+		t.Errorf("expected congestion_nodes=1, got %v", summary["congestion_nodes"])
+	}
+
+	prompt := summary["ai_instruction"].(string)
+	if !strings.Contains(prompt, "住宅家宽节点直连受阻") || !strings.Contains(prompt, "链式中继") {
+		t.Errorf("expected prompt to mention residential chain, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "跨境网络拥塞/抖动超时") {
+		t.Errorf("expected prompt to mention network congestion, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "无需换端口") {
+		t.Errorf("expected prompt to mention '无需换端口', got: %s", prompt)
+	}
+}
+
 func TestMCPServer_PurgeLegacyAndFiveGroups(t *testing.T) {
 	deletedSubs := make(map[string]bool)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

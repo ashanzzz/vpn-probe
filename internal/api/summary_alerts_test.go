@@ -234,3 +234,64 @@ func TestSummaryFaultClassification(t *testing.T) {
 		t.Errorf("expected offline_nodes=1, got %v", summary["offline_nodes"])
 	}
 }
+
+func TestSummaryNetworkCongestion(t *testing.T) {
+	ResetAuthTracker()
+
+	cfg := config.DefaultConfig()
+	cfg.Server.AuthToken = "secret-token"
+	cfg.Monitor.Enabled = true
+
+	scheduler := monitor.NewScheduler(cfg, nil, nil, nil)
+	scheduler.InjectNodeStateForTest("US-Congestion", &model.NodeProbeResult{
+		Name:        "US-Congestion",
+		OriginalURL: "vless://uuid@1.2.3.4:443#US-Congestion",
+		Online:      false,
+		StatusText:  "【网络拥塞超时】国内外TCP连通但应用层请求超时",
+		Diagnostic: &model.DiagnosticInfo{
+			TargetIP:        "1.2.3.4",
+			TargetPort:      443,
+			FaultType:       model.FaultNetworkCongestion,
+			StatusText:      "【网络拥塞超时】国内外TCP连通但应用层请求超时",
+			ActionType:      "CHECK_NETWORK_ROUTING",
+			TroubleshootTip: "【网络拥塞】国内外TCP均已握手连通，应用层握手超时",
+		},
+	})
+
+	server := NewAPIServer(cfg, nil, nil, nil, nil, scheduler, nil)
+
+	req := httptest.NewRequest("GET", "/api/summary", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	resp, err := server.app.Test(req, 2000)
+	if err != nil {
+		t.Fatalf("request /api/summary failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var res map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("decode summary json failed: %v", err)
+	}
+
+	summary := res["summary"].(map[string]any)
+	if summary["requires_healing_action"] != false {
+		t.Errorf("expected requires_healing_action=false for pure congestion, got %v", summary["requires_healing_action"])
+	}
+	if int(summary["congestion_nodes"].(float64)) != 1 {
+		t.Errorf("expected congestion_nodes=1, got %v", summary["congestion_nodes"])
+	}
+	if int(summary["offline_nodes"].(float64)) != 0 {
+		t.Errorf("expected offline_nodes=0, got %v", summary["offline_nodes"])
+	}
+
+	actions := res["nodes_requiring_action"].([]any)
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action item, got %d", len(actions))
+	}
+	act := actions[0].(map[string]any)
+	if act["fault_type"] != string(model.FaultNetworkCongestion) {
+		t.Errorf("expected fault_type=%s, got %v", model.FaultNetworkCongestion, act["fault_type"])
+	}
+}

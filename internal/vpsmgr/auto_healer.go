@@ -101,6 +101,18 @@ func (h *AutoHealer) DiagnoseNode(res *model.NodeProbeResult) *BlockedAnalysisRe
 		}
 	}
 
+	if res.Diagnostic != nil && res.Diagnostic.FaultType == model.FaultNetworkCongestion {
+		result.FaultType = "NETWORK_CONGESTION"
+		result.DiagnosticMessage = res.Diagnostic.TroubleshootTip
+		if result.DiagnosticMessage == "" {
+			result.DiagnosticMessage = "【网络拥塞超时】国内外TCP连通但应用层请求超时，通常为国际网络链路拥塞抖动，机器与端口均正常。"
+		}
+		result.RecommendedAction = "保持观察等待链路抖动恢复（无需换端口或修改配置）"
+		result.CanAutoHealPort = false
+		result.CanRelayRescue = false
+		return result
+	}
+
 	if result.DomesticTCP && result.AbroadTCP {
 		result.FaultType = "PROTOCOL_MISMATCH"
 		result.DiagnosticMessage = "【配置/密钥错误】境内与境外TCP均可握手，端口未被墙！代理协议握手失败（Reality公钥/短ID不匹配或flow未配置）。"

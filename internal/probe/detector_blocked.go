@@ -467,7 +467,7 @@ func EvaluateFault(
 	// 2. 协议认证失败与网络超时判断 (自建专线/VPS线路机：境内外TCP端口握手均畅通，但应用层握手未通过)
 	if domesticTCPOK && abroadOK {
 		if isTimeout {
-			faultType = model.FaultMachineDown
+			faultType = model.FaultNetworkCongestion
 			statusText = "【网络拥塞超时】国内外TCP连通但应用层请求超时"
 			actionType = "CHECK_NETWORK_ROUTING"
 			tip = fmt.Sprintf("【网络拥塞】目标 %s:%d 在境内与海外(%s)均能成功建立TCP握手，但应用层探测超时。通常为国际链路拥堵、丢包或回程路由劣化，非凭据配置错误，请勿盲目修改凭据或端口！", host, port, abroadSource)

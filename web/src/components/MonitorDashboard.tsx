@@ -474,7 +474,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
         is_rescue: true,
       };
 
-      const isRealityBlocked = fallbackReality.diagnostic?.fault_type === 'PORT_BLOCKED';
+      const isRealityBlocked = fallbackReality.diagnostic?.fault_type === 'PORT_BLOCKED' || fallbackReality.diagnostic?.fault_type === 'port_blocked';
       const isRealityDown = !fallbackReality.online && !isRealityBlocked;
       const isAllBlocked = isRealityDown; // 直连全军覆没时拉起救援
 
@@ -744,7 +744,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
           {transitHostGroups.map((host) => {
             const reality = host.primary_reality;
             const cfWs = host.rescue_cf_ws;
-            const isBlocked = reality.diagnostic?.fault_type === 'PORT_BLOCKED';
+            const isBlocked = reality.diagnostic?.fault_type === 'PORT_BLOCKED' || reality.diagnostic?.fault_type === 'port_blocked';
 
             return (
               <div

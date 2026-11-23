@@ -16,6 +16,8 @@ import (
 	"vpn-probe/internal/substore"
 )
 
+type NodeProbeFunc func(ctx context.Context, link string) *model.NodeProbeResult
+
 type Manager struct {
 	vpsHubURL      string
 	vpsHubUser     string
@@ -26,8 +28,24 @@ type Manager struct {
 	detector       *Detector
 	ghChecker      *GitHubChecker
 	healer         *AutoHealer
+	backupMgr      *BackupManager
 	substoreClient *substore.Client
 	configPath     string
+	probeFunc      NodeProbeFunc
+	probeMu        sync.RWMutex
+}
+
+// SetProbeFunc 注入沙箱冒烟测试函数
+func (m *Manager) SetProbeFunc(fn NodeProbeFunc) {
+	m.probeMu.Lock()
+	defer m.probeMu.Unlock()
+	m.probeFunc = fn
+}
+
+func (m *Manager) getProbeFunc() NodeProbeFunc {
+	m.probeMu.RLock()
+	defer m.probeMu.RUnlock()
+	return m.probeFunc
 }
 
 // SetVPSHubConfig 设置 VPS Hub 访问参数 (线程安全，支持动态热修改与单测注入)
@@ -57,6 +75,7 @@ func NewManager(cfg *config.Config, sc *substore.Client, configPath string) *Man
 		detector:       det,
 		ghChecker:      gh,
 		healer:         heal,
+		backupMgr:      NewBackupManager(det),
 		substoreClient: sc,
 		configPath:     configPath,
 	}

@@ -15,23 +15,45 @@ type VPSInstance struct {
 	Region      string `json:"region"`
 }
 
+// BackupSnapshot VPS 配置文件或数据库的历史快照
+type BackupSnapshot struct {
+	ID        string `json:"id"`
+	FileName  string `json:"file_name"`
+	FilePath  string `json:"file_path"`
+	CreatedAt string `json:"created_at"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+// SmokeTestResult 软件升级后内置沙箱真实出网冒烟测试结果
+type SmokeTestResult struct {
+	Success   bool   `json:"success"`
+	LatencyMs int64  `json:"latency_ms"`
+	TestedAt  string `json:"tested_at"`
+	ExitIP    string `json:"exit_ip,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
 // SoftwareInfo VPS 上运行的代理软件详情与生命周期信息
 type SoftwareInfo struct {
-	InstanceID     string   `json:"instance_id"`
-	InstanceName   string   `json:"instance_name"`
-	IP             string   `json:"ip"`
-	SoftwareType   string   `json:"software_type"` // "sing-box" | "3x-ui" | "xray" | "none"
-	DeployMode     string   `json:"deploy_mode"`   // "docker" | "native" | "none"
-	ContainerName  string   `json:"container_name,omitempty"`
-	ConfigPath     string   `json:"config_path,omitempty"`
-	CurrentVersion string   `json:"current_version"`
-	LatestVersion  string   `json:"latest_version"`
-	ReleaseDate    string   `json:"release_date"`
-	HasUpdate      bool     `json:"has_update"`
-	ActivePorts    []int    `json:"active_ports"`
-	Status         string   `json:"status"` // "running" | "stopped" | "not_installed" | "unreachable"
-	ErrorMessage   string   `json:"error_message,omitempty"`
-	LastCheckedAt  string   `json:"last_checked_at"`
+	InstanceID     string            `json:"instance_id"`
+	InstanceName   string            `json:"instance_name"`
+	IP             string            `json:"ip"`
+	SoftwareType   string            `json:"software_type"` // "sing-box" | "3x-ui" | "xray" | "none"
+	DeployMode     string            `json:"deploy_mode"`   // "docker" | "native" | "none"
+	ContainerName  string            `json:"container_name,omitempty"`
+	ImageID        string            `json:"image_id,omitempty"`
+	ConfigPath     string            `json:"config_path,omitempty"`
+	CurrentVersion string            `json:"current_version"`
+	LatestVersion  string            `json:"latest_version"`
+	ReleaseDate    string            `json:"release_date"`
+	HasUpdate      bool              `json:"has_update"`
+	ActivePorts    []int             `json:"active_ports"`
+	Status         string            `json:"status"` // "running" | "stopped" | "not_installed" | "unreachable"
+	ErrorMessage   string            `json:"error_message,omitempty"`
+	LastCheckedAt  string            `json:"last_checked_at"`
+	Backups        []*BackupSnapshot `json:"backups,omitempty"`
+	LastSmokeTest  *SmokeTestResult  `json:"last_smoke_test,omitempty"`
 }
 
 // ReleaseInfo 上游 GitHub Release 信息
@@ -79,4 +101,38 @@ type PortHealResponse struct {
 	SubStoreSync bool   `json:"substore_synced"`
 	ConfigSync   bool   `json:"config_synced"`
 	Message      string `json:"message"`
+}
+
+// LifecycleActionRequest 容器生命周期操作请求 (start, stop, restart, backup)
+type LifecycleActionRequest struct {
+	VPSID  string `json:"vps_id"`
+	Action string `json:"action"` // "start" | "stop" | "restart" | "backup"
+}
+
+// LifecycleRestoreRequest 容器快照还原请求
+type LifecycleRestoreRequest struct {
+	VPSID      string `json:"vps_id"`
+	SnapshotID string `json:"snapshot_id"`
+}
+
+// SafeUpgradeRequest 安全升级请求
+type SafeUpgradeRequest struct {
+	VPSID    string `json:"vps_id"`
+	Software string `json:"software,omitempty"`
+	NodeName string `json:"node_name,omitempty"`
+}
+
+// SafeUpgradeResponse 安全升级响应
+type SafeUpgradeResponse struct {
+	Success         bool             `json:"success"`
+	VPSID           string           `json:"vps_id"`
+	IP              string           `json:"ip"`
+	SoftwareType    string           `json:"software_type"`
+	PreviousVersion string           `json:"previous_version"`
+	CurrentVersion  string           `json:"current_version"`
+	RolledBack      bool             `json:"rolled_back"`
+	RollbackReason  string           `json:"rollback_reason,omitempty"`
+	BackupCreated   string           `json:"backup_created,omitempty"`
+	SmokeTest       *SmokeTestResult `json:"smoke_test,omitempty"`
+	Message         string           `json:"message"`
 }

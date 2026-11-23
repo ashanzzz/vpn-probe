@@ -15,6 +15,7 @@ import { VPSCenter } from './components/VPSCenter';
 import { SubStoreHub } from './components/SubStoreHub';
 import { QuickProbe } from './components/QuickProbe';
 import { SettingsLogs } from './components/SettingsLogs';
+import { OrchestrationHub } from './components/OrchestrationHub';
 
 export const App: React.FC = () => {
   const [token, setToken] = useState<string>(() => getStoredToken());
@@ -38,6 +39,7 @@ export const App: React.FC = () => {
 
   // Modal / Drawer states
   const [selectedReportNode, setSelectedReportNode] = useState<NodeProbeResult | null>(null);
+  const [reportInitialTab, setReportInitialTab] = useState<'overview' | 'ip_intelligence' | 'history' | 'logs'>('overview');
   const [healingWizardOpen, setHealingWizardOpen] = useState(false);
   const [healingInitialNode, setHealingInitialNode] = useState<string | undefined>(undefined);
 
@@ -216,12 +218,19 @@ export const App: React.FC = () => {
         {currentTab === 'dashboard' && (
           <MonitorDashboard
             statusMap={statusMap}
-            onOpenReport={(node) => setSelectedReportNode(node)}
+            onOpenReport={(node, initialTab = 'overview') => {
+              setSelectedReportNode(node);
+              setReportInitialTab(initialTab);
+            }}
             onRetestNode={handleRetestSingleNode}
             onSpeedTestNode={handleSpeedTestSingleNode}
             onOpenHealingWizard={handleOpenHealingWizard}
             isInspecting={isInspecting}
           />
+        )}
+
+        {currentTab === 'orchestration' && (
+          <OrchestrationHub onRefreshGlobal={fetchStatus} />
         )}
 
         {currentTab === 'vps' && (
@@ -244,6 +253,7 @@ export const App: React.FC = () => {
       {/* 5. Per-Node Diagnostic Report Drawer (Slide-over) */}
       <ReportDrawer
         node={selectedReportNode}
+        initialTab={reportInitialTab}
         onClose={() => setSelectedReportNode(null)}
         onRetest={handleRetestSingleNode}
         onSpeedTest={handleSpeedTestSingleNode}

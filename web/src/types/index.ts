@@ -1,4 +1,13 @@
-export type FaultType = 'PORT_BLOCKED' | 'SERVER_BLOCKED' | 'MACHINE_DOWN' | 'HEALTHY' | 'PROTOCOL_MISMATCH' | 'UNKNOWN';
+export type FaultType = 
+  | 'PORT_BLOCKED' 
+  | 'SERVER_BLOCKED' 
+  | 'MACHINE_DOWN' 
+  | 'HEALTHY' 
+  | 'PROTOCOL_MISMATCH' 
+  | 'RESIDENTIAL_TUNNEL_OFFLINE'
+  | 'TRANSIT_RELAY_DOWN'
+  | 'RESIDENTIAL_DIRECT_BLOCKED'
+  | 'UNKNOWN';
 
 export type NodeType = 'transit' | 'residential' | 'cf_ws' | 'chain';
 
@@ -13,6 +22,7 @@ export interface NodeDiagnostic {
   fault_type: FaultType;
   status_text: string;
   target_ip: string;
+  exit_ip?: string;
   target_port: number;
   abroad_source?: string;
   abroad_rtt_ms?: number;
@@ -71,6 +81,7 @@ export interface NodeProbeResult {
   online: boolean;
   latency_ms: number;
   china_exit: boolean;
+  exit_ip?: string;
   exit_country: string;
   category: string;
   original_url: string;
@@ -123,6 +134,7 @@ export interface ResidentialPairItem {
   region: string;
   region_flag: string;
   target_ip: string;
+  exit_ip?: string;
   direct_node: NodeProbeResult;
   chain_node?: NodeProbeResult;
   assigned_relay_name: string;      // 挂载的线路机 (美拉美, 日拉日, 富余匀配)
@@ -297,10 +309,15 @@ export interface AtomNode {
 
 export interface GroupFilter {
   countries?: string[];
-  include_transit: boolean;
-  include_residential: boolean;
-  include_chain: boolean;
-  exclude_china_leak: boolean;
+  kinds?: string[]; // 'transit' | 'residential' | 'chain'
+  clean_only?: boolean;
+  keywords?: string[];
+  exclude?: string[];
+  // 兼容辅助字段
+  include_transit?: boolean;
+  include_residential?: boolean;
+  include_chain?: boolean;
+  exclude_china_leak?: boolean;
   protocols?: string[];
   custom_match_regex?: string;
 }
@@ -314,8 +331,18 @@ export interface CustomGroupDef {
   updated_at?: string;
 }
 
+export interface CustomGroupSummaryItem {
+  name: string;
+  display_name: string;
+  enabled: boolean;
+  filter: GroupFilter;
+  count: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface CategoryStat {
-  country: string;
+  country?: string;
   display_name: string;
   transit_count: number;
   residential_count: number;
@@ -324,13 +351,37 @@ export interface CategoryStat {
   nodes: AtomNode[];
 }
 
+export interface ExternalCategoryStat {
+  display_name: string;
+  sources: string[];
+  source_count: number;
+  description: string;
+}
+
 export interface CategoriesSummary {
   status: string;
   total_atoms: number;
   categories: {
-    us: CategoryStat;
-    jp: CategoryStat;
-    other: CategoryStat;
+    external?: ExternalCategoryStat;
+    residential?: CategoryStat;
+    us_resi?: CategoryStat;
+    jp_resi?: CategoryStat;
+    other_resi?: CategoryStat;
+    transit?: CategoryStat;
     china_leaks: AtomNode[];
+    // 兼容字段
+    us?: CategoryStat;
+    jp?: CategoryStat;
+    other?: CategoryStat;
   };
+  custom_groups?: CustomGroupSummaryItem[];
+}
+
+export interface CustomChainBind {
+  id: string;
+  transit_name: string;
+  residential_name: string;
+  chain_name: string;
+  chain_url: string;
+  created_at: string;
 }

@@ -7,10 +7,11 @@ import {
   Settings, 
   LogOut, 
   ShieldCheck,
-  Radio
+  Radio,
+  Layers
 } from 'lucide-react';
 
-export type TabType = 'dashboard' | 'vps' | 'substore' | 'probe' | 'settings';
+export type TabType = 'dashboard' | 'orchestration' | 'vps' | 'substore' | 'probe' | 'settings';
 
 interface HeaderProps {
   currentTab: TabType;
@@ -27,8 +28,9 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const tabs = [
     { id: 'dashboard' as TabType, label: '节点监控大盘', icon: Activity },
-    { id: 'vps' as TabType, label: 'VPS 资产与自愈', icon: Wrench },
+    { id: 'orchestration' as TabType, label: '策略编排中枢', icon: Layers },
     { id: 'substore' as TabType, label: 'Sub-Store 拓扑中枢', icon: Share2 },
+    { id: 'vps' as TabType, label: 'VPS 资产与自愈', icon: Wrench },
     { id: 'probe' as TabType, label: '沙箱即时探针', icon: Terminal },
     { id: 'settings' as TabType, label: '系统设置与审计', icon: Settings },
   ];

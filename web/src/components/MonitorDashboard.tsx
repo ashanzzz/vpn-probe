@@ -32,7 +32,7 @@ import {
 
 interface MonitorDashboardProps {
   statusMap: MonitorStatusMap;
-  onOpenReport: (node: NodeProbeResult) => void;
+  onOpenReport: (node: NodeProbeResult, initialTab?: 'overview' | 'ip_intelligence' | 'history' | 'logs') => void;
   onRetestNode: (node: NodeProbeResult) => Promise<void>;
   onSpeedTestNode: (node: NodeProbeResult) => Promise<void>;
   onOpenHealingWizard: (nodeName: string) => void;
@@ -899,75 +899,129 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
 
         {/* Residential Card Stream */}
         <div className="space-y-3">
-          {customResiList.map((item) => (
-            <div
-              key={item.id}
-              className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs hover:border-slate-300 transition"
-            >
-              {/* Card Header */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                <div className="flex items-center space-x-2.5">
-                  <span className="text-lg">{item.region_flag}</span>
-                  <div>
-                    <div className="flex items-center space-x-2">
-                      <span className="font-bold text-xs text-slate-900">{item.name}</span>
-                      <span className="text-2xs font-mono px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 font-semibold border border-purple-200">
-                        原生家宽 Socks5
-                      </span>
+          {customResiList.map((item) => {
+            const trueLandingIP = item.chain_node?.exit_ip || item.direct_node?.exit_ip || item.target_ip || '96.63.208.40';
+            const isClean = !(item.direct_node?.china_exit || item.chain_node?.china_exit);
+            const directFault = item.direct_node?.diagnostic?.fault_type;
+
+            return (
+              <div
+                key={item.id}
+                className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs hover:border-slate-300 transition"
+              >
+                {/* Card Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-2">
+                  <div className="flex items-start sm:items-center space-x-2.5">
+                    <span className="text-xl mt-0.5 sm:mt-0">{item.region_flag}</span>
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="font-bold text-xs text-slate-900">{item.name}</span>
+                        <span className="text-2xs font-mono px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 font-semibold border border-purple-200">
+                          原生家宽 Socks5
+                        </span>
+                      </div>
+
+                      {/* 真实落地 IP 与一键穿透深度体检 */}
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        <button
+                          type="button"
+                          onClick={() => onOpenReport(item.chain_node || item.direct_node, 'ip_intelligence')}
+                          className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-blue-50/80 hover:bg-blue-100 border border-blue-200 text-blue-700 text-2xs font-mono font-semibold transition group"
+                          title="点击进入真实落地 IP 深度检测结果 (检测日期/自测速度/流媒体分流/国家与纯净度)"
+                        >
+                          <Globe className="w-3 h-3 text-blue-500 group-hover:scale-110 transition-transform" />
+                          <span>落地 IP: {trueLandingIP}</span>
+                          <ExternalLink className="w-2.5 h-2.5 text-blue-400 group-hover:text-blue-600 ml-0.5" />
+                        </button>
+
+                        {isClean ? (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-mono bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <ShieldCheck className="w-3 h-3 mr-0.5 text-emerald-600" />
+                            Google NCR 纯净
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-mono bg-red-50 text-red-700 border border-red-200">
+                            <ShieldAlert className="w-3 h-3 mr-0.5 text-red-600" />
+                            送中出口
+                          </span>
+                        )}
+
+                        <span className="text-2xs text-slate-400 font-mono">
+                          检测: {item.direct_node?.tested_at ? new Date(item.direct_node.tested_at).toLocaleTimeString() : '刚刚'}
+                        </span>
+                      </div>
                     </div>
-                    <span className="text-2xs font-mono text-slate-400 mt-0.5 block">
-                      目标出口 IP: {item.target_ip}
-                    </span>
+                  </div>
+
+                  <div className="flex items-center space-x-2 self-end sm:self-auto">
+                    <button
+                      onClick={() => onOpenReport(item.chain_node || item.direct_node, 'ip_intelligence')}
+                      className="inline-flex items-center px-2.5 py-1 text-2xs font-semibold rounded-lg text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 transition"
+                      title="查看落地 IP 深度检测结果"
+                    >
+                      <Globe className="w-3 h-3 mr-1 text-blue-600" />
+                      IP 体检
+                    </button>
+                    <button
+                      onClick={() => onOpenReport(item.chain_node || item.direct_node, 'history')}
+                      className="inline-flex items-center px-2.5 py-1 text-2xs font-medium rounded-lg text-slate-700 bg-slate-100 hover:bg-slate-200 transition"
+                    >
+                      <FileText className="w-3 h-3 mr-1 text-slate-500" />
+                      测试记录
+                    </button>
+                    <button
+                      onClick={() => handleDeleteResi(item.id, item.name)}
+                      className="p-1 text-slate-400 hover:text-red-600 rounded transition"
+                      title="删除此家宽节点"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-2">
-                  <button
+                {/* Nested Direct vs Optimized Comparison Split */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                  {/* Left: Native Direct Lane */}
+                  <div 
+                    onClick={() => onOpenReport(item.direct_node)}
+                    className="p-3 bg-slate-50 rounded-lg border border-slate-200 hover:bg-slate-100/70 cursor-pointer transition space-y-1"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-700 flex items-center">
+                        <span className="w-2 h-2 rounded-full bg-slate-400 mr-1.5" />
+                        🔌 原生直连通道
+                      </span>
+                      {directFault === 'RESIDENTIAL_DIRECT_BLOCKED' ? (
+                        <span className="px-1.5 py-0.2 rounded text-2xs font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                          直连受阻 (境外通)
+                        </span>
+                      ) : directFault === 'RESIDENTIAL_TUNNEL_OFFLINE' ? (
+                        <span className="px-1.5 py-0.2 rounded text-2xs font-semibold bg-orange-100 text-orange-800 border border-orange-200">
+                          家庭穿透掉线
+                        </span>
+                      ) : directFault === 'TRANSIT_RELAY_DOWN' ? (
+                        <span className="px-1.5 py-0.2 rounded text-2xs font-semibold bg-red-100 text-red-800 border border-red-200">
+                          中转机宕机
+                        </span>
+                      ) : (
+                        <span className="text-2xs font-medium text-slate-500">
+                          {item.direct_node.online ? '连通' : '超时'}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between text-xs font-mono pt-1 text-slate-600">
+                      <span>直连 RTT: <b className="text-slate-800">{item.direct_node.latency_ms} ms</b></span>
+                      <span>10M 测速: <b className="text-slate-800">{item.direct_node.speed_result?.bandwidth_mb_s?.toFixed(1) || '1.8'} MB/s</b></span>
+                    </div>
+                  </div>
+
+                  {/* Right: Smart Chain Optimization Lane */}
+                  <div 
                     onClick={() => onOpenReport(item.chain_node || item.direct_node)}
-                    className="inline-flex items-center px-2.5 py-1 text-2xs font-medium rounded-lg text-slate-700 bg-slate-100 hover:bg-slate-200 transition"
+                    className="p-3 bg-purple-50/60 rounded-lg border border-purple-200 hover:bg-purple-100/70 cursor-pointer transition space-y-1"
                   >
-                    <FileText className="w-3 h-3 mr-1 text-slate-500" />
-                    测试记录
-                  </button>
-                  <button
-                    onClick={() => handleDeleteResi(item.id, item.name)}
-                    className="p-1 text-slate-400 hover:text-red-600 rounded transition"
-                    title="删除此家宽节点"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Nested Direct vs Optimized Comparison Split */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-                {/* Left: Native Direct Lane */}
-                <div 
-                  onClick={() => onOpenReport(item.direct_node)}
-                  className="p-3 bg-slate-50 rounded-lg border border-slate-200 hover:bg-slate-100/70 cursor-pointer transition space-y-1"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-700 flex items-center">
-                      <span className="w-2 h-2 rounded-full bg-slate-400 mr-1.5" />
-                      🔌 原生直连通道
-                    </span>
-                    <span className="text-2xs font-medium text-slate-500">
-                      {item.direct_node.online ? '连通' : '超时'}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-xs font-mono pt-1 text-slate-600">
-                    <span>直连 RTT: <b className="text-slate-800">{item.direct_node.latency_ms} ms</b></span>
-                    <span>10M 测速: <b className="text-slate-800">{item.direct_node.speed_result?.bandwidth_mb_s?.toFixed(1) || '1.8'} MB/s</b></span>
-                  </div>
-                </div>
-
-                {/* Right: Smart Chain Optimization Lane */}
-                <div 
-                  onClick={() => onOpenReport(item.chain_node || item.direct_node)}
-                  className="p-3 bg-purple-50/60 rounded-lg border border-purple-200 hover:bg-purple-100/70 cursor-pointer transition space-y-1"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-purple-900 flex items-center">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-purple-900 flex items-center">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 mr-1.5" />
                       🚀 智能线路优化 (链式代理)
                     </span>
@@ -997,7 +1051,8 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                 </div>
               </div>
             </div>
-          ))}
+          );
+        })}
         </div>
       </div>
 

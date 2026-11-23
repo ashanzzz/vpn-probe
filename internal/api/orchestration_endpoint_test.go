@@ -233,6 +233,51 @@ func TestOrchestrationEndpoints(t *testing.T) {
 		if delResp.StatusCode != http.StatusOK {
 			t.Fatalf("expected 200, got %d", delResp.StatusCode)
 		}
+
+		// 测试 RESTful DELETE 路由解绑
+		bindReq := httptest.NewRequest(http.MethodPost, "/api/orchestration/chains/bind", bytes.NewReader(bBytes))
+		bindReq.Header.Set("Content-Type", "application/json")
+		bindReq.Header.Set("Authorization", "Bearer admin-token-123")
+		_, _ = server.app.Test(bindReq)
+
+		delRouteReq := httptest.NewRequest(http.MethodDelete, "/api/orchestration/chains/LZ-US-Pavlov-家宽01", nil)
+		delRouteReq.Header.Set("Authorization", "Bearer admin-token-123")
+		delRouteResp, err := server.app.Test(delRouteReq)
+		if err != nil || delRouteResp.StatusCode != http.StatusOK {
+			t.Fatalf("expected DELETE route to return 200, got %v (err: %v)", delRouteResp.StatusCode, err)
+		}
+	})
+
+	// 8. 测试正则合法性强校验 (Evaluate 与 Save)
+	t.Run("RegexValidation", func(t *testing.T) {
+		// 8.1 EvaluateGroup 拒绝非法正则
+		badFilter := model.GroupFilter{
+			CustomMatchRegex: "[unclosed-bracket",
+		}
+		bfBytes, _ := json.Marshal(badFilter)
+		evalReq := httptest.NewRequest(http.MethodPost, "/api/orchestration/evaluate", bytes.NewReader(bfBytes))
+		evalReq.Header.Set("Content-Type", "application/json")
+		evalReq.Header.Set("Authorization", "Bearer admin-token-123")
+		evalResp, _ := server.app.Test(evalReq)
+		if evalResp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400 for bad regex in evaluate, got %d", evalResp.StatusCode)
+		}
+
+		// 8.2 SaveCustomGroup 拒绝非法正则
+		badDef := model.CustomGroupDef{
+			Name: "bad-regex-group",
+			Filter: model.GroupFilter{
+				CustomMatchRegex: "(unclosed-paren",
+			},
+		}
+		bdBytes, _ := json.Marshal(badDef)
+		saveReq := httptest.NewRequest(http.MethodPost, "/api/orchestration/groups?sync=false", bytes.NewReader(bdBytes))
+		saveReq.Header.Set("Content-Type", "application/json")
+		saveReq.Header.Set("Authorization", "Bearer admin-token-123")
+		saveResp, _ := server.app.Test(saveReq)
+		if saveResp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400 for bad regex in save group, got %d", saveResp.StatusCode)
+		}
 	})
 
 	t.Run("AI summary with residential chain nodes", func(t *testing.T) {
@@ -256,4 +301,101 @@ func TestOrchestrationEndpoints(t *testing.T) {
 			t.Fatalf("expected requires_healing_action=false, got true")
 		}
 	})
+}
+
+func TestChainAtomsHealthAndLatencyAccuracy(t *testing.T) {
+	ResetAuthTracker()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "admin-token-123",
+		},
+	}
+	h := healer.NewHealer(nil, nil)
+	sch := monitor.NewScheduler(cfg, nil, nil, nil)
+	sch.SetHealerForTest(h)
+
+	// 注入在线线路专线
+	sch.InjectNodeStateForTest("US-Transit", &model.NodeProbeResult{
+		ID:          "transit-1",
+		Name:        "美西 ACCK 洛杉矶 4837 — VLESS Reality",
+		OriginalURL: "vless://u1@38.175.222.44:36564#US-LAX-4837",
+		ExitCountry: "US",
+		Online:      true,
+		LatencyMs:   120,
+		NodeType:    "transit",
+		TestedAt:    time.Now(),
+	})
+
+	// 注入离线家庭端节点 (FaultResidentialTunnelOffline)
+	sch.InjectNodeStateForTest("Offline-Resi", &model.NodeProbeResult{
+		ID:          "resi-tunnel-down",
+		Name:        "LZ-US-Down-家宽",
+		OriginalURL: "socks5://u:***@1.2.3.4:1002#LZ-US-Down-家宽",
+		ExitCountry: "US",
+		Online:      false,
+		NodeType:    "residential",
+		Diagnostic: &model.DiagnosticInfo{
+			FaultType:       model.FaultResidentialTunnelOffline,
+			AbroadReachable: false,
+		},
+		TestedAt: time.Now(),
+	})
+
+	// 注入仅国内直连受阻但海外畅通的家宽节点 (FaultResidentialDirectBlocked)
+	sch.InjectNodeStateForTest("Blocked-Resi", &model.NodeProbeResult{
+		ID:          "resi-direct-blocked",
+		Name:        "LZ-US-DirectBlocked-家宽",
+		OriginalURL: "socks5://u:***@1.2.3.4:1003#LZ-US-DirectBlocked-家宽",
+		ExitCountry: "US",
+		Online:      false,
+		NodeType:    "residential",
+		Diagnostic: &model.DiagnosticInfo{
+			FaultType:       model.FaultResidentialDirectBlocked,
+			AbroadReachable: true,
+			AbroadRTTMs:     250,
+		},
+		TestedAt: time.Now(),
+	})
+
+	server := NewAPIServer(cfg, nil, nil, nil, nil, sch, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/orchestration/atoms?country=US&kind=chain", nil)
+	req.Header.Set("Authorization", "Bearer admin-token-123")
+	resp, err := server.app.Test(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d (err: %v)", resp.StatusCode, err)
+	}
+
+	var body struct {
+		Status string           `json:"status"`
+		Count  int              `json:"count"`
+		Atoms  []model.AtomNode `json:"atoms"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+
+	var foundDownChain, foundBlockedChain bool
+	for _, a := range body.Atoms {
+		if a.Name == "链式|美西 ACCK 洛杉矶 4837 — VLESS Reality ➔ LZ-US-Down-家宽" {
+			foundDownChain = true
+			if a.Online {
+				t.Errorf("expected chain for tunnel offline residential node to be offline (Online=false), got true")
+			}
+		}
+		if a.Name == "链式|美西 ACCK 洛杉矶 4837 — VLESS Reality ➔ LZ-US-DirectBlocked-家宽" {
+			foundBlockedChain = true
+			if !a.Online {
+				t.Errorf("expected chain for direct-blocked residential node with abroad reachable to be Online=true, got false")
+			}
+			// Latency should be 120 (transit) + 250 (abroad) = 370
+			if a.LatencyMs != 370 {
+				t.Errorf("expected combined latency 370ms, got %d", a.LatencyMs)
+			}
+		}
+	}
+	if !foundDownChain {
+		t.Errorf("expected to find down chain in atoms")
+	}
+	if !foundBlockedChain {
+		t.Errorf("expected to find direct-blocked chain in atoms")
+	}
 }

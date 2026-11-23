@@ -184,6 +184,9 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 		if lastErr == nil {
 			break
 		}
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
 		if attempt < 2 {
 			logger.Warnf("[SUBSTORE] UpdateCollection '%s' attempt %d failed: %v, retrying in 2s...", name, attempt, lastErr)
 			select {
@@ -196,9 +199,9 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 	if lastErr != nil {
 		return fmt.Errorf("http request: %w", lastErr)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		resp.Body.Close()
 		// 集合不存在，调用 POST /api/collections 创建
 		createEndpoint := fmt.Sprintf("%s/api/collections", baseURL)
 		postReq, postReqErr := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(bodyBytes))
@@ -218,6 +221,7 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 		}
 		return fmt.Errorf("collection patch %d, fallback create failed: %w", resp.StatusCode, postErr)
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
@@ -254,6 +258,9 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 		if lastErr == nil {
 			break
 		}
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
 		if attempt < 2 {
 			logger.Warnf("[SUBSTORE] UpdateFile '%s' attempt %d failed: %v, retrying in 2s...", name, attempt, lastErr)
 			select {
@@ -266,9 +273,9 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 	if lastErr != nil {
 		return fmt.Errorf("http request: %w", lastErr)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		resp.Body.Close()
 		// 文件配置不存在，调用 POST /api/files 创建
 		createEndpoint := fmt.Sprintf("%s/api/files", baseURL)
 		postReq, postReqErr := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(bodyBytes))
@@ -288,6 +295,7 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 		}
 		return fmt.Errorf("file patch %d, fallback create failed: %w", resp.StatusCode, postErr)
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)

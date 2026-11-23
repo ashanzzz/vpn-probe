@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -1114,6 +1115,7 @@ func (s *APIServer) setupRoutes() {
 	s.app.Get("/api/orchestration/chains", s.handleGetCustomChains)
 	s.app.Post("/api/orchestration/chains/bind", s.handleBindCustomChain)
 	s.app.Post("/api/orchestration/chains/unbind", s.handleUnbindCustomChain)
+	s.app.Delete("/api/orchestration/chains/:target", s.handleUnbindCustomChain)
 
 	// 6. 挂载远程 AI 专用的 MCP over SSE 传输接口
 	if s.mcpServer != nil && s.mcpServer.GetServer() != nil {
@@ -1940,6 +1942,11 @@ func (s *APIServer) handleEvaluateGroup(c *fiber.Ctx) error {
 	if err := c.BodyParser(&filter); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
+	if filter.CustomMatchRegex != "" {
+		if _, err := regexp.Compile(filter.CustomMatchRegex); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("invalid custom_match_regex: %v", err)})
+		}
+	}
 	matched := s.orchestrator.EvaluateGroup(filter)
 	reveal := c.QueryBool("reveal", false)
 	nodes := matched
@@ -1980,6 +1987,11 @@ func (s *APIServer) handleSaveCustomGroup(c *fiber.Ctx) error {
 	}
 	if def.DisplayName == "" {
 		def.DisplayName = def.Name
+	}
+	if def.Filter.CustomMatchRegex != "" {
+		if _, err := regexp.Compile(def.Filter.CustomMatchRegex); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("invalid custom_match_regex: %v", err)})
+		}
 	}
 	if err := monitor.SaveCustomGroup(def); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
@@ -2129,6 +2141,9 @@ func (s *APIServer) handleUnbindCustomChain(c *fiber.Ctx) error {
 	}
 	_ = c.BodyParser(&req)
 	target := req.Target
+	if target == "" {
+		target = c.Params("target")
+	}
 	if target == "" {
 		target = c.Query("target")
 	}

@@ -249,6 +249,9 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 		if lastErr == nil {
 			break
 		}
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
 		if attempt < 2 {
 			logger.Warnf("[SUBSTORE] Update subscription '%s' attempt %d failed: %v, retrying in 2s...", subName, attempt, lastErr)
 			select {
@@ -261,9 +264,9 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 	if lastErr != nil {
 		return fmt.Errorf("http request: %w", lastErr)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		resp.Body.Close()
 		// 订阅尚不存在，调用 POST /api/subs 自动创建
 		createEndpoint := fmt.Sprintf("%s/api/subs", baseURL)
 		createPayload := map[string]any{
@@ -273,7 +276,10 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 			"content":     content,
 		}
 		createBytes, _ := json.Marshal(createPayload)
-		postReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(createBytes))
+		postReq, postReqErr := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(createBytes))
+		if postReqErr != nil {
+			return postReqErr
+		}
 		postReq.Header.Set("Content-Type", "application/json")
 		c.setAuth(postReq)
 		postResp, postErr := c.httpClient.Do(postReq)
@@ -287,6 +293,7 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 		}
 		return fmt.Errorf("subscription patch %d, fallback create failed: %w", resp.StatusCode, postErr)
 	}
+	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -332,11 +339,14 @@ func (c *Client) UpsertRemoteSubscription(ctx context.Context, name, displayName
 
 	resp, err := c.httpClient.Do(req)
 	if err == nil {
-		defer resp.Body.Close()
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			resp.Body.Close()
 			logger.Sync("[SUBSTORE] Remote subscription '%s' updated successfully", name)
 			return nil
 		}
+		resp.Body.Close()
+	} else if resp != nil && resp.Body != nil {
+		resp.Body.Close()
 	}
 
 	// 2. 若不存在，调用 POST /api/subs 新建
@@ -547,11 +557,14 @@ func (c *Client) CreateOrUpdateRemoteSub(ctx context.Context, subName, displayNa
 
 	resp, err := c.httpClient.Do(req)
 	if err == nil {
-		defer resp.Body.Close()
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			resp.Body.Close()
 			logger.Sync("[SUBSTORE] ✅ Remote subscription '%s' patched successfully", subName)
 			return nil
 		}
+		resp.Body.Close()
+	} else if resp != nil && resp.Body != nil {
+		resp.Body.Close()
 	}
 
 	// 2. 若更新返回 404/405 或失败，调用 POST /api/subs 自动创建

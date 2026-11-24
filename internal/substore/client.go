@@ -715,6 +715,8 @@ var LegacyThreeTierSubNames = []string{
 	"ashan-resi-direct",
 	"ashan-chain",
 	"ashan-tw-resi",
+	"ashan-residential",
+	"ashan-clean",
 }
 
 // PurgeLegacyThreeTierSubs 从 SubStore 彻底平退并删除历史残留的三层订阅 (Issue/Task 备忘闭环)

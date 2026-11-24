@@ -273,9 +273,11 @@ func (e *Engine) ProbeOneAdvanced(ctx context.Context, link string, isSelf bool,
 	result.ExitCountry = gfwRes.ExitCountry
 	result.ExitCity = gfwRes.ExitCity
 	result.ExitISP = gfwRes.ExitISP
-	result.ExitIPType = gfwRes.ExitIPType
-	if result.ExitIPType == "" && result.ExitIP != "" {
-		result.ExitIPType = DetermineIPType(result.ExitIP, result.ExitISP, "", model.IsResidentialNode(parsed.Tag, link, parsed.Protocol))
+	isResi := model.IsResidentialNode(parsed.Tag, link, parsed.Protocol)
+	if isResi || gfwRes.ExitIPType == "" {
+		result.ExitIPType = DetermineIPType(result.ExitIP, result.ExitISP, "", isResi)
+	} else {
+		result.ExitIPType = gfwRes.ExitIPType
 	}
 
 	// 若强制刷新 (forceRefresh)，穿透并清除当前落地 IP 的本地数据库与内存缓存，重新在线查询 Geo 属性
@@ -286,7 +288,7 @@ func (e *Engine) ProbeOneAdvanced(ctx context.Context, link string, isSelf bool,
 			result.ExitCity = freshGeo.City
 			result.ExitCountry = freshGeo.CountryCode
 			result.ExitISP = freshGeo.ISP
-			result.ExitIPType = freshGeo.IPType
+			result.ExitIPType = DetermineIPType(freshGeo.IP, freshGeo.ISP, freshGeo.Org, isResi)
 		}
 	}
 

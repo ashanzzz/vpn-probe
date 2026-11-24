@@ -166,6 +166,12 @@ func TestMatchMemberName_UnicodePrefixAndChineseTransit(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "Case-insensitive lowercase transit and resi chain matching",
+			raw:      "链式|jp-tokyo-iij-reality ➔ lz-us-pavlov-家宽",
+			alias:    "IIJ-美宽-Pavlov",
+			expected: true,
+		},
+		{
 			name:     "Unrelated mismatch",
 			raw:      "链式|JP-Tokyo-IIJ-Reality ➔ LZ-US-Pavlov-家宽",
 			alias:    "SB-日宽-SoftBank",

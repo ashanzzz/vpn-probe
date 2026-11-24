@@ -139,15 +139,17 @@ function resolveProxyName(targetName, allNames) {
     if (parts.length === 2) {
       const transit = parts[0].trim();
       const resi = parts[1].trim();
+      const transitUpper = transit.toUpperCase();
       let prefix = '';
-      if (transit.includes('4837') || transit.includes('LAX') || transit.includes('洛杉矶') || transit.includes('美西')) prefix = 'LAX-';
-      else if (transit.includes('IIJ')) prefix = 'IIJ-';
-      else if (transit.includes('Softbank') || transit.includes('SoftBank') || transit.includes('SB') || transit.includes('软银')) prefix = 'SB-';
+      if (transitUpper.includes('4837') || transitUpper.includes('LAX') || transit.includes('洛杉矶') || transit.includes('美西')) prefix = 'LAX-';
+      else if (transitUpper.includes('IIJ')) prefix = 'IIJ-';
+      else if (transitUpper.includes('SOFTBANK') || transitUpper.includes('SB') || transit.includes('软银')) prefix = 'SB-';
 
       let suffix = '';
+      const resiUpper = resi.toUpperCase();
       const keywords = ['Pavlov', 'Frontier', 'Verizon', 'BIGLOBE', 'KDDI', 'SoftBank', 'GLBB', 'StarHub', 'KT', 'HiNet'];
       for (const kw of keywords) {
-        if (resi.includes(kw)) { suffix = kw; break; }
+        if (resiUpper.includes(kw.toUpperCase())) { suffix = kw; break; }
       }
       if (prefix && suffix) {
         const prefixLower = prefix.toLowerCase();

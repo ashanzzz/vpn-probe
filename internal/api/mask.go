@@ -12,6 +12,14 @@ var (
 	reHysteriaPass = regexp.MustCompile(`^((?:hysteria2?|hy2)://)([^@]+)(@.+)`)
 	// 正则匹配 tuic://uuid:password@host:port 或 tuic://password@host:port
 	reTuicPass = regexp.MustCompile(`^(tuic://(?:[^:@]+:)?)([^@]+)(@.+)`)
+	// 正则匹配 http://user:pass@host:port 或 https://user:pass@host:port
+	reHTTPPass = regexp.MustCompile(`^(https?://(?:[^:@]+:)?)([^@]+)(@.+)`)
+	// 正则匹配 wireguard://privatekey@host:port 或 wg://privatekey@host:port
+	reWireguardKey = regexp.MustCompile(`^((?:wireguard|wg)://)([^@]+)(@.+)`)
+	// 正则匹配 snell://user:psk@host:port
+	reSnellUserPass = regexp.MustCompile(`^(snell://(?:[^:@]+:)?)([^@]+)(@.+)`)
+	// 正则匹配 query params: psk=...
+	reSnellPSK = regexp.MustCompile(`([?&]psk=)([^&#]+)`)
 	// 正则匹配 vless://uuid@host:port
 	reVlessUUID = regexp.MustCompile(`^(vless://)([^@]+)(@.+)`)
 	// 正则匹配 trojan://pass@host:port
@@ -44,6 +52,18 @@ func MaskNodeURL(raw string) string {
 
 	case strings.HasPrefix(lower, "tuic://"):
 		res = reTuicPass.ReplaceAllString(res, "${1}******${3}")
+
+	case strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://"):
+		res = reHTTPPass.ReplaceAllString(res, "${1}******${3}")
+
+	case strings.HasPrefix(lower, "wireguard://") || strings.HasPrefix(lower, "wg://"):
+		res = reWireguardKey.ReplaceAllString(res, "${1}******${3}")
+
+	case strings.HasPrefix(lower, "snell://"):
+		if strings.Contains(res, "@") {
+			res = reSnellUserPass.ReplaceAllString(res, "${1}******${3}")
+		}
+		res = reSnellPSK.ReplaceAllString(res, "${1}******")
 
 	case strings.HasPrefix(lower, "vless://"):
 		res = reVlessUUID.ReplaceAllStringFunc(res, func(m string) string {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -16,6 +17,12 @@ import (
 
 	"github.com/google/uuid"
 )
+
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)`)
+
+func stripANSI(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
+}
 
 // TailBuffer 保留最后固定字节的线程安全日志缓冲区
 type TailBuffer struct {
@@ -61,7 +68,7 @@ func (b *TailBuffer) RecentLines(n int) string {
 	lines := strings.Split(trimmed, "\n")
 	var cleaned []string
 	for _, l := range lines {
-		l = strings.TrimSpace(l)
+		l = strings.TrimSpace(stripANSI(l))
 		if l != "" {
 			cleaned = append(cleaned, l)
 		}

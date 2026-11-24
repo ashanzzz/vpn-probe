@@ -153,7 +153,7 @@ func main() {
 	} else {
 		u := *targetURL
 		if u == "" {
-			u = "https://free.1992004.xyz/Woo@@@204317/api/file/ashan"
+			u = "https://free.1992004.xyz/share/file/ashan"
 		}
 		sourceName = "远程端点: " + u
 		fmt.Printf("🌐 正在从端点拉取渲染后的真实配置: %s%s%s ...\n", Purple, u, Reset)
@@ -165,7 +165,7 @@ func main() {
 			},
 		}
 		req, _ := http.NewRequest("GET", u, nil)
-		if *token != "" {
+		if *token != "" && strings.Contains(u, "/api/file/") {
 			req.SetBasicAuth("ashan", *token)
 		}
 		req.Header.Set("User-Agent", "ClashMeta/v1.19.0")

@@ -91,6 +91,43 @@ func TestMaskNodeURL(t *testing.T) {
 			},
 			omits: []string{"secretpassword123"},
 		},
+		{
+			name:  "HTTP proxy with username and password",
+			input: "http://myUser:mySecretPassword123@1.2.3.4:8080#http-node",
+			contains: []string{
+				"http://myUser:******@1.2.3.4:8080",
+				"#http-node",
+			},
+			omits: []string{"mySecretPassword123"},
+		},
+		{
+			name:  "HTTPS proxy with password only",
+			input: "https://mySecretPasswordOnly@1.2.3.4:8443#https-node",
+			contains: []string{
+				"https://******@1.2.3.4:8443",
+				"#https-node",
+			},
+			omits: []string{"mySecretPasswordOnly"},
+		},
+		{
+			name:  "WireGuard with private key",
+			input: "wireguard://aGVsbG93b3JsZHNlY3JldA==@1.2.3.4:51820#wg-node",
+			contains: []string{
+				"wireguard://******@1.2.3.4:51820",
+				"#wg-node",
+			},
+			omits: []string{"aGVsbG93b3JsZHNlY3JldA=="},
+		},
+		{
+			name:  "Snell with user, psk query and auth",
+			input: "snell://snellUser:snellSecretPass@1.2.3.4:1234?psk=superSecretPsk123#snell-node",
+			contains: []string{
+				"snell://snellUser:******@1.2.3.4:1234",
+				"psk=******",
+				"#snell-node",
+			},
+			omits: []string{"snellSecretPass", "superSecretPsk123"},
+		},
 	}
 
 	for _, tc := range tests {

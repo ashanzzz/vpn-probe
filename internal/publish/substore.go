@@ -147,17 +147,19 @@ func matchChainAlias(full string, alias string) bool {
 		if len(parts) == 2 {
 			transit := strings.TrimSpace(parts[0])
 			resi := strings.TrimSpace(parts[1])
+			transitUpper := strings.ToUpper(transit)
 			prefix := ""
-			if strings.Contains(transit, "4837") || strings.Contains(transit, "LAX") || strings.Contains(transit, "洛杉矶") || strings.Contains(transit, "美西") {
+			if strings.Contains(transitUpper, "4837") || strings.Contains(transitUpper, "LAX") || strings.Contains(transit, "洛杉矶") || strings.Contains(transit, "美西") {
 				prefix = "LAX-"
-			} else if strings.Contains(transit, "IIJ") {
+			} else if strings.Contains(transitUpper, "IIJ") {
 				prefix = "IIJ-"
-			} else if strings.Contains(transit, "Softbank") || strings.Contains(transit, "SoftBank") || strings.Contains(transit, "SB") || strings.Contains(transit, "软银") {
+			} else if strings.Contains(transitUpper, "SOFTBANK") || strings.Contains(transitUpper, "SB") || strings.Contains(transit, "软银") {
 				prefix = "SB-"
 			}
 			suffix := ""
+			resiUpper := strings.ToUpper(resi)
 			for _, kw := range []string{"Pavlov", "Frontier", "Verizon", "BIGLOBE", "KDDI", "SoftBank", "GLBB", "StarHub", "KT", "HiNet"} {
-				if strings.Contains(resi, kw) {
+				if strings.Contains(resiUpper, strings.ToUpper(kw)) {
 					suffix = kw
 					break
 				}

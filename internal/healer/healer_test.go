@@ -238,3 +238,30 @@ func TestHealIPBlocked_FragmentQuestionMark(t *testing.T) {
 		t.Errorf("expected 443?dialerProxy= in healed URL, got %s", healedURL)
 	}
 }
+
+func TestCleanDialerProxyParam_NoDuplicate(t *testing.T) {
+	raw := "vless://u@1.2.3.4:443?security=reality&dialerProxy=OldRelay&sni=example.com"
+	cleaned := cleanDialerProxyParam(raw)
+	if strings.Contains(cleaned, "dialerProxy") {
+		t.Errorf("expected dialerProxy to be removed, got: %s", cleaned)
+	}
+	if !strings.Contains(cleaned, "security=reality") || !strings.Contains(cleaned, "sni=example.com") {
+		t.Errorf("expected other params preserved, got: %s", cleaned)
+	}
+
+	h := NewHealer(nil, nil)
+	res := &model.NodeProbeResult{
+		Name:        "US-Test",
+		OriginalURL: "vless://u@1.2.3.4:443?security=reality&dialerProxy=ExistingRelay#US-Test",
+		ExitIP:      "1.2.3.4",
+		Online:      false,
+	}
+	relays := []*model.NodeProbeResult{
+		{Name: "Relay-Clean", ExitIP: "9.10.11.12", Online: true, ChinaExit: false},
+	}
+	healed := h.HealIPBlocked(res, relays)
+	count := strings.Count(healed, "dialerProxy=")
+	if count != 1 {
+		t.Errorf("expected exactly 1 dialerProxy parameter, got %d in %s", count, healed)
+	}
+}

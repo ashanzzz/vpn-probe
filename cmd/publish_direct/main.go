@@ -35,7 +35,7 @@ func main() {
 		fmt.Printf("     [%s] %s (Country: %s, ChinaExit: %v)\n", a.Kind, a.Name, a.Country, a.ChinaExit)
 	}
 
-	fmt.Println("2. Loading custom groups for ashan and Q...")
+	fmt.Println("2. Loading custom groups for ashan, Q and business...")
 	groupsAshan, err := monitor.LoadCustomGroups("ashan")
 	if err != nil {
 		groupsAshan = model.DefaultCustomGroups("ashan")
@@ -43,6 +43,10 @@ func main() {
 	groupsQ, err := monitor.LoadCustomGroups("q")
 	if err != nil {
 		groupsQ = model.DefaultCustomGroups("q")
+	}
+	groupsBusiness, err := monitor.LoadCustomGroups("business")
+	if err != nil {
+		groupsBusiness = model.DefaultCustomGroups("business")
 	}
 
 	for _, g := range groupsAshan {
@@ -63,6 +67,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("CompileScript q: %v", err)
 	}
+	scriptBusiness, err := publish.CompileScript(groupsBusiness, atoms, "business")
+	if err != nil {
+		log.Fatalf("CompileScript business: %v", err)
+	}
 
 	for _, line := range strings.Split(scriptAshan, "\n") {
 		if strings.HasPrefix(line, "const vpnUserGroups = ") {
@@ -71,7 +79,7 @@ func main() {
 		}
 	}
 
-	fmt.Printf("   ashan script length: %d, Q script length: %d\n", len(scriptAshan), len(scriptQ))
+	fmt.Printf("   ashan script length: %d, Q script length: %d, business script length: %d\n", len(scriptAshan), len(scriptQ), len(scriptBusiness))
 
 	expectedAshan := []string{}
 	for _, g := range groupsAshan {
@@ -85,17 +93,26 @@ func main() {
 			expectedQ = append(expectedQ, g.DisplayName)
 		}
 	}
+	expectedBusiness := []string{}
+	for _, g := range groupsBusiness {
+		if g.Enabled {
+			expectedBusiness = append(expectedBusiness, g.DisplayName)
+		}
+	}
 
-	fmt.Println("4. Publishing new operators to Sub-Store files (ashan and Q)...")
+	fmt.Println("4. Publishing new operators to Sub-Store files (ashan, Q and business)...")
 	pub := publish.Publisher{Client: client}
 	err = pub.ApplyDifferentiated(
 		ctx,
 		scriptAshan,
 		scriptQ,
+		scriptBusiness,
 		func(fileName string, yamlBytes []byte) error {
-			isQ := strings.EqualFold(fileName, "q")
-			if isQ {
+			if strings.EqualFold(fileName, "q") {
 				return publish.ValidateYAML(yamlBytes, expectedQ)
+			}
+			if strings.EqualFold(fileName, "business") {
+				return publish.ValidateYAML(yamlBytes, expectedBusiness)
 			}
 			return publish.ValidateYAML(yamlBytes, expectedAshan)
 		},

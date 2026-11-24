@@ -17,6 +17,9 @@ type GFWResult struct {
 	Reason      string `json:"reason"`
 	ExitIP      string `json:"exit_ip"`
 	ExitCountry string `json:"exit_country"`
+	ExitCity    string `json:"exit_city,omitempty"`
+	ExitISP     string `json:"exit_isp,omitempty"`
+	ExitIPType  string `json:"exit_ip_type,omitempty"` // "家宽" | "机房"
 	Detail      string `json:"detail"`
 }
 
@@ -92,7 +95,7 @@ func CheckGFW(ctx context.Context, port int, googleURL, cfTraceURL string, timeo
 	var wg sync.WaitGroup
 	var googleSuccess, googleChina bool
 	var cfSuccess, cfChina bool
-	var cfLoc, cfIP string
+	var cfLoc, cfIP, cfColo string
 	var googleDetail, cfDetail string
 
 	// 探针 1: Google NCR 跳转
@@ -203,9 +206,10 @@ func CheckGFW(ctx context.Context, port int, googleURL, cfTraceURL string, timeo
 		defer resp.Body.Close()
 
 		cfSuccess = true
-		ip, loc := parseCloudflareTrace(resp.Body)
+		ip, loc, colo := parseCloudflareTrace(resp.Body)
 		cfIP = ip
 		cfLoc = loc
+		cfColo = colo
 		if loc == "CN" {
 			cfChina = true
 			cfDetail = fmt.Sprintf("cf loc=CN (ip: %s)", ip)
@@ -217,10 +221,24 @@ func CheckGFW(ctx context.Context, port int, googleURL, cfTraceURL string, timeo
 
 	wg.Wait()
 
-	return ArbitrateGFW(googleSuccess, googleChina, googleDetail, cfSuccess, cfChina, cfLoc, cfIP, cfDetail)
+	res := ArbitrateGFW(googleSuccess, googleChina, googleDetail, cfSuccess, cfChina, cfLoc, cfIP, cfDetail)
+	if res.ExitIP != "" {
+		proxyClient, _ := MakeProxyHTTPClient(port, 3*time.Second)
+		geo := LookupGeo(ctx, proxyClient, res.ExitIP, cfColo)
+		res.ExitCity = geo.City
+		if res.ExitCountry == "" {
+			res.ExitCountry = geo.CountryCode
+		}
+		res.ExitISP = geo.ISP
+		if res.ExitISP == "" {
+			res.ExitISP = geo.Org
+		}
+		res.ExitIPType = geo.IPType
+	}
+	return res
 }
 
-func parseCloudflareTrace(r io.Reader) (ip, loc string) {
+func parseCloudflareTrace(r io.Reader) (ip, loc, colo string) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -228,6 +246,8 @@ func parseCloudflareTrace(r io.Reader) (ip, loc string) {
 			ip = strings.TrimPrefix(line, "ip=")
 		} else if strings.HasPrefix(line, "loc=") {
 			loc = strings.TrimPrefix(line, "loc=")
+		} else if strings.HasPrefix(line, "colo=") {
+			colo = strings.TrimPrefix(line, "colo=")
 		}
 	}
 	return

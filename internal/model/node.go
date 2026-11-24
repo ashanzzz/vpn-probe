@@ -49,12 +49,27 @@ type DiagnosticInfo struct {
 	TroubleshootTip   string    `json:"troubleshoot_tip"`             // 排查与处置指引
 }
 
+// SplitTargetResult 单个分流目标的深度探测结果
+type SplitTargetResult struct {
+	Target      string `json:"target"`                // "chatgpt", "claude", "gemini", "youtube", "baidu"
+	Name        string `json:"name"`                  // "ChatGPT", "Claude", "Gemini", "YouTube", "百度直连"
+	Status      string `json:"status"`                // "ok" | "blocked" | "timeout" | "fail"
+	LatencyMs   int    `json:"latency_ms"`            // 延迟 (ms)
+	ExitIP      string `json:"exit_ip,omitempty"`     // 落地具体 IP
+	ExitCity    string `json:"exit_city,omitempty"`   // 落地城市 (e.g. "San Jose", "Tokyo")
+	ExitCountry string `json:"exit_country,omitempty"` // 落地国家代码 (e.g. "US", "JP")
+	IPType      string `json:"ip_type,omitempty"`     // 落地 IP 属性: "家宽" | "机房"
+	Detail      string `json:"detail,omitempty"`      // 详情或状态码文案
+}
+
 // SplitInfo 拓展分流探测结果（供人类/AI展示）
 type SplitInfo struct {
-	ChatGPT  string `json:"chatgpt,omitempty"`   // e.g. "ok (200)", "blocked (403)", "timeout"
-	Claude   string `json:"claude,omitempty"`    // e.g. "ok (200)", "blocked (403)", "timeout"
-	YouTube  string `json:"youtube,omitempty"`   // e.g. "ok (204)", "timeout"
-	Baidu    string `json:"baidu,omitempty"`     // 国内连通性 / 直连参考
+	ChatGPT string                       `json:"chatgpt,omitempty"` // e.g. "ok (200)", "blocked (403)", "timeout"
+	Claude  string                       `json:"claude,omitempty"`  // e.g. "ok (200)", "blocked (403)", "timeout"
+	Gemini  string                       `json:"gemini,omitempty"`  // e.g. "ok (200)", "blocked (403)", "timeout"
+	YouTube string                       `json:"youtube,omitempty"` // e.g. "ok (204)", "timeout"
+	Baidu   string                       `json:"baidu,omitempty"`   // 国内连通性 / 直连参考
+	Details map[string]SplitTargetResult `json:"details,omitempty"` // 各目标深度结果字典
 }
 
 // SpeedResult 真实测速结果 (VPS 30MB 互测或 30s 流媒体测试)
@@ -84,16 +99,20 @@ type NodeProbeResult struct {
 	ChinaExit   bool            `json:"china_exit"`    // 是否送中
 	ExitIP      string          `json:"exit_ip"`       // 出口 IP
 	ExitCountry string          `json:"exit_country"`  // 出口国家 (CN, US, JP...)
+	ExitCity    string          `json:"exit_city,omitempty"` // 出口具体城市 (Tokyo, San Jose, Los Angeles...)
+	ExitISP     string          `json:"exit_isp,omitempty"`  // 出口运营商 / 组织 (Cloudflare, SoftBank...)
+	ExitIPType  string          `json:"exit_ip_type,omitempty"` // 出口 IP 属性: "家宽" | "机房"
 	Category    Category        `json:"category"`      // 最终判定类别
 	StatusText  string          `json:"status_text,omitempty"` // 规范化展示文案 ("33338端口被墙" / "【离线】机子关机/软件崩溃/线路中断")
 	ErrorMsg      string          `json:"error_msg,omitempty"`
 	OfflineReason string          `json:"offline_reason,omitempty"` // "probe_engine_error" | "node_down"
 	HealedURL     string          `json:"healed_url,omitempty"`     // 自愈生成的安全候选 URL (不直接覆盖 OriginalURL)
-	Diagnostic    *DiagnosticInfo `json:"diagnostic,omitempty"`
-	Split       *SplitInfo      `json:"split,omitempty"`
-	Speed       *SpeedResult    `json:"speed,omitempty"`
-	Score       float64         `json:"score,omitempty"` // 综合评分 (由测速+延迟+稳定性计算)
-	TestedAt    time.Time       `json:"tested_at"`
+	Diagnostic    *DiagnosticInfo     `json:"diagnostic,omitempty"`
+	Split         *SplitInfo          `json:"split,omitempty"`
+	Speed         *SpeedResult        `json:"speed,omitempty"`
+	TopologyTrace []*TopologyHopTrace `json:"topology_trace,omitempty"`
+	Score         float64             `json:"score,omitempty"` // 综合评分 (由测速+延迟+稳定性计算)
+	TestedAt      time.Time           `json:"tested_at"`
 }
 
 // BatchProbeRequest 批量探测请求
@@ -102,6 +121,7 @@ type BatchProbeRequest struct {
 	IsSelf             bool     `json:"is_self"`
 	SyncSubStore       bool     `json:"sync_substore"`
 	CheckDetailedSplit bool     `json:"check_detailed_split"`
+	ForceRefresh       bool     `json:"force_refresh,omitempty"`
 	TimeoutSeconds     int      `json:"timeout_seconds,omitempty"`
 	Concurrency        int      `json:"concurrency,omitempty"`
 }
@@ -217,3 +237,18 @@ func IsResidentialNode(name, rawURL, proto string) bool {
 
 	return false
 }
+
+// IPGeoRecord IP 归属地与网络组织信息持久化实体
+type IPGeoRecord struct {
+	IP          string    `json:"ip"`
+	City        string    `json:"city"`
+	Region      string    `json:"region"`
+	Country     string    `json:"country"`
+	CountryCode string    `json:"country_code"`
+	ISP         string    `json:"isp"`
+	Org         string    `json:"org"`
+	IPType      string    `json:"ip_type"` // "家宽" | "机房"
+	Source      string    `json:"source"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+

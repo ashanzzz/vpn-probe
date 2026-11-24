@@ -10,11 +10,17 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `yaml:"server"`
-	Logging  LogConfig      `yaml:"logging"`
-	Monitor  MonitorConfig  `yaml:"monitor"`
-	SubStore SubStoreConfig `yaml:"substore"`
-	Probe    ProbeConfig    `yaml:"probe"`
+	Server    ServerConfig    `yaml:"server"`
+	Logging   LogConfig       `yaml:"logging"`
+	Monitor   MonitorConfig   `yaml:"monitor"`
+	SubStore  SubStoreConfig  `yaml:"substore"`
+	Probe     ProbeConfig     `yaml:"probe"`
+	SpeedTest SpeedTestConfig `yaml:"speedtest"`
+}
+
+type SpeedTestConfig struct {
+	SelfHostedURL10M string `yaml:"self_hosted_url_10m" json:"self_hosted_url_10m"`
+	SelfHostedURL30M string `yaml:"self_hosted_url_30m" json:"self_hosted_url_30m"`
 }
 
 type MonitoredNode struct {
@@ -137,6 +143,10 @@ func DefaultConfig() *Config {
 				PeerConcurrency:  2,
 				PeerTimeoutMs:    3000,
 			},
+		},
+		SpeedTest: SpeedTestConfig{
+			SelfHostedURL10M: "http://45.192.242.72:28745/s/default/speedtest-10m.bin",
+			SelfHostedURL30M: "http://45.192.242.72:28745/s/default/speedtest-30m.bin",
 		},
 	}
 }

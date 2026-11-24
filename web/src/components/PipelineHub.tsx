@@ -152,7 +152,7 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
   };
 
   // Warmup Snapshots
-  const handleWarmup = async (files = ['Q', 'ashan']) => {
+  const handleWarmup = async (files = ['Q', 'ashan', 'business']) => {
     setActionLoading('warmup');
     try {
       await api.warmupSnapshot(files);
@@ -535,7 +535,7 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
             </span>
             <div>
               <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-                双轨核心订阅最终成型看板 (Q 极速骨干 vs ashan 全家桶旗舰)
+                三轨核心订阅最终成型看板 (Q 极速骨干 vs ashan 全家桶 vs business 纯自建商务)
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
                 最终出炉的生产级订阅交付物 · 直观对比策略组构成、节点分布、双域名状态与快照直出
@@ -544,7 +544,7 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
           </div>
 
           <button
-            onClick={() => handleWarmup(['Q', 'ashan'])}
+            onClick={() => handleWarmup(['Q', 'ashan', 'business'])}
             disabled={actionLoading === 'warmup'}
             className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 transition shadow-2xs"
           >
@@ -553,8 +553,8 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
           </button>
         </div>
 
-        {/* Dual-Track Deliverables Comparison Cards */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Three-Track Deliverables Comparison Cards */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {/* Track 1: Q (Lightweight Fast Backbone) */}
           <div className="bg-white border-2 border-blue-500/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between space-y-4">
             <div className="space-y-3">
@@ -740,6 +740,99 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
               </button>
             </div>
           </div>
+
+          {/* Track 3: business (Pure Self-Hosted Business) */}
+          <div className="bg-white border-2 border-emerald-500/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between space-y-4">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2.5">
+                  <span className="w-8 h-8 rounded-xl bg-emerald-600 text-white font-bold flex items-center justify-center text-sm shadow-2xs">
+                    B
+                  </span>
+                  <div>
+                    <h3 className="font-bold text-sm text-slate-900">business 纯自建商务版</h3>
+                    <p className="text-2xs text-slate-500">面向跨境电商、纯净业务与安全办公 · 0 外部机场</p>
+                  </div>
+                </div>
+                <span className="text-2xs font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
+                  纯自建 · 40 家宽 + 骨干
+                </span>
+              </div>
+
+              {/* Composition Breakdown */}
+              <div className="grid grid-cols-3 gap-2 text-center py-2 bg-slate-50 rounded-xl border border-slate-200 font-mono text-2xs">
+                <div>
+                  <div className="text-slate-400">自建专线</div>
+                  <div className="font-bold text-slate-900 text-sm mt-0.5">纯骨干线路</div>
+                </div>
+                <div>
+                  <div className="text-slate-400">外部商业</div>
+                  <div className="font-bold text-slate-400 text-sm mt-0.5">0 外部机场</div>
+                </div>
+                <div>
+                  <div className="text-slate-400">原生家宽</div>
+                  <div className="font-bold text-emerald-700 text-sm mt-0.5">全量美/日家宽</div>
+                </div>
+              </div>
+
+              {/* Domain & Fast Snapshot Badges */}
+              <div className="flex flex-wrap items-center gap-2 pt-1 text-2xs font-mono">
+                <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-600" />
+                  free.1992004.xyz 双域名正常
+                </span>
+                {snapshotStatus?.snapshots?.['business'] && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    快照: {snapshotStatus.snapshots['business'].sha256?.substring(0, 7)} ({snapshotStatus.snapshots['business'].duration_ms}ms)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Actions: View Topology & Download */}
+            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center space-x-2">
+                <a
+                  href={getDownloadUrl('business')}
+                  target="_blank"
+                  rel="noreferrer"
+                  download="business.yaml"
+                  className="text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg border border-slate-200 transition"
+                  title="在浏览器中直接下载已清洗编排的 Clash YAML 文件"
+                >
+                  <span>直接下载 Clash YAML</span>
+                  <ExternalLink className="w-3 h-3 ml-1" />
+                </a>
+
+                <button
+                  type="button"
+                  onClick={() => handleCopySub('business')}
+                  className="text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg border border-slate-200 transition"
+                  title="复制含凭证的完整订阅 URL，可直接粘贴进 Clash / Shadowrocket / Loon"
+                >
+                  {copiedSub === 'business' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600 mr-1" />
+                      <span className="text-emerald-700 font-bold">已复制链接!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-500 mr-1" />
+                      <span>复制订阅 URL</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <button
+                onClick={() => setDrawerSubName('business')}
+                className="inline-flex items-center px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-2xs transition group"
+              >
+                <span>🔍 查看全量拓扑与双域名检验报告</span>
+                <ArrowRight className="w-3.5 h-3.5 ml-1.5 group-hover:translate-x-0.5 transition-transform" />
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -839,7 +932,7 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
       {drawerSubName && (
         <SubscriptionTopologyDrawer
           subscriptionName={drawerSubName}
-          availableSubscriptions={['Q', 'ashan']}
+          availableSubscriptions={['Q', 'ashan', 'business']}
           onClose={() => setDrawerSubName(null)}
           onSelectSubscription={(name) => setDrawerSubName(name)}
         />

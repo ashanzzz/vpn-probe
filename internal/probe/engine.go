@@ -20,6 +20,14 @@ type Engine struct {
 	sandboxMgr   *SandboxManager
 	peerMu       sync.RWMutex
 	healthyPeers map[string]PeerProxyCandidate // key: URL
+	splitCache   map[string]*splitCacheEntry
+	splitCacheMu sync.RWMutex
+}
+
+type splitCacheEntry struct {
+	ExitIP   string
+	Split    *model.SplitInfo
+	CachedAt time.Time
 }
 
 func NewEngine(cfg *config.Config) *Engine {
@@ -28,6 +36,7 @@ func NewEngine(cfg *config.Config) *Engine {
 		cfg:          cfg,
 		sandboxMgr:   sm,
 		healthyPeers: make(map[string]PeerProxyCandidate),
+		splitCache:   make(map[string]*splitCacheEntry),
 	}
 }
 
@@ -53,8 +62,13 @@ func (e *Engine) GetHealthyPeers() []PeerProxyCandidate {
 	return list
 }
 
-// ProbeOne 对单个链接进行完整生命周期的测试
+// ProbeOne 对单个链接进行完整生命周期的测试 (保持向后兼容)
 func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSplit bool, timeoutSec int) *model.NodeProbeResult {
+	return e.ProbeOneAdvanced(ctx, link, isSelf, checkSplit, false, timeoutSec)
+}
+
+// ProbeOneAdvanced 对单个链接进行完整生命周期的测试 (支持强制刷新穿透缓存)
+func (e *Engine) ProbeOneAdvanced(ctx context.Context, link string, isSelf bool, checkSplit bool, forceRefresh bool, timeoutSec int) *model.NodeProbeResult {
 	if timeoutSec <= 0 {
 		timeoutSec = e.cfg.Probe.DefaultTimeout
 	}
@@ -196,9 +210,9 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 			sbLog = inst.GetRecentLogs(3)
 		}
 		if sbLog != "" {
-			logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v | sing-box: %s)", parsed.Tag, checkErr, sbLog)
+			logger.Probe("[%s] Status: [OFFLINE] (domestic error: %v | sing-box: %s)", parsed.Tag, checkErr, sbLog)
 		} else {
-			logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v)", parsed.Tag, checkErr)
+			logger.Probe("[%s] Status: [OFFLINE] (domestic error: %v)", parsed.Tag, checkErr)
 		}
 
 		// 提前释放无用的本地临时沙箱进程，避免后续深度诊断期间空占端口与文件句柄
@@ -234,6 +248,7 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 			result.ErrorMsg = "offline (invalid server host/port)"
 		}
 
+		result.TopologyTrace = BuildNodeHopTrace(result, parsed, link)
 		return result
 	}
 
@@ -247,7 +262,7 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 		DomesticReachable: true,
 		DomesticPing:      true,
 	}
-	logger.Probe("[%s] Status: 🟢 ONLINE (latency: %dms)", parsed.Tag, latency)
+	logger.Probe("[%s] Status: [ONLINE] (latency: %dms)", parsed.Tag, latency)
 
 	// 4. 送中检测 (Google NCR + CF trace)
 	gfwCtx, gfwCancel := context.WithTimeout(ctx, timeout)
@@ -256,11 +271,29 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 	result.ChinaExit = gfwRes.IsChina
 	result.ExitIP = gfwRes.ExitIP
 	result.ExitCountry = gfwRes.ExitCountry
+	result.ExitCity = gfwRes.ExitCity
+	result.ExitISP = gfwRes.ExitISP
+	result.ExitIPType = gfwRes.ExitIPType
+	if result.ExitIPType == "" && result.ExitIP != "" {
+		result.ExitIPType = DetermineIPType(result.ExitIP, result.ExitISP, "", model.IsResidentialNode(parsed.Tag, link, parsed.Protocol))
+	}
+
+	// 若强制刷新 (forceRefresh)，穿透并清除当前落地 IP 的本地数据库与内存缓存，重新在线查询 Geo 属性
+	if forceRefresh && result.ExitIP != "" {
+		InvalidateIPGeoCache(ctx, result.ExitIP)
+		freshGeo := LookupGeo(ctx, nil, result.ExitIP, "")
+		if freshGeo.City != "" {
+			result.ExitCity = freshGeo.City
+			result.ExitCountry = freshGeo.CountryCode
+			result.ExitISP = freshGeo.ISP
+			result.ExitIPType = freshGeo.IPType
+		}
+	}
 
 	if gfwRes.IsChina {
-		logger.Probe("[%s] GFW check: 🇨🇳 送中 (exit: %s, %s)", parsed.Tag, gfwRes.ExitCountry, gfwRes.ExitIP)
+		logger.Probe("[%s] GFW check: [送中] (exit: %s, %s, %s)", parsed.Tag, gfwRes.ExitCountry, gfwRes.ExitIP, result.ExitIPType)
 	} else {
-		logger.Probe("[%s] GFW check: 🌐 不送中 (exit: %s, %s)", parsed.Tag, gfwRes.ExitCountry, gfwRes.ExitIP)
+		logger.Probe("[%s] GFW check: [不送中] (exit: %s, %s, %s)", parsed.Tag, gfwRes.ExitCountry, gfwRes.ExitIP, result.ExitIPType)
 		// 优先将不送中的健康海外节点加入探针池
 		if serverHost != "" && serverPort > 0 {
 			e.UpdateHealthyPeer(PeerProxyCandidate{
@@ -276,15 +309,58 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 	result.Category = classifier.Classify(isSelf, true, result.ChinaExit)
 	logger.Probe("[%s] Classified as: 【%s】", parsed.Tag, result.Category)
 
-	// 6. 拓展分流探测 (可选，仅展示)
+	// 6. 拓展分流探测 (带 24 小时智能继承与 forceRefresh 穿透)
 	if checkSplit {
-		logger.Debugf("[%s] Running split targets probe (ChatGPT/Claude/YouTube/Baidu)...", parsed.Tag)
-		splitCtx, splitCancel := context.WithTimeout(ctx, timeout)
-		defer splitCancel()
-		result.Split = CheckDetailedSplit(splitCtx, inst.Port, timeout)
-		logger.Probe("[%s] Split results: ChatGPT=%s, Claude=%s, YouTube=%s, Baidu=%s",
-			parsed.Tag, result.Split.ChatGPT, result.Split.Claude, result.Split.YouTube, result.Split.Baidu)
+		cacheKey := parsed.Tag
+		if result.ExitIP != "" {
+			cacheKey = parsed.Tag + "@" + result.ExitIP
+		}
+
+		var inherited bool
+		if !forceRefresh {
+			e.splitCacheMu.RLock()
+			cached, exists := e.splitCache[cacheKey]
+			e.splitCacheMu.RUnlock()
+
+			if exists && cached != nil && cached.ExitIP == result.ExitIP && time.Since(cached.CachedAt) < 24*time.Hour && cached.Split != nil {
+				result.Split = cached.Split
+				inherited = true
+				logger.Probe("[%s] Split results inherited from cache (ExitIP=%s, cached %s ago)",
+					parsed.Tag, result.ExitIP, time.Since(cached.CachedAt).Round(time.Minute))
+			}
+		}
+
+		if !inherited {
+			if forceRefresh {
+				e.splitCacheMu.Lock()
+				delete(e.splitCache, cacheKey)
+				e.splitCacheMu.Unlock()
+			}
+
+			logger.Debugf("[%s] Running live split targets probe (ChatGPT/Claude/Gemini/YouTube/Baidu)...", parsed.Tag)
+			splitCtx, splitCancel := context.WithTimeout(ctx, timeout)
+			defer splitCancel()
+			result.Split = CheckDetailedSplit(splitCtx, inst.Port, timeout)
+
+			if result.Split != nil {
+				e.splitCacheMu.Lock()
+				e.splitCache[cacheKey] = &splitCacheEntry{
+					ExitIP:   result.ExitIP,
+					Split:    result.Split,
+					CachedAt: time.Now(),
+				}
+				e.splitCacheMu.Unlock()
+			}
+		}
+
+		if result.Split != nil {
+			logger.Probe("[%s] Split results: ChatGPT=%s, Claude=%s, Gemini=%s, YouTube=%s, Baidu=%s",
+				parsed.Tag, result.Split.ChatGPT, result.Split.Claude, result.Split.Gemini, result.Split.YouTube, result.Split.Baidu)
+		}
 	}
+
+	// 7. 构建微观 4 阶路由追踪链路 (客户端 -> 线路机 -> NAT中转 -> 家宽出口)
+	result.TopologyTrace = BuildNodeHopTrace(result, parsed, link)
 
 	return result
 }
@@ -302,8 +378,8 @@ func (e *Engine) ProbeBatch(ctx context.Context, req *model.BatchProbeRequest) *
 		concurrency = 30
 	}
 
-	logger.Infof("Batch probe started: %d links (concurrency=%d, is_self=%v, split=%v)",
-		len(req.Links), concurrency, req.IsSelf, req.CheckDetailedSplit)
+	logger.Infof("Batch probe started: %d links (concurrency=%d, is_self=%v, split=%v, force_refresh=%v)",
+		len(req.Links), concurrency, req.IsSelf, req.CheckDetailedSplit, req.ForceRefresh)
 
 	results := make([]*model.NodeProbeResult, len(req.Links))
 	groupCounts := make(map[model.Category]int)
@@ -325,7 +401,7 @@ func (e *Engine) ProbeBatch(ctx context.Context, req *model.BatchProbeRequest) *
 				time.Sleep(stagger)
 			}
 
-			res := e.ProbeOne(ctx, targetLink, req.IsSelf, req.CheckDetailedSplit, req.TimeoutSeconds)
+			res := e.ProbeOneAdvanced(ctx, targetLink, req.IsSelf, req.CheckDetailedSplit, req.ForceRefresh, req.TimeoutSeconds)
 
 			mu.Lock()
 			results[idx] = res

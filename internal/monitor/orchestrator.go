@@ -504,6 +504,9 @@ func resolveCustomGroupsPath(base string, profile string) string {
 	if p == "q" {
 		return filepath.Join(dir, stem+"_q"+ext)
 	}
+	if p == "business" {
+		return filepath.Join(dir, stem+"_business"+ext)
+	}
 	// default is ashan
 	return filepath.Join(dir, stem+"_ashan"+ext)
 }
@@ -540,6 +543,14 @@ func LoadCustomGroups(profile ...string) ([]model.CustomGroupDef, error) {
 			return defaults, nil
 		} else if prof == "q" {
 			defaults := model.DefaultCustomGroups("q")
+			for i := range defaults {
+				defaults[i].CreatedAt = now
+				defaults[i].UpdatedAt = now
+			}
+			_ = writeAtomicJSON(filePath, defaults)
+			return defaults, nil
+		} else if prof == "business" {
+			defaults := model.DefaultCustomGroups("business")
 			for i := range defaults {
 				defaults[i].CreatedAt = now
 				defaults[i].UpdatedAt = now

@@ -21,6 +21,7 @@ import {
   SafeUpgradeResponse,
   SubscriptionInspectResponse,
   VerifySubscriptionResponse,
+  TopologyOverviewResponse,
 } from '../types';
 
 const TOKEN_KEY = 'vpn_probe_admin_token';
@@ -122,13 +123,37 @@ export const api = {
     return request('/api/speedtest/ranking');
   },
 
+  // 3.1 自建测速文件端点配置 (严格阻断一切外部测速网)
+  async getSpeedTestConfig(): Promise<{ status: string; self_hosted_url_10m: string; self_hosted_url_30m: string; prohibit_public: boolean }> {
+    return request('/api/speedtest/config');
+  },
+
+  async setSpeedTestConfig(url10m: string, url30m: string): Promise<any> {
+    return request('/api/speedtest/config', {
+      method: 'POST',
+      body: JSON.stringify({ self_hosted_url_10m: url10m, self_hosted_url_30m: url30m }),
+    });
+  },
+
+  // 3.2 全局四阶网络拓扑看板
+  async getTopologyOverview(): Promise<TopologyOverviewResponse> {
+    return request<TopologyOverviewResponse>('/api/topology/overview');
+  },
+
   // 4. 历史记录查询
   async getHistory(limit: number = 50): Promise<NodeProbeResult[]> {
     return request<NodeProbeResult[]>(`/api/history?limit=${limit}`);
   },
 
   // 5. 批量沙箱检测
-  async probeBatch(links: string[], isSelf: boolean = true, syncSubStore: boolean = false, checkSplit: boolean = true, timeoutSec: number = 8): Promise<any> {
+  async probeBatch(
+    links: string[],
+    isSelf: boolean = true,
+    syncSubStore: boolean = false,
+    checkSplit: boolean = true,
+    timeoutSec: number = 8,
+    forceRefresh: boolean = false
+  ): Promise<any> {
     return request('/api/probe', {
       method: 'POST',
       body: JSON.stringify({
@@ -137,6 +162,7 @@ export const api = {
         sync_substore: syncSubStore,
         check_detailed_split: checkSplit,
         timeout_seconds: timeoutSec,
+        force_refresh: forceRefresh,
       }),
     });
   },
@@ -323,7 +349,7 @@ export const api = {
     return request<SnapshotStatusResponse>('/api/sub/snapshot/status');
   },
 
-  async warmupSnapshot(fileNames: string[] = ['Q', 'ashan']): Promise<any> {
+  async warmupSnapshot(fileNames: string[] = ['Q', 'ashan', 'business']): Promise<any> {
     return request('/api/sub/snapshot/warmup', {
       method: 'POST',
       body: JSON.stringify({ file_names: fileNames }),

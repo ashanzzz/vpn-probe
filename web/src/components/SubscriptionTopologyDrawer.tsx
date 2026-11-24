@@ -44,7 +44,7 @@ interface SubscriptionTopologyDrawerProps {
 
 export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProps> = ({
   subscriptionName,
-  availableSubscriptions = ['ashan', 'Q', 'ashan-master', 'ashan-纯净'],
+  availableSubscriptions = ['ashan', 'Q', 'business', 'ashan-master', 'ashan-纯净'],
   onClose,
   onSelectSubscription
 }) => {

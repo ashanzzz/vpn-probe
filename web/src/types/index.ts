@@ -22,11 +22,25 @@ export type FaultType =
 
 export type NodeType = 'transit' | 'residential' | 'cf_ws' | 'chain';
 
+export interface SplitTargetResult {
+  target: string;
+  name: string;
+  status: 'ok' | 'blocked' | 'timeout' | 'fail' | 'error';
+  latency_ms: number;
+  exit_ip?: string;
+  exit_city?: string;
+  exit_country?: string;
+  ip_type?: '家宽' | '机房' | string;
+  detail?: string;
+}
+
 export interface SplitResult {
   chatgpt?: string;
   claude?: string;
+  gemini?: string;
   youtube?: string;
   baidu?: string;
+  details?: Record<string, SplitTargetResult>;
 }
 
 export interface NodeDiagnostic {
@@ -94,6 +108,9 @@ export interface NodeProbeResult {
   china_exit: boolean;
   exit_ip?: string;
   exit_country: string;
+  exit_city?: string;
+  exit_isp?: string;
+  exit_ip_type?: '家宽' | '机房' | string;
   category: string;
   original_url: string;
   is_self?: boolean;
@@ -105,9 +122,89 @@ export interface NodeProbeResult {
   split?: SplitResult;
   diagnostic?: NodeDiagnostic;
   speed_result?: SpeedResult;
+  topology_trace?: TopologyHopTrace[];
   tested_at?: string;
   sandbox_logs?: string[];
   speed_history?: SpeedTestHistoryItem[];
+}
+
+export interface TopologySummary {
+  total_landings: number;
+  total_nat_relays: number;
+  total_transits: number;
+  total_ports: number;
+  online_links: number;
+  fault_links: number;
+}
+
+export interface TopologyTransitNode {
+  id: string;
+  name: string;
+  host: string;
+  country: string;
+  online: boolean;
+  latency_ms: number;
+}
+
+export interface TopologyNATPortItem {
+  port: number;
+  proto: string;
+  target_node: string;
+  online: boolean;
+  latency_ms: number;
+}
+
+export interface TopologyNATRelayNode {
+  id: string;
+  name: string;
+  region: string;
+  public_ip: string;
+  online: boolean;
+  ports: TopologyNATPortItem[];
+}
+
+export interface TopologyLandingNode {
+  id: string;
+  tag: string;
+  exit_ip: string;
+  country: string;
+  city?: string;
+  isp?: string;
+  ip_type?: '家宽' | '机房' | string;
+  online: boolean;
+  china_exit: boolean;
+}
+
+export interface TopologyLinkEdge {
+  id: string;
+  source_id: string;
+  target_id: string;
+  stage_from: number;
+  stage_to: number;
+  port?: number;
+  proto?: string;
+  latency_ms: number;
+  status: 'ok' | 'fault' | 'warn';
+}
+
+export interface TopologyHopTrace {
+  hop_index: number;
+  title: string;
+  node_host: string;
+  node_port?: number;
+  region: string;
+  latency_ms: number;
+  online: boolean;
+  error_msg?: string;
+}
+
+export interface TopologyOverviewResponse {
+  generated_at: number;
+  summary: TopologySummary;
+  transits: TopologyTransitNode[];
+  nat_relays: TopologyNATRelayNode[];
+  landings: TopologyLandingNode[];
+  links: TopologyLinkEdge[];
 }
 
 export interface MonitoredNodeState {

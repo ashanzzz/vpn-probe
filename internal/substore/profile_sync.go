@@ -65,6 +65,9 @@ func (c *Client) SyncProfileToSubStore(ctx context.Context, p *model.Subscriptio
 	} else if strings.EqualFold(p.Name, "ashan") {
 		colName = "col-ashan"
 		boundFiles = []string{"ashan", "Ashan"}
+	} else if strings.EqualFold(p.Name, "business") {
+		colName = "col-business"
+		boundFiles = []string{"business", "Business"}
 	} else {
 		boundFiles = []string{p.Name}
 	}

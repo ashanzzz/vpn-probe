@@ -165,6 +165,9 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 	baseURL := strings.TrimRight(cfg.URL, "/")
 	endpoint := fmt.Sprintf("%s/api/collection/%s", baseURL, url.PathEscape(name))
 
+	if _, ok := payload["name"]; !ok {
+		payload["name"] = name
+	}
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -241,6 +244,9 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 		bases = []string{strings.TrimRight(cfg.URL, "/")}
 	}
 
+	if _, ok := payload["name"]; !ok {
+		payload["name"] = name
+	}
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -493,7 +499,7 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 		}
 	}
 
-	// 4. 检查输出文件绑定是否规范 (ashan/Ashan -> col-ashan/ashan-master, Q/q -> col-q/Q-汇总)
+	// 4. 检查输出文件绑定是否规范 (ashan/Ashan -> col-ashan/ashan-master, Q/q -> col-q/Q-汇总, business/Business -> col-business)
 	ashanTarget := "col-ashan"
 	if _, exists := audit.Collections["col-ashan"]; !exists {
 		if _, masterExists := audit.Collections["ashan-master"]; masterExists {
@@ -506,6 +512,7 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 			qTarget = "Q-汇总"
 		}
 	}
+	businessTarget := "col-business"
 
 	for _, f := range files {
 		if f.Name == "ashan" || f.Name == "Ashan" {
@@ -517,6 +524,11 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 			if f.SourceName != qTarget && f.SourceName != "col-q" && f.SourceName != "Q-汇总" {
 				audit.Healthy = false
 				audit.Discrepancies = append(audit.Discrepancies, fmt.Sprintf("文件 '%s' 未绑定至骨干轻量集合 '%s' (当前: '%s')", f.Name, qTarget, f.SourceName))
+			}
+		} else if f.Name == "business" || f.Name == "Business" {
+			if f.SourceName != businessTarget {
+				audit.Healthy = false
+				audit.Discrepancies = append(audit.Discrepancies, fmt.Sprintf("文件 '%s' 未绑定至纯自建商务集合 '%s' (当前: '%s')", f.Name, businessTarget, f.SourceName))
 			}
 		}
 	}
@@ -636,7 +648,51 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 		}
 	}
 
-	// 4. 修复输出文件绑定：确保 ashan/Ashan 绑定 col-ashan (或 ashan-master)，Q/q 绑定 col-q (或 Q-汇总)
+	// 3.1 修复 business 集合 (col-business)：纯自建商务合集 (纯自建骨干 + 原生家宽，0 外部机场)
+	bizSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
+	if bizSummary, exists := audit.Collections["col-business"]; exists {
+		hasAirport := false
+		hasTransit := false
+		hasResi := false
+		for _, s := range bizSummary {
+			if c.isExternalAirport(s, extSet) {
+				hasAirport = true
+			}
+			if s == "ashan-transit" {
+				hasTransit = true
+			}
+			if strings.Contains(s, "resi") {
+				hasResi = true
+			}
+		}
+		if hasAirport || !hasTransit || !hasResi {
+			payload := map[string]any{
+				"name":                  "col-business",
+				"displayName":           "Business 纯自建商务合集 (0 外部机场)",
+				"subscriptions":         bizSubs,
+				"ignoreFailedRemoteSub": "quiet",
+			}
+			if err := c.UpdateCollection(ctx, "col-business", payload); err != nil {
+				return nil, fmt.Errorf("reconcile col-business: %w", err)
+			}
+			actions = append(actions, fmt.Sprintf("已将集合 'col-business' 净化为 %v (0 外部机场)", bizSubs))
+			logger.Sync("Reconciled collection 'col-business' -> 纯自建商务合集")
+		}
+	} else {
+		payload := map[string]any{
+			"name":                  "col-business",
+			"displayName":           "Business 纯自建商务合集 (0 外部机场)",
+			"subscriptions":         bizSubs,
+			"ignoreFailedRemoteSub": "quiet",
+		}
+		if err := c.UpdateCollection(ctx, "col-business", payload); err != nil {
+			return nil, fmt.Errorf("create missing col-business: %w", err)
+		}
+		actions = append(actions, fmt.Sprintf("已为 SubStore 自动创建缺失的集合 'col-business' -> %v (0 外部机场)", bizSubs))
+		logger.Sync("Created missing collection 'col-business'")
+	}
+
+	// 4. 修复输出文件绑定：确保 ashan/Ashan 绑定 col-ashan (或 ashan-master)，Q/q 绑定 col-q (或 Q-汇总)，business/Business 绑定 col-business
 	ashanTargetCol := "col-ashan"
 	if _, exists := audit.Collections["col-ashan"]; !exists {
 		if _, masterExists := audit.Collections["ashan-master"]; masterExists {
@@ -677,10 +733,62 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 				actions = append(actions, fmt.Sprintf("已将骨干轻量订阅文件 '%s' 重新绑定至纯骨干集合 '%s'", fName, qTargetCol))
 				logger.Sync("Reconciled file '%s' -> source '%s'", fName, qTargetCol)
 			}
+		} else if fName == "business" || fName == "Business" {
+			if sourceName != "col-business" {
+				payload := map[string]any{
+					"source":     "local",
+					"sourceType": "collection",
+					"sourceName": "col-business",
+				}
+				if err := c.UpdateFile(ctx, fName, payload); err != nil {
+					return nil, fmt.Errorf("reconcile file %s: %w", fName, err)
+				}
+				actions = append(actions, fmt.Sprintf("已将纯自建商务订阅文件 '%s' 重新绑定至集合 'col-business'", fName))
+				logger.Sync("Reconciled file '%s' -> source 'col-business'", fName)
+			}
 		}
 	}
 
-	// 4. 再次执行复查，生成最终报告
+	// 4.1 确保 business 文件存在；若缺失，自动以现有订阅为基准模板创建
+	hasBusinessFile := false
+	for fName := range audit.Files {
+		if strings.EqualFold(fName, "business") {
+			hasBusinessFile = true
+			break
+		}
+	}
+	if !hasBusinessFile {
+		baseFiles, _ := c.GetFileConfigurations(ctx)
+		var templateProcess []any
+		for _, bf := range baseFiles {
+			if strings.EqualFold(fmt.Sprint(bf["name"]), "ashan") || strings.EqualFold(fmt.Sprint(bf["name"]), "q") {
+				if proc, ok := bf["process"].([]any); ok {
+					templateProcess = proc
+					break
+				}
+			}
+		}
+		newFile := map[string]any{
+			"name":                    "business",
+			"displayName":             "Business 商业自建订阅 (高速骨干+原生家宽)",
+			"source":                  "local",
+			"sourceType":              "collection",
+			"sourceName":              "col-business",
+			"type":                    "mihomoConfig",
+			"mode":                    "config",
+			"includeUnsupportedProxy": true,
+		}
+		if len(templateProcess) > 0 {
+			newFile["process"] = templateProcess
+		}
+		if err := c.UpdateFile(ctx, "business", newFile); err != nil {
+			return nil, fmt.Errorf("create missing business file: %w", err)
+		}
+		actions = append(actions, "已在 Sub-Store 中自动创建缺失的商业自建订阅文件 'business'")
+		logger.Sync("Created missing file 'business' in SubStore")
+	}
+
+	// 5. 再次执行复查，生成最终报告
 	finalAudit, err := c.AuditTopology(ctx)
 	if err != nil {
 		return nil, err

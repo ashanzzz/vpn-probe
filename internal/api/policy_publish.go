@@ -40,14 +40,22 @@ func (s *APIServer) applyPolicyGroups(ctx context.Context, step func(string)) er
 	if err != nil {
 		return err
 	}
+	groupsBusiness, err := monitor.LoadCustomGroups("business")
+	if err != nil {
+		return err
+	}
 	atoms := s.orchestrator.CollectAtoms()
 
-	// Differentiated scripts: ashan gets all groups from custom_groups_ashan, Q strictly gets groups from custom_groups_q
+	// Differentiated scripts: ashan (all), Q (strictly backbone), business (pure self-built, no airports)
 	scriptAshan, err := publish.CompileScript(groupsAshan, atoms, "ashan")
 	if err != nil {
 		return err
 	}
 	scriptQ, err := publish.CompileScript(groupsQ, atoms, "q")
+	if err != nil {
+		return err
+	}
+	scriptBusiness, err := publish.CompileScript(groupsBusiness, atoms, "business")
 	if err != nil {
 		return err
 	}
@@ -78,14 +86,29 @@ func (s *APIServer) applyPolicyGroups(ctx context.Context, step func(string)) er
 		}
 	}
 
+	expectedBusiness := []string{}
+	requiredBusiness := map[string][]string{}
+	for _, g := range groupsBusiness {
+		if g.Enabled {
+			expectedBusiness = append(expectedBusiness, g.DisplayName)
+			matched := s.orchestrator.EvaluateGroupAtoms(g.Filter)
+			for _, a := range matched {
+				requiredBusiness[g.DisplayName] = append(requiredBusiness[g.DisplayName], a.Name)
+			}
+		}
+	}
+
 	err = (publish.Publisher{Client: s.substoreClient}).ApplyDifferentiated(
 		ctx,
 		scriptAshan,
 		scriptQ,
+		scriptBusiness,
 		func(fileName string, yaml []byte) error {
-			isQ := strings.EqualFold(fileName, "q")
-			if isQ {
+			if strings.EqualFold(fileName, "q") {
 				return publish.ValidateYAMLWithMembers(yaml, expectedQ, requiredQ, true)
+			}
+			if strings.EqualFold(fileName, "business") {
+				return publish.ValidateYAMLWithMembers(yaml, expectedBusiness, requiredBusiness, false)
 			}
 			return publish.ValidateYAMLWithMembers(yaml, expectedAshan, requiredAshan, false)
 		},
@@ -96,7 +119,7 @@ func (s *APIServer) applyPolicyGroups(ctx context.Context, step func(string)) er
 	}
 
 	if s.snapshotMgr != nil {
-		s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan"})
+		s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan", "business", "Business"})
 	}
 	return nil
 }

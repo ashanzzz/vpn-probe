@@ -489,6 +489,19 @@ func (c *Client) SyncFiveGroups(ctx context.Context, payload model.FiveGroupPayl
 		logger.Warnf("[SUBSTORE] Reconcile ashan-纯净 collection: %v", err)
 	}
 
+	// 3. 同步更新 col-business 集合 (纯自建全量组：线路+家宽+送中隔离，0 外部机场)
+	bizSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
+	bizPayload := map[string]any{
+		"name":                  "col-business",
+		"displayName":           "Business 纯自建商务合集 (0 外部机场)",
+		"subscriptions":         bizSubs,
+		"ignoreFailedRemoteSub": "quiet",
+	}
+	if err := c.UpdateCollection(ctx, "col-business", bizPayload); err != nil {
+		errs = append(errs, fmt.Sprintf("reconcile col-business: %v", err))
+		logger.Warnf("[SUBSTORE] Reconcile col-business collection: %v", err)
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("substore 5-group sync errors: %s", strings.Join(errs, "; "))
 	}

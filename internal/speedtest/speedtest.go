@@ -2,12 +2,14 @@ package speedtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -16,12 +18,37 @@ import (
 )
 
 const (
-	DefaultVPS10MURL    = "http://45.192.242.72:28745/s/default/speedtest-10m.bin"
-	DefaultFallback10M  = "https://speed.cloudflare.com/__down?bytes=10485760"
-	DefaultVPS30MURL    = "http://45.192.242.72:28745/s/default/speedtest-30m.bin"
-	DefaultFallback30M  = "https://speed.cloudflare.com/__down?bytes=31457280"
-	DefaultStreamURL    = "https://speed.cloudflare.com/__down?bytes=104857600"
+	DefaultVPS10MURL = "http://45.192.242.72:28745/s/default/speedtest-10m.bin"
+	DefaultVPS30MURL = "http://45.192.242.72:28745/s/default/speedtest-30m.bin"
 )
+
+var (
+	// ErrSelfSpeedSourceUnreachable 自建测速源不可达错误 (严格阻断公网测速网站回退)
+	ErrSelfSpeedSourceUnreachable = errors.New("[测速源不可达] 自建测速文件端点无响应或返回异常，已严格阻断公网测速网站回退")
+
+	speedURLMu        sync.RWMutex
+	customSpeedURL10M = DefaultVPS10MURL
+	customSpeedURL30M = DefaultVPS30MURL
+)
+
+// SetSelfHostedSpeedURLs 配置全局自建测速文件 URL
+func SetSelfHostedSpeedURLs(url10m, url30m string) {
+	speedURLMu.Lock()
+	defer speedURLMu.Unlock()
+	if url10m != "" {
+		customSpeedURL10M = url10m
+	}
+	if url30m != "" {
+		customSpeedURL30M = url30m
+	}
+}
+
+// GetSelfHostedSpeedURLs 获取当前全局自建测速文件 URL
+func GetSelfHostedSpeedURLs() (string, string) {
+	speedURLMu.RLock()
+	defer speedURLMu.RUnlock()
+	return customSpeedURL10M, customSpeedURL30M
+}
 
 // MakeProxyHTTPClient 为测速创建 SOCKS5 HTTP Client
 func MakeProxyHTTPClient(port int, timeout time.Duration) (*http.Client, error) {
@@ -53,10 +80,12 @@ func MakeProxyHTTPClient(port int, timeout time.Duration) (*http.Client, error) 
 	}, nil
 }
 
-// TestVPS10M 针对 VPS 自建 10MB 真实测试文件进行平滑低风控吞吐量测速
+// TestVPS10M 针对 VPS 自建 10MB 真实测试文件进行平滑低风控吞吐量测速 (严禁任何公网测速网站回退)
 func TestVPS10M(ctx context.Context, port int, targetURL string, latencyMs int) (*model.SpeedResult, error) {
 	if targetURL == "" {
-		targetURL = DefaultVPS10MURL
+		speedURLMu.RLock()
+		targetURL = customSpeedURL10M
+		speedURLMu.RUnlock()
 	}
 
 	client, err := MakeProxyHTTPClient(port, 30*time.Second)
@@ -74,20 +103,14 @@ func TestVPS10M(ctx context.Context, port int, targetURL string, latencyMs int) 
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
-		if targetURL == DefaultVPS10MURL {
-			logger.Warnf("[SPEED] VPS 10M endpoint failed (%v), falling back to Cloudflare 10M stream...", err)
-			return TestVPS10M(ctx, port, DefaultFallback10M, latencyMs)
-		}
-		return nil, fmt.Errorf("http get failed: %w", err)
+		logger.Errorf("[SPEED] 自建 10M 测速端点请求失败: %v (已严格阻断公网测速网站回退)", err)
+		return nil, fmt.Errorf("%w: %v", ErrSelfSpeedSourceUnreachable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if targetURL == DefaultVPS10MURL {
-			logger.Warnf("[SPEED] VPS 10M endpoint returned status %d, falling back to Cloudflare 10M stream...", resp.StatusCode)
-			return TestVPS10M(ctx, port, DefaultFallback10M, latencyMs)
-		}
-		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		logger.Errorf("[SPEED] 自建 10M 测速端点返回异常状态 %d (已严格阻断公网测速网站回退)", resp.StatusCode)
+		return nil, fmt.Errorf("%w: HTTP %d", ErrSelfSpeedSourceUnreachable, resp.StatusCode)
 	}
 
 	ttfb := int(time.Since(start).Milliseconds())
@@ -142,10 +165,12 @@ func TestVPS10M(ctx context.Context, port int, targetURL string, latencyMs int) 
 	return res, nil
 }
 
-// TestVPS30M 针对 VPS 自建 30MB 真实测试文件进行无风控吞吐量测速
+// TestVPS30M 针对 VPS 自建 30MB 真实测试文件进行无风控吞吐量测速 (严禁任何公网测速网站回退)
 func TestVPS30M(ctx context.Context, port int, targetURL string, latencyMs int) (*model.SpeedResult, error) {
 	if targetURL == "" {
-		targetURL = DefaultVPS30MURL
+		speedURLMu.RLock()
+		targetURL = customSpeedURL30M
+		speedURLMu.RUnlock()
 	}
 
 	client, err := MakeProxyHTTPClient(port, 45*time.Second)
@@ -163,21 +188,14 @@ func TestVPS30M(ctx context.Context, port int, targetURL string, latencyMs int) 
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
-		// 尝试降级使用 Cloudflare 30MB 备选
-		if targetURL == DefaultVPS30MURL {
-			logger.Warnf("[SPEED] VPS endpoint failed (%v), falling back to Cloudflare 30M stream...", err)
-			return TestVPS30M(ctx, port, DefaultFallback30M, latencyMs)
-		}
-		return nil, fmt.Errorf("http get failed: %w", err)
+		logger.Errorf("[SPEED] 自建 30M 测速端点请求失败: %v (已严格阻断公网测速网站回退)", err)
+		return nil, fmt.Errorf("%w: %v", ErrSelfSpeedSourceUnreachable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if targetURL == DefaultVPS30MURL {
-			logger.Warnf("[SPEED] VPS 30M endpoint returned status %d, falling back to Cloudflare 30M stream...", resp.StatusCode)
-			return TestVPS30M(ctx, port, DefaultFallback30M, latencyMs)
-		}
-		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		logger.Errorf("[SPEED] 自建 30M 测速端点返回异常状态 %d (已严格阻断公网测速网站回退)", resp.StatusCode)
+		return nil, fmt.Errorf("%w: HTTP %d", ErrSelfSpeedSourceUnreachable, resp.StatusCode)
 	}
 
 	ttfb := int(time.Since(start).Milliseconds())
@@ -232,10 +250,15 @@ func TestVPS30M(ctx context.Context, port int, targetURL string, latencyMs int) 
 	return res, nil
 }
 
-// TestStream30S 执行持续流媒体测速 (采样峰值、平均值与抖动)
+// TestStream30S 执行持续流媒体测速 (采样峰值、平均值与抖动，严格基于自建文件)
 func TestStream30S(ctx context.Context, port int, streamURL string, durationSec int, latencyMs int) (*model.SpeedResult, error) {
 	if streamURL == "" {
-		streamURL = DefaultStreamURL
+		speedURLMu.RLock()
+		streamURL = customSpeedURL30M
+		if streamURL == "" {
+			streamURL = customSpeedURL10M
+		}
+		speedURLMu.RUnlock()
 	}
 	if durationSec <= 0 {
 		durationSec = 30
@@ -259,12 +282,14 @@ func TestStream30S(ctx context.Context, port int, streamURL string, durationSec 
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("http get stream: %w", err)
+		logger.Errorf("[SPEED] 自建流式测速端点请求失败: %v (已严格阻断公网测速网站回退)", err)
+		return nil, fmt.Errorf("%w: %v", ErrSelfSpeedSourceUnreachable, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		logger.Errorf("[SPEED] 自建流式测速端点返回异常状态 %d (已严格阻断公网测速网站回退)", resp.StatusCode)
+		return nil, fmt.Errorf("%w: HTTP %d", ErrSelfSpeedSourceUnreachable, resp.StatusCode)
 	}
 
 	ttfb := int(time.Since(start).Milliseconds())

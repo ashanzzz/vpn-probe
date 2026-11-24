@@ -100,7 +100,8 @@ func runServer(args []string) {
 		os.Exit(1)
 	}
 	defer st.Close()
-	logger.Infof("SQLite database initialized at ./data/vpn-probe.db")
+	probe.SetGlobalIPGeoStore(st)
+	logger.Infof("SQLite database initialized at ./data/vpn-probe.db (IP Geo persistent cache wired)")
 
 	engine := probe.NewEngine(cfg)
 	subClient := substore.NewClient(&cfg.SubStore)

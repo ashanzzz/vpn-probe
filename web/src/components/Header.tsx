@@ -8,10 +8,11 @@ import {
   LogOut, 
   ShieldCheck,
   Radio,
-  Layers
+  Layers,
+  Network
 } from 'lucide-react';
 
-export type TabType = 'dashboard' | 'pipeline' | 'vps' | 'probe' | 'settings';
+export type TabType = 'dashboard' | 'topology' | 'pipeline' | 'vps' | 'probe' | 'settings';
 
 interface HeaderProps {
   currentTab: TabType;
@@ -28,6 +29,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const tabs = [
     { id: 'dashboard' as TabType, label: '节点监控大盘', icon: Activity },
+    { id: 'topology' as TabType, label: '网络拓扑看板', icon: Network },
     { id: 'pipeline' as TabType, label: '订阅与编排枢纽', icon: Layers },
     { id: 'vps' as TabType, label: 'VPS 资产与自愈', icon: Wrench },
     { id: 'probe' as TabType, label: '沙箱即时探针', icon: Terminal },

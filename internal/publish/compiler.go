@@ -18,7 +18,7 @@ type compiledGroup struct {
 }
 
 // CompileScript compiles user-authored groups into a robust Sub-Store script operator.
-// targetFileType: "ashan" (all nodes) or "q" (strictly backbone only, excludes residential)
+// targetFileType: "ashan" (all nodes), "q" (strictly backbone only, excludes residential), or "business" (pure self-built, no commercial airports)
 func CompileScript(groups []model.CustomGroupDef, atoms []model.AtomNode, targetFileType ...string) (string, error) {
 	isQ := len(targetFileType) > 0 && strings.EqualFold(targetFileType[0], "q")
 
@@ -150,7 +150,7 @@ function isInformationalOrUnsupportedNode(p) {
 function isDirtyLeakName(n) {
   if (typeof n !== 'string') return false;
   if (n.includes('不送中') || n.includes('Non-Leak') || n.includes('Clean')) return false;
-  return n === '自建-送中' || n === '自建-送中分组' || n === 'ashan-china-leak' || n.includes('送中') || n.includes('China-Leak');
+  return n === '自建-送中' || n === '自建-送中分组' || n === 'ashan-china-leak' || n === 'business-china-leak' || n.includes('送中') || n.includes('China-Leak');
 }
 
 function resolveProxyName(targetName, allNames) {

@@ -184,7 +184,7 @@ gateway=off
 rbi=off
 kex=X25519`
 
-	ip, loc := parseCloudflareTrace(strings.NewReader(raw))
+	ip, loc, _ := parseCloudflareTrace(strings.NewReader(raw))
 	if ip != "156.231.113.91" {
 		t.Errorf("expected ip 156.231.113.91, got %s", ip)
 	}

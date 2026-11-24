@@ -108,8 +108,8 @@ export const PolicyGroupStudio: React.FC = () => {
   const [notice, setNotice] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
   const [isDirty, setIsDirty] = useState(false);
 
-  // 视角切换：ashan (全栈全家桶) vs Q (轻量骨干)
-  const [viewPerspective, setViewPerspective] = useState<'ashan' | 'q'>('ashan');
+  // 视角切换：ashan (全栈全家桶) vs Q (轻量骨干) vs business (纯自建商务)
+  const [viewPerspective, setViewPerspective] = useState<'ashan' | 'q' | 'business'>('ashan');
 
   // 是否展开外置策略联动卡片
   const [showExtMatrix, setShowExtMatrix] = useState(false);
@@ -130,7 +130,7 @@ export const PolicyGroupStudio: React.FC = () => {
   const [metadataType, setMetadataType] = useState('');
   const [metadataTags, setMetadataTags] = useState('');
 
-  const load = useCallback(async (prof: 'ashan' | 'q' = viewPerspective) => {
+  const load = useCallback(async (prof: 'ashan' | 'q' | 'business' = viewPerspective) => {
     try {
       const [g, a, j, m] = await Promise.all([
         api.getPolicyGroups(prof),
@@ -150,8 +150,8 @@ export const PolicyGroupStudio: React.FC = () => {
 
   useEffect(() => { load(viewPerspective); }, [viewPerspective]);
 
-  // 分轨切换（ashan vs Q 物理隔离工作台）
-  const switchPerspective = async (next: 'ashan' | 'q') => {
+  // 分轨切换（ashan vs Q vs business 物理隔离工作台）
+  const switchPerspective = async (next: 'ashan' | 'q' | 'business') => {
     if (next === viewPerspective) return;
     if (isDirty) {
       if (!window.confirm(`当前工作台（${viewPerspective.toUpperCase()}）有未保存的暂存更改，切换分轨会导致未保存的内容丢失，确定切换到 ${next.toUpperCase()} 分轨吗？`)) {
@@ -209,8 +209,13 @@ export const PolicyGroupStudio: React.FC = () => {
   // 一键恢复官方基准组 (ashan 为 8 大组，Q 为专属纯骨干组)
   const handleResetDefaults = async () => {
     const isQ = viewPerspective === 'q';
-    const trackLabel = isQ ? 'Q 极速轻量骨干轨专属基准组（天然 0 家宽纯骨干）' : 'ashan 全栈旗舰轨 8 大核心基准组（含全量家宽与骨干）';
-    if (!window.confirm(`确定将当前工作台（${viewPerspective.toUpperCase()}）的策略列表重置为官方 ${trackLabel}？\n重置仅作用于当前选中的 ${viewPerspective.toUpperCase()} 分轨，绝不影响另一轨！检查满意后点击「保存全量策略并同步」生效。`)) {
+    let trackLabel = 'ashan 全栈旗舰轨 8 大核心基准组（含全量家宽与骨干）';
+    if (viewPerspective === 'q') {
+      trackLabel = 'Q 极速轻量骨干轨专属基准组（天然 0 家宽纯骨干）';
+    } else if (viewPerspective === 'business') {
+      trackLabel = 'business 纯自建商务轨 8 大核心基准组（0 外部机场纯自建）';
+    }
+    if (!window.confirm(`确定将当前工作台（${viewPerspective.toUpperCase()}）的策略列表重置为官方 ${trackLabel}？\n重置仅作用于当前选中的 ${viewPerspective.toUpperCase()} 分轨，绝不影响其他分轨！检查满意后点击「保存全量策略并同步」生效。`)) {
       return;
     }
     setBusy(true);
@@ -243,7 +248,7 @@ export const PolicyGroupStudio: React.FC = () => {
       setIsDirty(false);
       setNotice({
         type: 'success',
-        text: `「${viewPerspective.toUpperCase()} 轨」全量策略组已保存！发布任务 #${res.revision} 已排队，正在双轨联动编译同步至 Sub-Store。`
+        text: `「${viewPerspective.toUpperCase()} 轨」全量策略组已保存！发布任务 #${res.revision} 已排队，正在三轨联动编译同步至 Sub-Store。`
       });
       await load(viewPerspective);
     } catch (e: any) {
@@ -254,7 +259,7 @@ export const PolicyGroupStudio: React.FC = () => {
   };
 
   const remove = async (g: CustomGroupDef) => {
-    if (!window.confirm(`确定仅从「${viewPerspective.toUpperCase()} 轨」中删除策略组“${g.display_name}”？\n此操作仅作用于当前分轨，绝对不会删除或影响另一轨！`)) return;
+    if (!window.confirm(`确定仅从「${viewPerspective.toUpperCase()} 轨」中删除策略组“${g.display_name}”？\n此操作仅作用于当前分轨，绝对不会删除或影响其他分轨！`)) return;
     if (isDirty) {
       // 暂存模式直接在本地列表移除
       setGroups(groups.filter(x => x.name !== g.name));
@@ -383,7 +388,7 @@ export const PolicyGroupStudio: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Target Perspective Switcher Pill (Q vs ashan 独立工作台) */}
+      {/* 2. Target Perspective Switcher Pill (Q vs ashan vs business 独立工作台) */}
       <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
         <div className="flex items-center space-x-2">
           <span className="text-2xs font-semibold uppercase tracking-wider text-slate-400">
@@ -411,6 +416,17 @@ export const PolicyGroupStudio: React.FC = () => {
             >
               <span>Q 极速轻量骨干</span>
               <span className="text-2xs opacity-80 font-mono">(0 住宅硬隔离)</span>
+            </button>
+            <button
+              onClick={() => switchPerspective('business')}
+              className={`px-3 py-1 rounded-md transition flex items-center space-x-1.5 ${
+                viewPerspective === 'business'
+                  ? 'bg-emerald-600 text-white font-bold shadow-2xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>business 纯自建商务</span>
+              <span className="text-2xs opacity-80 font-mono">(0 外部机场)</span>
             </button>
           </div>
         </div>
@@ -759,9 +775,11 @@ export const PolicyGroupStudio: React.FC = () => {
                     <span className={`inline-flex items-center text-2xs font-mono px-2 py-0.5 rounded border ${
                       viewPerspective === 'q' 
                         ? 'bg-blue-50 text-blue-800 border-blue-200' 
+                        : viewPerspective === 'business'
+                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
                         : 'bg-purple-50 text-purple-800 border-purple-200'
                     }`}>
-                      命中 <b>{evalRes.count}</b> 个节点 ({viewPerspective === 'q' ? 'Q 纯骨干' : 'ashan 全量'})
+                      命中 <b>{evalRes.count}</b> 个节点 ({viewPerspective === 'q' ? 'Q 纯骨干' : viewPerspective === 'business' ? 'business 纯自建' : 'ashan 全量'})
                     </span>
                   )}
                 </div>

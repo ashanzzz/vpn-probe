@@ -133,7 +133,7 @@ func NewAPIServer(
 	if sc != nil {
 		snapshotMgr = substore.NewSnapshotManager(sc, filepath.Join("data", "snapshots"))
 		if cfg.SubStore.Enabled {
-			snapshotMgr.StartAutoWarmup(15*time.Minute, []string{"ashan", "Ashan", "Q", "q"})
+			snapshotMgr.StartAutoWarmup(15*time.Minute, []string{"ashan", "Ashan", "Q", "q", "business", "Business"})
 		}
 	}
 
@@ -148,6 +148,14 @@ func NewAPIServer(
 		scheduler:      sched,
 		rulesMgr:       rm,
 		orchestrator:   monitor.NewOrchestrator(sched),
+	}
+
+	if st != nil {
+		probe.SetGlobalIPGeoStore(st)
+	}
+
+	if cfg != nil && (cfg.SpeedTest.SelfHostedURL10M != "" || cfg.SpeedTest.SelfHostedURL30M != "") {
+		speedtest.SetSelfHostedSpeedURLs(cfg.SpeedTest.SelfHostedURL10M, cfg.SpeedTest.SelfHostedURL30M)
 	}
 
 	server.initPublisher()
@@ -548,7 +556,7 @@ func (s *APIServer) setupRoutes() {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 		if s.snapshotMgr != nil {
-			s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan"})
+			s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan", "business", "Business"})
 		}
 		customlog.Audit("switch_substore_mode", c.IP(), "ashan-mode", "success", fmt.Sprintf("Switched mode to %s", req.Mode))
 		return c.JSON(state)
@@ -661,7 +669,7 @@ func (s *APIServer) setupRoutes() {
 		curr := s.substoreClient.GetCurrentMode()
 		_, _ = s.substoreClient.SetMode(c.Context(), curr)
 		if s.snapshotMgr != nil {
-			s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan"})
+			s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan", "business", "Business"})
 		}
 
 		customlog.Audit("update_external_sources", c.IP(), "external_sources", "success", fmt.Sprintf("Updated sources: %v", sources))
@@ -689,7 +697,7 @@ func (s *APIServer) setupRoutes() {
 		curr := s.substoreClient.GetCurrentMode()
 		_, _ = s.substoreClient.SetMode(c.Context(), curr)
 		if s.snapshotMgr != nil {
-			s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan"})
+			s.snapshotMgr.TriggerAsyncWarmup([]string{"Q", "q", "ashan", "Ashan", "business", "Business"})
 		}
 
 		customlog.Audit("delete_external_source", c.IP(), target, "success", fmt.Sprintf("Removed source: %s (purge=%v)", target, purge))
@@ -1098,6 +1106,55 @@ func (s *APIServer) setupRoutes() {
 			"count":   len(ranked),
 			"ranking": ranked,
 		})
+	})
+
+	// 5.3.1 自建测速配置与源管理 (严格阻断一切外部测速网)
+	s.app.Get("/api/speedtest/config", func(c *fiber.Ctx) error {
+		u10, u30 := speedtest.GetSelfHostedSpeedURLs()
+		return c.JSON(fiber.Map{
+			"status":              "success",
+			"self_hosted_url_10m": u10,
+			"self_hosted_url_30m": u30,
+			"prohibit_public":     true,
+			"message":             "严格禁止一切公网测速网站回退，仅允许自建文件测速",
+		})
+	})
+
+	s.app.Post("/api/speedtest/config", func(c *fiber.Ctx) error {
+		var req struct {
+			SelfHostedURL10M string `json:"self_hosted_url_10m"`
+			SelfHostedURL30M string `json:"self_hosted_url_30m"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+		speedtest.SetSelfHostedSpeedURLs(req.SelfHostedURL10M, req.SelfHostedURL30M)
+		u10, u30 := speedtest.GetSelfHostedSpeedURLs()
+		return c.JSON(fiber.Map{
+			"status":              "success",
+			"self_hosted_url_10m": u10,
+			"self_hosted_url_30m": u30,
+			"message":             "自建测速端点已更新",
+		})
+	})
+
+	// 5.3.2 全局四阶网络拓扑看板 API (客户端 ➔ 自建线路 ➔ 多区NAT端口 ➔ 家宽落地)
+	s.app.Get("/api/topology/overview", func(c *fiber.Ctx) error {
+		var results []*model.NodeProbeResult
+		if s.scheduler != nil {
+			for _, st := range s.scheduler.GetStatus() {
+				if st.LastResult != nil {
+					results = append(results, st.LastResult)
+				}
+			}
+		}
+		if len(results) == 0 && s.store != nil {
+			if hist, err := s.store.GetRecentResults(c.Context(), 100); err == nil {
+				results = hist
+			}
+		}
+		overview := probe.BuildTopologyOverview(results)
+		return c.JSON(overview)
 	})
 
 	// 5.4 历史三层架构 Sub-Store 一键同步 API (自动平滑重定向至方案B五维策略组同步)
@@ -2247,7 +2304,7 @@ func (s *APIServer) handleSaveCustomGroup(c *fiber.Ctx) error {
 	if syncNow && s.orchestrator != nil {
 		_ = s.orchestrator.SyncAllCustomGroups(c.Context())
 		if s.snapshotMgr != nil {
-			s.snapshotMgr.TriggerAsyncWarmup([]string{def.Name, "ashan", "Ashan", "Q", "q"})
+			s.snapshotMgr.TriggerAsyncWarmup([]string{def.Name, "ashan", "Ashan", "Q", "q", "business", "Business"})
 		}
 	}
 
@@ -2306,7 +2363,7 @@ func (s *APIServer) handleRebuildChains(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
 	if s.snapshotMgr != nil {
-		s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q"})
+		s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q", "business", "Business"})
 	}
 	return c.JSON(fiber.Map{
 		"status":  "ok",
@@ -2368,7 +2425,7 @@ func (s *APIServer) handleBindCustomChain(c *fiber.Ctx) error {
 			defer cancel()
 			_ = s.scheduler.SyncFiveGroupsNow(ctx)
 			if s.snapshotMgr != nil {
-				s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q"})
+				s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q", "business", "Business"})
 			}
 		}()
 	}
@@ -2410,7 +2467,7 @@ func (s *APIServer) handleUnbindCustomChain(c *fiber.Ctx) error {
 			defer cancel()
 			_ = s.scheduler.SyncFiveGroupsNow(ctx)
 			if s.snapshotMgr != nil {
-				s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q"})
+				s.snapshotMgr.TriggerAsyncWarmup([]string{"ashan-master", "ashan-纯净", "ashan", "Ashan", "Q", "q", "business", "Business"})
 			}
 		}()
 	}

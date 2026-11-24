@@ -68,11 +68,12 @@ func patchFile(original map[string]any, script string) map[string]any {
 	return copyMap
 }
 
-// ApplyDifferentiated patches each file with its specific script (e.g. scriptAshan for ashan, scriptQ for Q)
+// ApplyDifferentiated patches each file with its specific script (e.g. scriptAshan for ashan, scriptQ for Q, scriptBusiness for business)
 func (p Publisher) ApplyDifferentiated(
 	ctx context.Context,
 	scriptAshan string,
 	scriptQ string,
+	scriptBusiness string,
 	verify func(fileName string, body []byte) error,
 	progress func(string),
 ) error {
@@ -85,14 +86,68 @@ func (p Publisher) ApplyDifferentiated(
 	}
 
 	selected := []map[string]any{}
+	hasBusiness := false
 	for _, f := range files {
 		name, _ := f["name"].(string)
-		if strings.EqualFold(name, "q") || strings.EqualFold(name, "ashan") {
+		if strings.EqualFold(name, "q") || strings.EqualFold(name, "ashan") || strings.EqualFold(name, "business") {
 			selected = append(selected, f)
+			if strings.EqualFold(name, "business") {
+				hasBusiness = true
+			}
 		}
 	}
+
+	// 确保 col-business 集合存在 (0 外部机场)
+	if cols, err := p.Client.GetCollections(ctx); err == nil {
+		hasColBiz := false
+		for _, c := range cols {
+			if strings.EqualFold(c.Name, "col-business") {
+				hasColBiz = true
+				break
+			}
+		}
+		if !hasColBiz {
+			bizSubs := []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}
+			_ = p.Client.UpdateCollection(ctx, "col-business", map[string]any{
+				"name":                  "col-business",
+				"displayName":           "Business 纯自建商务合集 (0 外部机场)",
+				"subscriptions":         bizSubs,
+				"ignoreFailedRemoteSub": "quiet",
+			})
+		}
+	}
+
+	// 若远端缺少 business 订阅文件，自动以现有 ashan 或 Q 为基准模板创建
+	if !hasBusiness {
+		var templateProcess []any
+		for _, f := range files {
+			if strings.EqualFold(fmt.Sprint(f["name"]), "ashan") || strings.EqualFold(fmt.Sprint(f["name"]), "q") {
+				if proc, ok := f["process"].([]any); ok {
+					templateProcess = proc
+					break
+				}
+			}
+		}
+		newBiz := map[string]any{
+			"name":                    "business",
+			"displayName":             "Business 商业自建订阅 (高速骨干+原生家宽)",
+			"source":                  "local",
+			"sourceType":              "collection",
+			"sourceName":              "col-business",
+			"type":                    "mihomoConfig",
+			"mode":                    "config",
+			"includeUnsupportedProxy": true,
+		}
+		if len(templateProcess) > 0 {
+			newBiz["process"] = templateProcess
+		}
+		if err := p.Client.UpdateFile(ctx, "business", patchFile(newBiz, scriptBusiness)); err == nil {
+			selected = append(selected, newBiz)
+		}
+	}
+
 	if len(selected) == 0 {
-		return fmt.Errorf("neither Q nor ashan file exists in Sub-Store")
+		return fmt.Errorf("neither Q, ashan nor business file exists in Sub-Store")
 	}
 
 	sort.Slice(selected, func(i, j int) bool { return fmt.Sprint(selected[i]["name"]) < fmt.Sprint(selected[j]["name"]) })
@@ -119,6 +174,8 @@ func (p Publisher) ApplyDifferentiated(
 		script := scriptAshan
 		if strings.EqualFold(name, "q") {
 			script = scriptQ
+		} else if strings.EqualFold(name, "business") {
+			script = scriptBusiness
 		}
 		if err := p.Client.UpdateFile(ctx, name, patchFile(f, script)); err != nil {
 			return rollback(fmt.Errorf("patch %s: %w", name, err))
@@ -127,13 +184,15 @@ func (p Publisher) ApplyDifferentiated(
 	}
 
 	progress("verifying")
-	// 针对不同订阅拓扑去重验证（q/Q 为同一极速骨干拓扑，ashan/Ashan 为同一全栈全家桶拓扑），避免重复编译超时
+	// 针对不同订阅拓扑去重验证（q/Q 为同一极速骨干拓扑，ashan/Ashan 为同一全栈全家桶拓扑，business/Business 为纯自建商务拓扑），避免重复编译超时
 	verifiedCanonical := map[string]bool{}
 	for _, f := range selected {
 		rawName := fmt.Sprint(f["name"])
 		canon := "ashan"
 		if strings.EqualFold(rawName, "q") {
 			canon = "q"
+		} else if strings.EqualFold(rawName, "business") {
+			canon = "business"
 		}
 		if verifiedCanonical[canon] {
 			continue
@@ -153,7 +212,7 @@ func (p Publisher) ApplyDifferentiated(
 
 // Apply fallback for backward compatibility
 func (p Publisher) Apply(ctx context.Context, script string, verify func([]byte) error, progress func(string)) error {
-	return p.ApplyDifferentiated(ctx, script, script, func(_ string, body []byte) error {
+	return p.ApplyDifferentiated(ctx, script, script, script, func(_ string, body []byte) error {
 		return verify(body)
 	}, progress)
 }
@@ -244,7 +303,7 @@ func ValidateYAMLWithMembers(body []byte, wanted []string, required map[string][
 	for _, g := range cfg.Groups {
 		if g.Name == "选择代理" || g.Name == "谷歌服务" || g.Name == "Youtube" || g.Name == "AI服务" {
 			for _, px := range g.Proxies {
-				if px == "自建-送中" || px == "自建-送中分组" || px == "ashan-china-leak" {
+				if px == "自建-送中" || px == "自建-送中分组" || px == "ashan-china-leak" || px == "business-china-leak" {
 					return fmt.Errorf("core clean group %q illegally contains dirty leak group %q", g.Name, px)
 				}
 			}

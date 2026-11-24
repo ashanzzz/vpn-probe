@@ -15,6 +15,7 @@ import { VPSCenter } from './components/VPSCenter';
 import { PipelineHub } from './components/PipelineHub';
 import { QuickProbe } from './components/QuickProbe';
 import { SettingsLogs } from './components/SettingsLogs';
+import { TopologyView } from './components/TopologyView';
 
 export const App: React.FC = () => {
   const [token, setToken] = useState<string>(() => getStoredToken());
@@ -139,7 +140,8 @@ export const App: React.FC = () => {
   // Retest Single Node
   const handleRetestSingleNode = async (node: NodeProbeResult) => {
     try {
-      const resp = await api.probeBatch([node.original_url], node.is_self ?? true, false, true, 8);
+      // 传递 forceRefresh: true，穿透 IP 数据库与分流缓存，强制执行物理网络探测与重验
+      const resp = await api.probeBatch([node.original_url], node.is_self ?? true, false, true, 8, true);
       if (resp.results && resp.results.length > 0) {
         const updated = resp.results[0];
         setSelectedReportNode(updated);
@@ -225,6 +227,12 @@ export const App: React.FC = () => {
             onSpeedTestNode={handleSpeedTestSingleNode}
             onOpenHealingWizard={handleOpenHealingWizard}
             isInspecting={isInspecting}
+          />
+        )}
+
+        {currentTab === 'topology' && (
+          <TopologyView
+            onOpenReport={(node) => setSelectedReportNode(node)}
           />
         )}
 

@@ -125,7 +125,7 @@ type FiveGroupPayload struct {
 	ChinaLeakNodes []string `json:"china_leak_nodes"`
 }
 
-// DefaultCustomGroups returns canonical baseline system policy groups for ashan or q.
+// DefaultCustomGroups returns canonical baseline system policy groups for ashan, q, or business.
 func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 	if len(profile) > 0 && strings.EqualFold(profile[0], "q") {
 		return []CustomGroupDef{
@@ -193,6 +193,119 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 				Filter: GroupFilter{
 					Mode:          "filter",
 					Kinds:         []string{"transit"},
+					ChinaLeakOnly: true,
+				},
+			},
+		}
+	}
+
+	if len(profile) > 0 && strings.EqualFold(profile[0], "business") {
+		return []CustomGroupDef{
+			{
+				Name:        "business-transit",
+				DisplayName: "自建-线路机",
+				Enabled:     true,
+				Type:        "select",
+				Order:       10,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Kinds:     []string{"transit"},
+					CleanOnly: false,
+				},
+			},
+			{
+				Name:        "business-us-resi",
+				DisplayName: "自建-美国家宽",
+				Enabled:     true,
+				Type:        "select",
+				Order:       20,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Countries: []string{"US"},
+					Kinds:     []string{"residential", "chain"},
+					CleanOnly: true,
+				},
+			},
+			{
+				Name:        "business-jp-resi",
+				DisplayName: "自建-日本家宽",
+				Enabled:     true,
+				Type:        "select",
+				Order:       30,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Countries: []string{"JP"},
+					Kinds:     []string{"residential", "chain"},
+					CleanOnly: true,
+				},
+			},
+			{
+				Name:        "business-tw-resi",
+				DisplayName: "自建-台湾家宽",
+				Enabled:     true,
+				Type:        "select",
+				Order:       40,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Countries: []string{"TW"},
+					Kinds:     []string{"residential", "chain"},
+					CleanOnly: true,
+				},
+			},
+			{
+				Name:        "business-other",
+				DisplayName: "自建-其他",
+				Enabled:     true,
+				Type:        "select",
+				Order:       50,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Countries: []string{"SG", "KR", "UK", "DE", "OTHER"},
+					Kinds:     []string{"residential", "chain"},
+					CleanOnly: true,
+				},
+			},
+			{
+				Name:        "business-residential",
+				DisplayName: "自建-家宽分组",
+				Enabled:     true,
+				Type:        "url-test",
+				Order:       60,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Kinds:     []string{"residential", "chain"},
+					CleanOnly: true,
+				},
+			},
+			{
+				Name:        "business-clean",
+				DisplayName: "自建-不送中",
+				Enabled:     true,
+				Type:        "url-test",
+				Order:       70,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Kinds:     []string{"transit", "residential", "chain"},
+					CleanOnly: true,
+				},
+			},
+			{
+				Name:        "business-china-leak",
+				DisplayName: "自建-送中",
+				Enabled:     true,
+				Type:        "url-test",
+				Order:       80,
+				AddToEntry:  false,
+				Filter: GroupFilter{
+					Mode:          "filter",
+					Kinds:         []string{"transit", "residential", "chain"},
 					ChinaLeakOnly: true,
 				},
 			},

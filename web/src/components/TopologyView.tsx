@@ -1,0 +1,537 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  Network, 
+  RefreshCw, 
+  Server, 
+  ShieldCheck, 
+  ShieldAlert, 
+  ArrowRight, 
+  Settings, 
+  ExternalLink,
+  Layers,
+  Radio,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle
+} from 'lucide-react';
+import { api } from '../api/client';
+import type { 
+  TopologyOverviewResponse, 
+  TopologyTransitNode, 
+  TopologyNATRelayNode, 
+  TopologyLandingNode, 
+  TopologyNATPortItem,
+  NodeProbeResult 
+} from '../types';
+
+interface TopologyViewProps {
+  onOpenReport?: (node: NodeProbeResult) => void;
+}
+
+export const TopologyView: React.FC<TopologyViewProps> = ({ onOpenReport }) => {
+  const [data, setData] = useState<TopologyOverviewResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Region filter for NAT Stage 3: 'ALL' | 'JP' | 'US' | 'HK' | 'OTHER'
+  const [selectedRegion, setSelectedRegion] = useState<string>('ALL');
+
+  // Interactive path selection
+  const [selectedPort, setSelectedPort] = useState<number | null>(null);
+  const [selectedLandingId, setSelectedLandingId] = useState<string | null>(null);
+
+  // Speedtest config modal
+  const [showSpeedConfig, setShowSpeedConfig] = useState(false);
+  const [speedURL10M, setSpeedURL10M] = useState('');
+  const [speedURL30M, setSpeedURL30M] = useState('');
+  const [savingSpeedConfig, setSavingSpeedConfig] = useState(false);
+  const [speedConfigMsg, setSpeedConfigMsg] = useState<string | null>(null);
+
+  const fetchTopology = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.getTopologyOverview();
+      setData(res);
+    } catch (err: any) {
+      setError(err.message || '获取网络拓扑数据失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchSpeedConfig = async () => {
+    try {
+      const res = await api.getSpeedTestConfig();
+      setSpeedURL10M(res.self_hosted_url_10m || '');
+      setSpeedURL30M(res.self_hosted_url_30m || '');
+    } catch (err) {
+      console.error('Failed to load speed config', err);
+    }
+  };
+
+  const handleSaveSpeedConfig = async () => {
+    setSavingSpeedConfig(true);
+    setSpeedConfigMsg(null);
+    try {
+      await api.setSpeedTestConfig(speedURL10M, speedURL30M);
+      setSpeedConfigMsg('自建测速配置已更新成功');
+      setTimeout(() => setSpeedConfigMsg(null), 3000);
+    } catch (err: any) {
+      setSpeedConfigMsg(`保存失败: ${err.message}`);
+    } finally {
+      setSavingSpeedConfig(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTopology();
+    fetchSpeedConfig();
+  }, []);
+
+  // Filtered NAT Relays by region
+  const filteredNATRelays = useMemo(() => {
+    if (!data) return [];
+    if (selectedRegion === 'ALL') return data.nat_relays;
+    return data.nat_relays.filter(
+      (n) => n.region.toUpperCase() === selectedRegion.toUpperCase()
+    );
+  }, [data, selectedRegion]);
+
+  // Available regions for selector
+  const availableRegions = useMemo(() => {
+    if (!data) return ['ALL'];
+    const regs = new Set<string>();
+    data.nat_relays.forEach((n) => regs.add(n.region.toUpperCase()));
+    return ['ALL', ...Array.from(regs)];
+  }, [data]);
+
+  return (
+    <div className="space-y-6">
+      {/* 1. Header & Summary Metric Strip */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 pb-4 border-b border-slate-100">
+          <div>
+            <div className="flex items-center space-x-2">
+              <Network className="w-5 h-5 text-blue-600" />
+              <h2 className="text-base font-bold text-slate-900 tracking-tight">
+                四阶全景网络拓扑看板
+              </h2>
+              <span className="text-xs px-2.5 py-0.5 rounded-full font-mono bg-blue-50 text-blue-700 border border-blue-200">
+                [客户端 ➔ 自建线路 ➔ 多区NAT端口 ➔ 家宽落地]
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-1">
+              展示全量住宅 IP、懒猫云/自建多区 NAT 中转、动态端口映射池与端到端分段时延链路
+            </p>
+          </div>
+
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={() => setShowSpeedConfig(true)}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
+            >
+              <Settings className="w-3.5 h-3.5 text-slate-500" />
+              <span>自建测速配置</span>
+            </button>
+            <button
+              onClick={fetchTopology}
+              disabled={loading}
+              className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition shadow-xs disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              <span>刷新拓扑</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Metric Badges */}
+        {data && (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 pt-4">
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+              <div className="text-[11px] font-medium text-slate-500">家宽落地节点</div>
+              <div className="text-lg font-bold text-slate-900 font-mono mt-0.5">
+                {data.summary.total_landings} <span className="text-[10px] text-slate-400 font-normal">[个]</span>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+              <div className="text-[11px] font-medium text-slate-500">NAT 中转宿主</div>
+              <div className="text-lg font-bold text-amber-700 font-mono mt-0.5">
+                {data.summary.total_nat_relays} <span className="text-[10px] text-slate-400 font-normal">[区]</span>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+              <div className="text-[11px] font-medium text-slate-500">自建专线线路机</div>
+              <div className="text-lg font-bold text-blue-700 font-mono mt-0.5">
+                {data.summary.total_transits} <span className="text-[10px] text-slate-400 font-normal">[台]</span>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3">
+              <div className="text-[11px] font-medium text-slate-500">映射端口池</div>
+              <div className="text-lg font-bold text-indigo-700 font-mono mt-0.5">
+                {data.summary.total_ports} <span className="text-[10px] text-slate-400 font-normal">[口]</span>
+              </div>
+            </div>
+
+            <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-xl p-3">
+              <div className="text-[11px] font-medium text-emerald-800">通畅链路</div>
+              <div className="text-lg font-bold text-emerald-700 font-mono mt-0.5">
+                {data.summary.online_links} <span className="text-[10px] text-emerald-600 font-normal">[在线]</span>
+              </div>
+            </div>
+
+            <div className={`rounded-xl p-3 border ${
+              data.summary.fault_links > 0 
+                ? 'bg-rose-50 border-rose-200' 
+                : 'bg-slate-50 border-slate-200/80'
+            }`}>
+              <div className={`text-[11px] font-medium ${
+                data.summary.fault_links > 0 ? 'text-rose-700 font-bold' : 'text-slate-500'
+              }`}>
+                中断故障链路
+              </div>
+              <div className={`text-lg font-bold font-mono mt-0.5 ${
+                data.summary.fault_links > 0 ? 'text-rose-600' : 'text-slate-400'
+              }`}>
+                {data.summary.fault_links} <span className="text-[10px] font-normal">{data.summary.fault_links > 0 ? '[中断]' : '[零故障]'}</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 2. Region Switcher Filter */}
+      <div className="flex items-center justify-between bg-slate-100/70 p-2 rounded-xl border border-slate-200">
+        <div className="flex items-center space-x-1">
+          <span className="text-xs font-semibold text-slate-600 px-2">中转区域切换:</span>
+          {availableRegions.map((reg) => (
+            <button
+              key={reg}
+              onClick={() => setSelectedRegion(reg)}
+              className={`px-3 py-1 rounded-lg text-xs font-bold transition ${
+                selectedRegion === reg
+                  ? 'bg-white text-blue-700 shadow-xs border border-slate-200'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {reg === 'ALL' ? '全部中转区' : `${reg} 区域`}
+            </button>
+          ))}
+        </div>
+
+        {(selectedPort || selectedLandingId) && (
+          <button
+            onClick={() => {
+              setSelectedPort(null);
+              setSelectedLandingId(null);
+            }}
+            className="text-[11px] font-mono text-blue-600 hover:underline px-2"
+          >
+            清除高亮选区
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-700 text-xs p-4 rounded-xl flex items-center space-x-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {/* 3. Four-Stage Pipeline Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-start">
+        {/* Stage 1: Client */}
+        <div className="space-y-3">
+          <div className="flex items-center space-x-2 pb-2 border-b-2 border-slate-400">
+            <span className="w-5 h-5 rounded-full bg-slate-700 text-white text-[11px] font-bold flex items-center justify-center">1</span>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">客户端接入</h3>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Radio className="w-4 h-4 text-emerald-600 animate-pulse" />
+                <span className="text-xs font-bold text-slate-900">本地客户端 / 探针</span>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                [在线就绪]
+              </span>
+            </div>
+
+            <div className="text-[11px] text-slate-500 font-mono space-y-1 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+              <div>接入协议: SOCKS5 / HTTP</div>
+              <div>发起模式: 沙箱隔离进程</div>
+              <div>基准时延: ~0ms (本地环回)</div>
+            </div>
+
+            <div className="text-[10px] text-slate-400 border-t border-slate-100 pt-2">
+              全流量统一由客户端经由前置线路机或直接 NAT 端口出海
+            </div>
+          </div>
+        </div>
+
+        {/* Stage 2: Transit Nodes */}
+        <div className="space-y-3">
+          <div className="flex items-center space-x-2 pb-2 border-b-2 border-blue-500">
+            <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[11px] font-bold flex items-center justify-center">2</span>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">自建专线线路机</h3>
+          </div>
+
+          <div className="space-y-2.5 max-h-[700px] overflow-y-auto pr-1">
+            {(!data || data.transits.length === 0) ? (
+              <div className="bg-white border border-dashed border-slate-200 rounded-xl p-4 text-center text-xs text-slate-400">
+                暂无链式专线前置机 (直连模式透传)
+              </div>
+            ) : (
+              data.transits.map((transit) => (
+                <div
+                  key={transit.id}
+                  className={`bg-white border rounded-xl p-3.5 shadow-xs transition ${
+                    transit.online ? 'border-slate-200 hover:border-blue-300' : 'border-rose-200 bg-rose-50/20'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-900 truncate max-w-[140px]" title={transit.name}>
+                      {transit.name}
+                    </span>
+                    <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${
+                      transit.online 
+                        ? 'bg-blue-50 text-blue-700 border border-blue-200' 
+                        : 'bg-rose-50 text-rose-700 border border-rose-200'
+                    }`}>
+                      {transit.online ? `[在线] ${transit.latency_ms}ms` : '[离线]'}
+                    </span>
+                  </div>
+
+                  <div className="text-[11px] text-slate-500 font-mono mt-2 flex items-center justify-between">
+                    <span>区域: {transit.country}</span>
+                    <span className="text-slate-400 truncate max-w-[100px]">{transit.host}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Stage 3: Multi-Region NAT Relays & Ports */}
+        <div className="space-y-3">
+          <div className="flex items-center space-x-2 pb-2 border-b-2 border-amber-500">
+            <span className="w-5 h-5 rounded-full bg-amber-600 text-white text-[11px] font-bold flex items-center justify-center">3</span>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">
+              多区 NAT 中转与端口池
+            </h3>
+          </div>
+
+          <div className="space-y-3 max-h-[700px] overflow-y-auto pr-1">
+            {filteredNATRelays.length === 0 ? (
+              <div className="bg-white border border-dashed border-slate-200 rounded-xl p-4 text-center text-xs text-slate-400">
+                该区域暂无 NAT 中转实例
+              </div>
+            ) : (
+              filteredNATRelays.map((nat) => (
+                <div
+                  key={nat.id}
+                  className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-xs space-y-2.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-1.5">
+                      <Server className="w-3.5 h-3.5 text-amber-600" />
+                      <span className="text-xs font-bold text-slate-900 truncate max-w-[120px]">
+                        {nat.name}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                      [{nat.region}] {nat.public_ip}
+                    </span>
+                  </div>
+
+                  {/* Port Mapping Badges Pool */}
+                  <div className="pt-1">
+                    <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                      端口映射池 ({nat.ports.length} 个端口)
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {nat.ports.map((p) => {
+                        const isSelected = selectedPort === p.port;
+                        return (
+                          <button
+                            key={p.port}
+                            onClick={() => setSelectedPort(isSelected ? null : p.port)}
+                            className={`p-2 rounded-lg text-left transition border text-[11px] font-mono ${
+                              isSelected
+                                ? 'bg-amber-100 border-amber-400 text-amber-900 ring-2 ring-amber-300'
+                                : p.online
+                                ? 'bg-slate-50 border-slate-200 hover:border-amber-300 text-slate-800'
+                                : 'bg-rose-50 border-rose-200 text-rose-700'
+                            }`}
+                          >
+                            <div className="font-bold flex items-center justify-between">
+                              <span>:{p.port}</span>
+                              <span className="text-[9px] uppercase text-slate-400 font-sans">{p.proto}</span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                              {p.online ? `${p.latency_ms}ms` : '[断开]'}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Stage 4: Real Residential Landings */}
+        <div className="space-y-3">
+          <div className="flex items-center space-x-2 pb-2 border-b-2 border-emerald-500">
+            <span className="w-5 h-5 rounded-full bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center">4</span>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800">真实家宽落地</h3>
+          </div>
+
+          <div className="space-y-2.5 max-h-[700px] overflow-y-auto pr-1">
+            {(!data || data.landings.length === 0) ? (
+              <div className="bg-white border border-dashed border-slate-200 rounded-xl p-4 text-center text-xs text-slate-400">
+                暂无落地节点探测数据
+              </div>
+            ) : (
+              data.landings.map((landing) => {
+                const isSelected = selectedLandingId === landing.id;
+                return (
+                  <div
+                    key={landing.id}
+                    onClick={() => setSelectedLandingId(isSelected ? null : landing.id)}
+                    className={`bg-white border rounded-xl p-3.5 shadow-xs transition cursor-pointer ${
+                      isSelected
+                        ? 'border-emerald-500 bg-emerald-50/20 ring-2 ring-emerald-300'
+                        : landing.online
+                        ? 'border-slate-200 hover:border-emerald-300'
+                        : 'border-rose-200 bg-rose-50/30'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-900 truncate max-w-[130px]" title={landing.tag}>
+                        {landing.tag}
+                      </span>
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
+                        landing.online
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-rose-50 text-rose-700 border border-rose-200'
+                      }`}>
+                        {landing.online ? '[在线]' : '[离线]'}
+                      </span>
+                    </div>
+
+                    <div className="mt-2 text-[11px] font-mono text-slate-700 bg-slate-50 p-2 rounded border border-slate-100 space-y-0.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">落地 IP:</span>
+                        <span className="font-bold">{landing.exit_ip || '未获取'}</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">归属地:</span>
+                        <span>{landing.city || landing.country} ({landing.country})</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400">属性:</span>
+                        <span className="font-bold text-blue-700">[{landing.ip_type}]</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-2.5 flex items-center justify-between text-[11px]">
+                      <span className={`text-[10px] font-mono ${landing.china_exit ? 'text-amber-600' : 'text-emerald-600'}`}>
+                        {landing.china_exit ? '[送中]' : '[不送中]'}
+                      </span>
+                      <span className="text-slate-400 text-[10px] truncate max-w-[120px]">{landing.isp}</span>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Speedtest Configuration Modal */}
+      {showSpeedConfig && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 max-w-lg w-full p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <Settings className="w-5 h-5 text-blue-600" />
+                <h3 className="text-sm font-bold text-slate-900">自建文件测速源管理</h3>
+              </div>
+              <button
+                onClick={() => setShowSpeedConfig(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-mono"
+              >
+                [关闭]
+              </button>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs p-3 rounded-xl space-y-1">
+              <div className="font-bold">铁律规范：严格禁止任何公网测速网站回退</div>
+              <div className="text-[11px] text-amber-700">
+                系统已彻底剔除 Cloudflare、Ookla、Fast 等第三方测速源。测速只允许拉取自建 VPS/NAS 的静态测试二进制文件，若端点失联将直接报错 [测速源不可达]。
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  10MB 自建测速文件 URL (轻量常规测速):
+                </label>
+                <input
+                  type="text"
+                  value={speedURL10M}
+                  onChange={(e) => setSpeedURL10M(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                  placeholder="http://your-vps:port/speedtest-10m.bin"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  30MB 自建测速文件 URL (大吞吐流式测速):
+                </label>
+                <input
+                  type="text"
+                  value={speedURL30M}
+                  onChange={(e) => setSpeedURL30M(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                  placeholder="http://your-vps:port/speedtest-30m.bin"
+                />
+              </div>
+            </div>
+
+            {speedConfigMsg && (
+              <div className="text-xs p-2.5 rounded-lg bg-slate-100 text-slate-700 font-mono">
+                {speedConfigMsg}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+              <button
+                onClick={() => setShowSpeedConfig(false)}
+                className="px-3.5 py-1.5 rounded-lg text-xs border border-slate-300 text-slate-600 hover:bg-slate-50 transition"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSaveSpeedConfig}
+                disabled={savingSpeedConfig}
+                className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition disabled:opacity-50"
+              >
+                {savingSpeedConfig ? '保存中...' : '保存自建配置'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

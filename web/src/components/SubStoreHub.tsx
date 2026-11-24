@@ -227,7 +227,7 @@ export const SubStoreHub: React.FC = () => {
     setActionLoading('warmup');
     setStatusMsg(null);
     try {
-      await api.warmupSnapshot(['Q', 'ashan']);
+      await api.warmupSnapshot(['Q', 'ashan', 'business']);
       setStatusMsg({ type: 'success', text: '后台预烘焙任务已触发！稍后将生成最新毫秒级静态快照。' });
       setTimeout(async () => {
         const snap = await api.getSnapshotStatus().catch(() => null);
@@ -1188,6 +1188,7 @@ export const SubStoreHub: React.FC = () => {
             Array.from(new Set([
               'ashan', 
               'Q', 
+              'business',
               'ashan-master', 
               'ashan-纯净',
               ...(manifest?.share_links?.map(s => s.name) || [])

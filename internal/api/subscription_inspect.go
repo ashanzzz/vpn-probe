@@ -218,12 +218,12 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 			} else if strings.Contains(gName, "家宽") {
 				category = "self_resi"
 				tags = append(tags, "自建·家宽全家桶")
-			} else if strings.Contains(gName, "送中") && gName != "不送中" {
-				category = "self_china_leak"
-				tags = append(tags, "自建·送中隔离")
-			} else if gName == "不送中" {
+			} else if strings.Contains(gName, "不送中") || gName == "不送中" {
 				category = "self_clean"
 				tags = append(tags, "自建·防送中直通")
+			} else if strings.Contains(gName, "送中") {
+				category = "self_china_leak"
+				tags = append(tags, "自建·送中隔离")
 			} else {
 				category = "self_custom"
 				tags = append(tags, "自建·内部组")
@@ -307,7 +307,7 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 						psum.Kind = "residential"
 						psum.IsSelfHosted = true
 						psum.Online = true
-					} else if strings.Contains(pName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(pName, "Softbank") || strings.Contains(pName, "SoftBank") || strings.Contains(pName, "4837") || strings.Contains(pName, "LAX") || strings.Contains(pName, "洛杉矶") || strings.Contains(pName, "美西") {
+					} else if strings.Contains(pName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(pName, "Softbank") || strings.Contains(pName, "SoftBank") || strings.Contains(pName, "4837") || strings.Contains(pName, "LAX") || strings.Contains(pName, "洛杉矶") || strings.Contains(pName, "美西") || strings.Contains(pName, "ACCK") || strings.Contains(pName, "-SB") || strings.Contains(pName, "SB-") {
 						psum.Kind = "transit"
 						psum.IsSelfHosted = true
 						psum.Online = true

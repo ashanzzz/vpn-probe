@@ -453,9 +453,100 @@ console.log(JSON.stringify(processed));
 			if p == "Bad-AnyTLS" {
 				t.Fatalf("group %s still contains purged node Bad-AnyTLS", g.Name)
 			}
-			if (g.Name == "选择代理" || g.Name == "谷歌服务" || g.Name == "Youtube") && (p == "自建-送中" || strings.Contains(p, "送中")) {
+			if (g.Name == "选择代理" || g.Name == "谷歌服务" || g.Name == "Youtube") && (p == "自建-送中" || (strings.Contains(p, "送中") && !strings.Contains(p, "不送中"))) {
 				t.Fatalf("clean group %s illegally contains dirty group %s", g.Name, p)
 			}
 		}
+	}
+}
+
+func TestCompileScript_CleanNonLeakGroupPreserved(t *testing.T) {
+	// 验证自建-不送中组设置了 add_to_entry 时，不会被 isDirtyLeakName 误判为送中脏组而剔除
+	cleanGroup := model.CustomGroupDef{
+		Name:        "ashan-clean",
+		DisplayName: "自建-不送中",
+		Enabled:     true,
+		Type:        "url-test",
+		Order:       70,
+		AddToEntry:  true,
+		Filter:      model.GroupFilter{CleanOnly: true},
+	}
+	leakGroup := model.CustomGroupDef{
+		Name:        "ashan-china-leak",
+		DisplayName: "自建-送中",
+		Enabled:     true,
+		Type:        "select",
+		Order:       99,
+		AddToEntry:  true,
+		Filter:      model.GroupFilter{ChinaLeakOnly: true},
+	}
+	atoms := []model.AtomNode{
+		{Name: "Clean-Transit-1", Kind: "transit", Country: "US", ChinaExit: false},
+		{Name: "Leaked-Transit-1", Kind: "transit", Country: "US", ChinaExit: true},
+	}
+
+	script, err := CompileScript([]model.CustomGroupDef{cleanGroup, leakGroup}, atoms, "ashan")
+	if err != nil {
+		t.Fatalf("CompileScript failed: %v", err)
+	}
+
+	mockCfg := map[string]any{
+		"proxies": []any{
+			map[string]any{"name": "Clean-Transit-1"},
+			map[string]any{"name": "Leaked-Transit-1"},
+			map[string]any{"name": "AirportNode1"},
+		},
+		"proxy-groups": []any{
+			map[string]any{"name": "选择代理", "proxies": []any{"自动选择", "AirportNode1"}},
+			map[string]any{"name": "自动选择", "proxies": []any{"AirportNode1"}},
+			map[string]any{"name": "谷歌服务", "proxies": []any{"AirportNode1"}},
+		},
+	}
+	cfgBytes, _ := json.Marshal(mockCfg)
+
+	jsCode := script + `
+const input = ` + string(cfgBytes) + `;
+const processed = processConfig(input);
+console.log(JSON.stringify(processed));
+`
+	cmd := exec.Command("node", "-e", jsCode)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node execution failed: %v, out: %s", err, string(out))
+	}
+
+	var processed struct {
+		Groups []struct {
+			Name    string   `json:"name"`
+			Proxies []string `json:"proxies"`
+		} `json:"proxy-groups"`
+	}
+	if err := json.Unmarshal(out, &processed); err != nil {
+		t.Fatalf("unmarshal processed: %v", err)
+	}
+
+	// 1. 验证 选择代理 (entry) 必须包含 自建-不送中，但绝不能包含 自建-送中
+	var entryProxies []string
+	for _, g := range processed.Groups {
+		if g.Name == "选择代理" {
+			entryProxies = g.Proxies
+			break
+		}
+	}
+	hasClean := false
+	hasLeak := false
+	for _, p := range entryProxies {
+		if p == "自建-不送中" {
+			hasClean = true
+		}
+		if p == "自建-送中" {
+			hasLeak = true
+		}
+	}
+	if !hasClean {
+		t.Errorf("expected 选择代理 to contain clean group '自建-不送中', got: %v", entryProxies)
+	}
+	if hasLeak {
+		t.Errorf("expected 选择代理 to EXCLUDE dirty leak group '自建-送中', got: %v", entryProxies)
 	}
 }

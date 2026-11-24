@@ -149,6 +149,7 @@ function isInformationalOrUnsupportedNode(p) {
 
 function isDirtyLeakName(n) {
   if (typeof n !== 'string') return false;
+  if (n.includes('不送中') || n.includes('Non-Leak') || n.includes('Clean')) return false;
   return n === '自建-送中' || n === '自建-送中分组' || n === 'ashan-china-leak' || n.includes('送中') || n.includes('China-Leak');
 }
 

@@ -90,7 +90,6 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 
 	// 2. 启动临时 sing-box 沙箱并执行在线状态与延迟检测 (支持本地沙箱启动或环回端口瞬时连接失败自动重试，规避瞬时端口复用竞争)
 	var inst *SandboxInstance
-	var activeSandboxCtx context.Context
 	var activeSandboxCancel context.CancelFunc
 	var online bool
 	var latency int
@@ -181,7 +180,6 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 		}
 
 		inst = launchInst
-		activeSandboxCtx = sCtx
 		activeSandboxCancel = sCancel
 		break
 	}
@@ -281,7 +279,9 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 	// 6. 拓展分流探测 (可选，仅展示)
 	if checkSplit {
 		logger.Debugf("[%s] Running split targets probe (ChatGPT/Claude/YouTube/Baidu)...", parsed.Tag)
-		result.Split = CheckDetailedSplit(activeSandboxCtx, inst.Port, timeout)
+		splitCtx, splitCancel := context.WithTimeout(ctx, timeout)
+		defer splitCancel()
+		result.Split = CheckDetailedSplit(splitCtx, inst.Port, timeout)
 		logger.Probe("[%s] Split results: ChatGPT=%s, Claude=%s, YouTube=%s, Baidu=%s",
 			parsed.Tag, result.Split.ChatGPT, result.Split.Claude, result.Split.YouTube, result.Split.Baidu)
 	}

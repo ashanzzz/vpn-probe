@@ -380,12 +380,16 @@ func main() {
 	}
 
 	isQ := false
+	isBusiness := false
 	if *profileFlag != "" {
 		isQ = strings.EqualFold(*profileFlag, "q")
+		isBusiness = strings.EqualFold(*profileFlag, "business")
 	} else {
 		targetLower := strings.ToLower(sourceName)
 		if strings.HasSuffix(targetLower, "/q") || strings.Contains(targetLower, "/q?") || strings.HasSuffix(targetLower, "q.yaml") {
 			isQ = true
+		} else if strings.Contains(targetLower, "business") {
+			isBusiness = true
 		}
 	}
 
@@ -406,6 +410,18 @@ func main() {
 			if groupNameSet[forbidden] {
 				report.Fail(fmt.Sprintf("Q 订阅违背 0 住宅硬隔离规范: 包含家宽分组【%s】", forbidden))
 			}
+		}
+	} else if isBusiness {
+		// Business 订阅遵循纯自建全栈规范 (包含自建线路+美日台家宽+自建不送中+自建送中)
+		requiredSpecs = []groupSpec{
+			{"自建-线路机", []string{"自建-线路分组"}},
+			{"自建-美国家宽", []string{"自建-美国和美国家宽", "自建-美国家宽分组"}},
+			{"自建-日本家宽", []string{"自建-日本和日本家宽", "自建-日本家宽分组"}},
+			{"自建-其他", []string{"自建-其他分组"}},
+			{"自建-台湾家宽", []string{"自建-台湾家宽分组"}},
+			{"自建-家宽分组", []string{"自建-家宽"}},
+			{"自建-不送中", []string{"自建-不送中分组"}},
+			{"自建-送中", []string{"自建-送中分组"}},
 		}
 	} else {
 		requiredSpecs = []groupSpec{
@@ -650,10 +666,33 @@ func main() {
 		}
 	}
 
+	// 5.1 Business 订阅 0 外部商业机场核验 (纯自建骨干与家宽保障)
+	if isBusiness {
+		airportCount := 0
+		commercialKeywords := []string{
+			"amy", "tag", "flower", "泡泡", "速鹰", "云速", "paopao",
+			"flowercloud", "tagvpn", "nexitally", "dler", "rix", "ikuuu",
+		}
+		for _, p := range config.Proxies {
+			name, _ := p["name"].(string)
+			lowerName := strings.ToLower(name)
+			for _, kw := range commercialKeywords {
+				if strings.Contains(lowerName, kw) {
+					airportCount++
+					report.Fail(fmt.Sprintf("Business 纯自建商务订阅违规混入商业机场节点: '%s' (命中关键字: %s)", name, kw))
+					break
+				}
+			}
+		}
+		if airportCount == 0 {
+			report.Pass(fmt.Sprintf("Business 订阅严格执行 0 商业机场规范: 全部 %d 个节点 100%% 均为纯自建骨干与原生家宽 (零外部第三方机场注入)", len(config.Proxies)))
+		}
+	}
+
 	// 6. 送中隔离性校验
 	cleanGroupNames := []string{"自建-线路机", "自建-送中"}
 	if !isQ {
-		cleanGroupNames = append(cleanGroupNames, "自建-美国和美国家宽", "自建-日本和日本家宽", "自建-其他", "自建-家宽分组", "自建-台湾家宽分组", "不送中")
+		cleanGroupNames = append(cleanGroupNames, "自建-美国和美国家宽", "自建-日本和日本家宽", "自建-其他", "自建-家宽分组", "自建-台湾家宽分组", "不送中", "自建-不送中")
 	}
 	leakCount := 0
 	for _, gName := range cleanGroupNames {

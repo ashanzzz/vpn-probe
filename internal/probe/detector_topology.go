@@ -3,6 +3,7 @@ package probe
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -118,23 +119,40 @@ func BuildNodeHopTrace(result *model.NodeProbeResult, parsed *ParsedNode, rawURL
 	return traces
 }
 
-// DetectRegionFromName 根据节点名推导区域代码 (JP, US, HK, TW, SG, DE, UK...)
+// hasRegionToken 判断节点名称中是否包含作为独立词元出现的区域代号 (避免 "NODE" 误判为 "DE", "BUSINESS" 误判为 "US")
+func hasRegionToken(upper, code string) bool {
+	tokens := strings.FieldsFunc(upper, func(r rune) bool {
+		return r == '-' || r == '_' || r == ' ' || r == '[' || r == ']' ||
+			r == '(' || r == ')' || r == '/' || r == '|' || r == '➔' ||
+			r == ':' || r == '.' || r == ','
+	})
+	for _, t := range tokens {
+		if t == code || strings.HasPrefix(t, code+"-") {
+			return true
+		}
+	}
+	return false
+}
+
+// DetectRegionFromName 根据节点名推导区域代码 (JP, US, HK, TW, SG, KR, DE, UK...)
 func DetectRegionFromName(name, fallback string) string {
 	upper := strings.ToUpper(name)
 	switch {
-	case strings.Contains(upper, "JP") || strings.Contains(upper, "东京") || strings.Contains(upper, "大阪") || strings.Contains(upper, "日本"):
+	case hasRegionToken(upper, "JP") || strings.Contains(upper, "东京") || strings.Contains(upper, "大阪") || strings.Contains(upper, "日本") || strings.Contains(upper, "NRT") || strings.Contains(upper, "HND"):
 		return "JP"
-	case strings.Contains(upper, "US") || strings.Contains(upper, "美西") || strings.Contains(upper, "洛杉矶") || strings.Contains(upper, "美国") || strings.Contains(upper, "4837") || strings.Contains(upper, "LAX") || strings.Contains(upper, "SJC"):
+	case hasRegionToken(upper, "US") || strings.Contains(upper, "美西") || strings.Contains(upper, "洛杉矶") || strings.Contains(upper, "美国") || strings.Contains(upper, "4837") || strings.Contains(upper, "LAX") || strings.Contains(upper, "SJC") || strings.Contains(upper, "PAVLOV") || strings.Contains(upper, "FRONTIER") || strings.Contains(upper, "VERIZON"):
 		return "US"
-	case strings.Contains(upper, "HK") || strings.Contains(upper, "香港"):
+	case hasRegionToken(upper, "HK") || strings.Contains(upper, "香港") || strings.Contains(upper, "HKG"):
 		return "HK"
-	case strings.Contains(upper, "TW") || strings.Contains(upper, "台湾") || strings.Contains(upper, "台北") || strings.Contains(upper, "HINET"):
+	case hasRegionToken(upper, "TW") || strings.Contains(upper, "台湾") || strings.Contains(upper, "台北") || strings.Contains(upper, "HINET") || strings.Contains(upper, "TPE"):
 		return "TW"
-	case strings.Contains(upper, "SG") || strings.Contains(upper, "新加坡") || strings.Contains(upper, "狮城"):
+	case hasRegionToken(upper, "SG") || strings.Contains(upper, "新加坡") || strings.Contains(upper, "狮城") || strings.Contains(upper, "STARHUB") || strings.Contains(upper, "SIN"):
 		return "SG"
-	case strings.Contains(upper, "DE") || strings.Contains(upper, "德国") || strings.Contains(upper, "法兰克福"):
+	case hasRegionToken(upper, "KR") || strings.Contains(upper, "韩国") || strings.Contains(upper, "首尔") || strings.Contains(upper, "ICN") || strings.Contains(upper, "KT"):
+		return "KR"
+	case hasRegionToken(upper, "DE") || strings.Contains(upper, "德国") || strings.Contains(upper, "法兰克福") || strings.Contains(upper, "FRA"):
 		return "DE"
-	case strings.Contains(upper, "UK") || strings.Contains(upper, "GB") || strings.Contains(upper, "英国") || strings.Contains(upper, "伦敦"):
+	case hasRegionToken(upper, "UK") || hasRegionToken(upper, "GB") || strings.Contains(upper, "英国") || strings.Contains(upper, "伦敦") || strings.Contains(upper, "LHR"):
 		return "UK"
 	default:
 		return fallback
@@ -296,9 +314,6 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 		linkStatus := "ok"
 		if !res.Online {
 			linkStatus = "fault"
-			summary.FaultLinks++
-		} else {
-			summary.OnlineLinks++
 		}
 
 		if isChain && transitName != "" {
@@ -378,6 +393,26 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 	}
 	for _, l := range landingMap {
 		resp.Landings = append(resp.Landings, l)
+	}
+
+	// 稳定排序: 杜绝 Go map 随机遍历导致的 API 响应抖动与前端重渲闪烁
+	sort.Slice(resp.Transits, func(i, j int) bool { return resp.Transits[i].ID < resp.Transits[j].ID })
+	sort.Slice(resp.NATRelays, func(i, j int) bool { return resp.NATRelays[i].ID < resp.NATRelays[j].ID })
+	for _, n := range resp.NATRelays {
+		sort.Slice(n.Ports, func(i, j int) bool { return n.Ports[i].Port < n.Ports[j].Port })
+	}
+	sort.Slice(resp.Landings, func(i, j int) bool { return resp.Landings[i].ID < resp.Landings[j].ID })
+	sort.Slice(resp.Links, func(i, j int) bool { return resp.Links[i].ID < resp.Links[j].ID })
+
+	// 精准统计链路状态指标 (基于真实去重后的跨阶连线)
+	summary.OnlineLinks = 0
+	summary.FaultLinks = 0
+	for _, l := range resp.Links {
+		if l.Status == "ok" {
+			summary.OnlineLinks++
+		} else {
+			summary.FaultLinks++
+		}
 	}
 
 	summary.TotalTransits = len(resp.Transits)

@@ -45,6 +45,43 @@ func TestDetermineIPType(t *testing.T) {
 			expected: "机房",
 		},
 		{
+			name:     "Biglobe Residential IP",
+			ip:       "133.202.199.234",
+			isp:      "Biglobe",
+			org:      "Biglobe",
+			expected: "家宽",
+		},
+		{
+			name:     "GLBB Japan Residential IP",
+			ip:       "202.12.245.91",
+			isp:      "GLBB Japan KK",
+			expected: "家宽",
+		},
+		{
+			name:     "Pavlov Media US Residential IP",
+			ip:       "96.63.208.40",
+			isp:      "Pavlov Media",
+			expected: "家宽",
+		},
+		{
+			name:     "Korea Telecom KT Residential IP",
+			ip:       "115.14.193.210",
+			isp:      "KT",
+			expected: "家宽",
+		},
+		{
+			name:     "StarHub Singapore Residential IP",
+			ip:       "202.156.27.163",
+			isp:      "StarHub Ltd",
+			expected: "家宽",
+		},
+		{
+			name:     "Singtel Singapore Residential IP",
+			ip:       "116.86.10.20",
+			isp:      "Singtel",
+			expected: "家宽",
+		},
+		{
 			name:              "Unknown IP on residential node",
 			ip:                "192.0.2.1",
 			isResidentialNode: true,

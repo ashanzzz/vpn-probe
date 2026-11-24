@@ -108,10 +108,19 @@ func DetermineIPType(ip, isp, org string, isResidentialNode bool) string {
 		"iij", "sonet", "so-net", "hkbn", "hgc", "pccw", "netvigator",
 		"chunghwa", "hinet", "kbro", "china telecom", "china unicom", "china mobile",
 		"broadband", "telecom", "cable", "fiber", "ftth", "residential", "dialup",
-		"consumer", "home telecom",
+		"consumer", "home telecom", "biglobe", "glbb", "pavlov", "starhub", "singtel",
+		"m1", "ocn", "ntt", "uplus", "lg u+", "sk broadband", "korea telecom",
 	}
 	for _, kw := range residentialKeywords {
 		if strings.Contains(text, kw) {
+			return "家宽"
+		}
+	}
+
+	// 针对 "kt" 进行安全的分词匹配，避免包含 kt 子串的机房词产生假阳性
+	for _, word := range strings.Fields(text) {
+		cleanWord := strings.Trim(word, ",.-_()[]\"'")
+		if cleanWord == "kt" {
 			return "家宽"
 		}
 	}
@@ -153,6 +162,10 @@ var IATACityMap = map[string][2]string{
 	"NRT": {"Tokyo", "JP"},
 	"HND": {"Tokyo", "JP"},
 	"KIX": {"Osaka", "JP"},
+	"ITM": {"Osaka", "JP"},
+	"NGO": {"Nagoya", "JP"},
+	"CTS": {"Sapporo", "JP"},
+	"SDJ": {"Sendai", "JP"},
 	"FUK": {"Fukuoka", "JP"},
 	"OKA": {"Okinawa", "JP"},
 
@@ -162,6 +175,7 @@ var IATACityMap = map[string][2]string{
 	"KHH": {"Kaohsiung", "TW"},
 	"SIN": {"Singapore", "SG"},
 	"ICN": {"Seoul", "KR"},
+	"GMP": {"Seoul", "KR"},
 	"BKK": {"Bangkok", "TH"},
 	"KUL": {"Kuala Lumpur", "MY"},
 	"MNL": {"Manila", "PH"},
@@ -170,6 +184,24 @@ var IATACityMap = map[string][2]string{
 	"MEL": {"Melbourne", "AU"},
 	"BNE": {"Brisbane", "AU"},
 	"AKL": {"Auckland", "NZ"},
+
+	// 北美主流枢纽扩充
+	"PDX": {"Portland", "US"},
+	"SMF": {"Sacramento", "US"},
+	"LAS": {"Las Vegas", "US"},
+	"SLC": {"Salt Lake City", "US"},
+	"IAH": {"Houston", "US"},
+	"BOS": {"Boston", "US"},
+	"PHL": {"Philadelphia", "US"},
+	"CLT": {"Charlotte", "US"},
+	"DTW": {"Detroit", "US"},
+	"MSP": {"Minneapolis", "US"},
+	"MCI": {"Kansas City", "US"},
+	"STL": {"St. Louis", "US"},
+	"TPA": {"Tampa", "US"},
+	"MCO": {"Orlando", "US"},
+	"SNA": {"Santa Ana", "US"},
+	"SAN": {"San Diego", "US"},
 
 	// 欧洲主要城市
 	"LHR": {"London", "GB"},
@@ -188,6 +220,15 @@ var IATACityMap = map[string][2]string{
 func LookupGeo(ctx context.Context, client *http.Client, ip, colo string) GeoResult {
 	trimmedIP := strings.TrimSpace(ip)
 	if trimmedIP == "" {
+		if client != nil {
+			var selfGeo GeoResult
+			if err := queryIPSB(ctx, client, "", &selfGeo); err == nil && selfGeo.IP != "" {
+				selfGeo.Source = "ip.sb (self)"
+				selfGeo.IPType = DetermineIPType(selfGeo.IP, selfGeo.ISP, selfGeo.Org, false)
+				selfGeo.UpdatedAt = time.Now()
+				return selfGeo
+			}
+		}
 		if city, ok := IATACityMap[strings.ToUpper(colo)]; ok {
 			return GeoResult{
 				City:        city[0],
@@ -322,6 +363,7 @@ func queryIPSB(ctx context.Context, client *http.Client, ip string, out *GeoResu
 	}
 
 	var d struct {
+		IP          string `json:"ip"`
 		City        string `json:"city"`
 		Region      string `json:"region"`
 		Country     string `json:"country"`
@@ -333,6 +375,9 @@ func queryIPSB(ctx context.Context, client *http.Client, ip string, out *GeoResu
 		return err
 	}
 
+	if d.IP != "" {
+		out.IP = d.IP
+	}
 	out.City = d.City
 	out.Region = d.Region
 	out.Country = d.Country
@@ -367,6 +412,7 @@ func queryIPWhois(ctx context.Context, client *http.Client, ip string, out *GeoR
 
 	var d struct {
 		Success     bool   `json:"success"`
+		IP          string `json:"ip"`
 		City        string `json:"city"`
 		Region      string `json:"region"`
 		Country     string `json:"country"`
@@ -383,6 +429,9 @@ func queryIPWhois(ctx context.Context, client *http.Client, ip string, out *GeoR
 		return fmt.Errorf("ipwhois returned success=false")
 	}
 
+	if d.IP != "" {
+		out.IP = d.IP
+	}
 	out.City = d.City
 	out.Region = d.Region
 	out.Country = d.Country

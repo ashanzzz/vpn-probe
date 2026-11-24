@@ -191,6 +191,15 @@ func (sm *SnapshotManager) WarmupOne(ctx context.Context, fileName string) (*Sna
 		if meta, exists := sm.metas[fileName]; exists {
 			meta.Status = "stale"
 			meta.LastError = err.Error()
+		} else {
+			sm.metas[fileName] = &SnapshotMeta{
+				FileName:     fileName,
+				Status:       "failed",
+				LastError:    err.Error(),
+				DurationMs:   duration.Milliseconds(),
+				UpdatedAt:    time.Now(),
+				UpdatedAtStr: time.Now().Format("2006-01-02 15:04:05"),
+			}
 		}
 		sm.mu.Unlock()
 		return nil, err

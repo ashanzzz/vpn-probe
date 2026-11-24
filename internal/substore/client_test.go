@@ -202,6 +202,16 @@ func TestClientAndSnapshot_SetHTTPClient(t *testing.T) {
 	}
 	c.mu.RUnlock()
 
+	// 验证 getHTTPClient 并发读安全与回退默认客户端
+	if c.getHTTPClient() != customClient {
+		t.Errorf("getHTTPClient did not return custom client")
+	}
+	c.SetHTTPClient(nil)
+	if c.getHTTPClient() == nil {
+		t.Errorf("getHTTPClient should return fallback client when nil")
+	}
+	c.SetHTTPClient(customClient)
+
 	sm := NewSnapshotManager(c, t.TempDir())
 	sm.SetHTTPClient(customClient)
 

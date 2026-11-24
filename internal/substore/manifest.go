@@ -89,7 +89,7 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 	}
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch substore files: %w", err)
 	}
@@ -318,7 +318,7 @@ func (c *Client) GetScriptContent(ctx context.Context, scriptNameOrURL string) (
 		return "", err
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -431,7 +431,7 @@ func (c *Client) bustScriptCacheInFiles(ctx context.Context, scriptName, newVer 
 	}
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -482,7 +482,7 @@ func (c *Client) bustScriptCacheInFiles(ctx context.Context, scriptName, newVer 
 			if err == nil {
 				c.setAuth(pReq)
 				pReq.Header.Set("Content-Type", "application/json")
-				if pResp, err := c.httpClient.Do(pReq); err == nil {
+				if pResp, err := c.getHTTPClient().Do(pReq); err == nil {
 					pResp.Body.Close()
 					logger.Sync("[SUBSTORE] Updated file %s with new script version %s", fileName, newVer)
 				}

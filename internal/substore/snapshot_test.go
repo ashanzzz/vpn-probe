@@ -264,3 +264,30 @@ func TestSnapshotManager_MakeWarmupContextCancellation(t *testing.T) {
 		t.Errorf("expected stopped manager to return immediately canceled context, got %v", stoppedCtx.Err())
 	}
 }
+
+func TestSnapshotManager_WarmupFailedMetaRecorded(t *testing.T) {
+	tmpDir := t.TempDir()
+	// client disabled -> fetchRenderedYAML fails immediately
+	client := NewClient(&config.SubStoreConfig{Enabled: false})
+	sm := NewSnapshotManager(client, tmpDir)
+
+	meta, err := sm.WarmupOne(context.Background(), "non-existent-sub")
+	if err == nil {
+		t.Fatal("expected error for disabled client warmup, got nil")
+	}
+	if meta != nil {
+		t.Errorf("expected returned meta to be nil on error, got %v", meta)
+	}
+
+	metas := sm.GetMetas()
+	recorded, exists := metas["non-existent-sub"]
+	if !exists {
+		t.Fatal("expected failed meta to be recorded in metas")
+	}
+	if recorded.Status != "failed" {
+		t.Errorf("expected status 'failed', got '%s'", recorded.Status)
+	}
+	if recorded.LastError == "" {
+		t.Errorf("expected LastError to be populated, got empty")
+	}
+}

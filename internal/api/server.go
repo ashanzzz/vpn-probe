@@ -2074,7 +2074,7 @@ func (s *APIServer) handleGetSnapshotFile(c *fiber.Ctx) error {
 			cleanETag := strings.TrimSpace(tag)
 			cleanETag = strings.TrimPrefix(cleanETag, "W/")
 			cleanETag = strings.Trim(cleanETag, "\"")
-			if cleanETag == meta.SHA256 {
+			if cleanETag != "" && meta.SHA256 != "" && cleanETag == meta.SHA256 {
 				return c.SendStatus(fiber.StatusNotModified)
 			}
 		}

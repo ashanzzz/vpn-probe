@@ -383,7 +383,7 @@ func (c *Client) SetMode(ctx context.Context, mode SubStoreMode) (*ModeState, er
 			req, _ := http.NewRequestWithContext(ctx, "POST", base+"/api/collections", strings.NewReader(string(bodyBytes)))
 			req.Header.Set("Content-Type", "application/json")
 			c.setAuth(req)
-			resp, reqErr := c.httpClient.Do(req)
+			resp, reqErr := c.getHTTPClient().Do(req)
 			if reqErr == nil {
 				resp.Body.Close()
 			}

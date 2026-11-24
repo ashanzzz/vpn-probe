@@ -63,7 +63,7 @@ func (c *Client) GetSubscriptions(ctx context.Context) ([]SubscriptionItem, erro
 	}
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}
@@ -99,7 +99,7 @@ func (c *Client) GetCollections(ctx context.Context) ([]CollectionItem, error) {
 	}
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}
@@ -135,7 +135,7 @@ func (c *Client) GetFiles(ctx context.Context) ([]FileItem, error) {
 	}
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("http request: %w", err)
 	}
@@ -180,7 +180,7 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 		req.Header.Set("Content-Type", "application/json")
 		c.setAuth(req)
 
-		resp, lastErr = c.httpClient.Do(req)
+		resp, lastErr = c.getHTTPClient().Do(req)
 		if lastErr == nil {
 			break
 		}
@@ -210,7 +210,7 @@ func (c *Client) UpdateCollection(ctx context.Context, name string, payload map[
 		}
 		postReq.Header.Set("Content-Type", "application/json")
 		c.setAuth(postReq)
-		postResp, postErr := c.httpClient.Do(postReq)
+		postResp, postErr := c.getHTTPClient().Do(postReq)
 		if postErr == nil {
 			defer postResp.Body.Close()
 			if postResp.StatusCode >= 200 && postResp.StatusCode < 300 {
@@ -261,7 +261,7 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 			req.Header.Set("Content-Type", "application/json")
 			c.setAuth(req)
 
-			resp, lastErr = c.httpClient.Do(req)
+			resp, lastErr = c.getHTTPClient().Do(req)
 			if lastErr == nil && resp != nil {
 				if resp.StatusCode < 400 || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 					break
@@ -299,7 +299,7 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 		}
 		postReq.Header.Set("Content-Type", "application/json")
 		c.setAuth(postReq)
-		postResp, postErr := c.httpClient.Do(postReq)
+		postResp, postErr := c.getHTTPClient().Do(postReq)
 		if postErr == nil {
 			defer postResp.Body.Close()
 			if postResp.StatusCode >= 200 && postResp.StatusCode < 300 {
@@ -717,7 +717,7 @@ func (c *Client) DeleteItem(ctx context.Context, itemType, name string) error {
 	}
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("http request: %w", err)
 	}

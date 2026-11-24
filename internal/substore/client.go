@@ -40,6 +40,16 @@ func (c *Client) SetHTTPClient(client *http.Client) {
 	c.httpClient = client
 }
 
+// getHTTPClient 获取当前生效的 HTTP 客户端 (并发读安全)
+func (c *Client) getHTTPClient() *http.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.httpClient != nil {
+		return c.httpClient
+	}
+	return &http.Client{Timeout: 90 * time.Second}
+}
+
 // isLocalOrTestEndpoint 检查 URL 是否为本地环回或测试服务，避免在单测或本地模拟环境下向外部兜底 IP 发起长耗时无效连接
 func isLocalOrTestEndpoint(rawURL string) bool {
 	lower := strings.ToLower(rawURL)
@@ -185,7 +195,7 @@ func (c *Client) GetSubscriptionContent(ctx context.Context, subName string) (st
 	}
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return "", fmt.Errorf("http request: %w", err)
 	}
@@ -248,7 +258,7 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 		req.Header.Set("Content-Type", "application/json")
 		c.setAuth(req)
 
-		resp, lastErr = c.httpClient.Do(req)
+		resp, lastErr = c.getHTTPClient().Do(req)
 		if lastErr == nil && resp != nil {
 			// 若上游返回 5xx 服务端瞬态错误，在 attempt < 2 时主动释放 body 并退避重试
 			if resp.StatusCode >= 500 && attempt < 2 {
@@ -298,7 +308,7 @@ func (c *Client) updateSubStoreSubscription(ctx context.Context, subName string,
 		}
 		postReq.Header.Set("Content-Type", "application/json")
 		c.setAuth(postReq)
-		postResp, postErr := c.httpClient.Do(postReq)
+		postResp, postErr := c.getHTTPClient().Do(postReq)
 		if postErr == nil {
 			defer postResp.Body.Close()
 			if postResp.StatusCode >= 200 && postResp.StatusCode < 300 {
@@ -353,7 +363,7 @@ func (c *Client) UpsertRemoteSubscription(ctx context.Context, name, displayName
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err == nil {
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			resp.Body.Close()
@@ -374,7 +384,7 @@ func (c *Client) UpsertRemoteSubscription(ctx context.Context, name, displayName
 	postReq.Header.Set("Content-Type", "application/json")
 	c.setAuth(postReq)
 
-	postResp, err := c.httpClient.Do(postReq)
+	postResp, err := c.getHTTPClient().Do(postReq)
 	if err != nil {
 		return fmt.Errorf("create remote subscription http error: %w", err)
 	}
@@ -404,7 +414,7 @@ func (c *Client) TriggerDownload(ctx context.Context, subName string) error {
 	}
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return err
 	}
@@ -596,7 +606,7 @@ func (c *Client) CreateOrUpdateRemoteSub(ctx context.Context, subName, displayNa
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err == nil {
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			resp.Body.Close()
@@ -617,7 +627,7 @@ func (c *Client) CreateOrUpdateRemoteSub(ctx context.Context, subName, displayNa
 	postReq.Header.Set("Content-Type", "application/json")
 	c.setAuth(postReq)
 
-	postResp, postErr := c.httpClient.Do(postReq)
+	postResp, postErr := c.getHTTPClient().Do(postReq)
 	if postErr != nil {
 		return fmt.Errorf("create remote sub http request: %w", postErr)
 	}
@@ -667,7 +677,7 @@ func (c *Client) DeleteSubscription(ctx context.Context, subName string) error {
 	}
 	c.setAuth(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.getHTTPClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("delete subscription http request: %w", err)
 	}

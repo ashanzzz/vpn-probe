@@ -38,7 +38,7 @@ func (c *Client) GetFileConfigurations(ctx context.Context) ([]map[string]any, e
 			continue
 		}
 		c.setAuth(req)
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.getHTTPClient().Do(req)
 		if err != nil {
 			lastErr = err
 			continue
@@ -79,7 +79,7 @@ func (c *Client) RenderFileFresh(ctx context.Context, name string) ([]byte, erro
 		}
 		req.Header.Set("User-Agent", "clash.meta")
 		c.setAuth(req)
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.getHTTPClient().Do(req)
 		if err != nil {
 			lastErr = err
 			continue

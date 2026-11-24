@@ -188,8 +188,12 @@ func main() {
 			},
 		}
 		req, _ := http.NewRequest("GET", u, nil)
-		if *token != "" && strings.Contains(u, "/api/file/") {
-			req.SetBasicAuth("ashan", *token)
+		if *token != "" {
+			if strings.Contains(u, "/api/file/") {
+				req.SetBasicAuth("ashan", *token)
+			} else {
+				req.Header.Set("Authorization", "Bearer "+*token)
+			}
 		}
 		req.Header.Set("User-Agent", "ClashMeta/v1.19.0")
 

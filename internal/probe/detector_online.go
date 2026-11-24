@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -49,20 +50,47 @@ func CheckOnline(ctx context.Context, port int, testURL string, timeout time.Dur
 		return false, 0, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
-	if err != nil {
-		return false, 0, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	var resp *http.Response
+	var lastErr error
+	var latency int
 
-	start := time.Now()
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, 0, fmt.Errorf("request failed: %w", err)
+	for attempt := 0; attempt < 3; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
+		if err != nil {
+			return false, 0, err
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+		start := time.Now()
+		resp, err = client.Do(req)
+		if err == nil {
+			latency = int(time.Since(start).Milliseconds())
+			lastErr = nil
+			break
+		}
+		lastErr = err
+
+		// 检查是否属于本地临时沙箱进程/端口尚未完全就绪而瞬时连接被拒 (dial tcp 127.0.0.1:port: connect: connection refused)
+		errStr := strings.ToLower(err.Error())
+		isLoopbackRefused := strings.Contains(errStr, fmt.Sprintf("127.0.0.1:%d", port)) &&
+			strings.Contains(errStr, "connection refused") &&
+			!strings.Contains(errStr, "unknown error")
+
+		if isLoopbackRefused && attempt < 2 {
+			select {
+			case <-ctx.Done():
+				return false, 0, ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+				continue
+			}
+		}
+		break
+	}
+
+	if lastErr != nil {
+		return false, 0, fmt.Errorf("request failed: %w", lastErr)
 	}
 	defer resp.Body.Close()
-
-	latency := int(time.Since(start).Milliseconds())
 
 	// 204 No Content 或 200 OK 均视为成功
 	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {

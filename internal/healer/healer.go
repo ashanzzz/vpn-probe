@@ -32,9 +32,10 @@ func GenerateRandomHighPort() int {
 	return 20000 + rand.Intn(30000)
 }
 
-// cleanDialerProxyParam 剥离 URL 基础部分中已有的 dialerProxy 查询参数，防止链式或中继追加时产生重复参数
+// cleanDialerProxyParam 剥离 URL 基础部分中已有的 dialerProxy / dialer-proxy 查询参数，防止链式或中继追加时产生重复参数
 func cleanDialerProxyParam(rawURL string) string {
-	if !strings.Contains(rawURL, "dialerProxy") {
+	lowerURL := strings.ToLower(rawURL)
+	if !strings.Contains(lowerURL, "dialerproxy") && !strings.Contains(lowerURL, "dialer-proxy") {
 		return rawURL
 	}
 	u, err := url.Parse(rawURL)
@@ -42,8 +43,15 @@ func cleanDialerProxyParam(rawURL string) string {
 		return rawURL
 	}
 	q := u.Query()
-	if q.Has("dialerProxy") {
-		q.Del("dialerProxy")
+	modified := false
+	for k := range q {
+		lowerK := strings.ToLower(k)
+		if lowerK == "dialerproxy" || lowerK == "dialer-proxy" {
+			q.Del(k)
+			modified = true
+		}
+	}
+	if modified {
 		u.RawQuery = q.Encode()
 	}
 	return u.String()

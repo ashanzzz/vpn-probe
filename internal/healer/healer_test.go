@@ -249,6 +249,19 @@ func TestCleanDialerProxyParam_NoDuplicate(t *testing.T) {
 		t.Errorf("expected other params preserved, got: %s", cleaned)
 	}
 
+	// Test kebab-case and case-insensitive dialer-proxy
+	kebabRaw := "vless://u@1.2.3.4:443?security=reality&dialer-proxy=OldRelay&sni=example.com"
+	kebabCleaned := cleanDialerProxyParam(kebabRaw)
+	if strings.Contains(strings.ToLower(kebabCleaned), "dialer-proxy") {
+		t.Errorf("expected dialer-proxy to be removed, got: %s", kebabCleaned)
+	}
+
+	upperRaw := "vless://u@1.2.3.4:443?security=reality&DIALERPROXY=OldRelay&sni=example.com"
+	upperCleaned := cleanDialerProxyParam(upperRaw)
+	if strings.Contains(strings.ToLower(upperCleaned), "dialerproxy") {
+		t.Errorf("expected DIALERPROXY to be removed, got: %s", upperCleaned)
+	}
+
 	h := NewHealer(nil, nil)
 	res := &model.NodeProbeResult{
 		Name:        "US-Test",

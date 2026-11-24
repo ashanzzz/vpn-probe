@@ -1349,6 +1349,7 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 	congestionCount := 0
 	residentialChainCount := 0
 	residentialTunnelCount := 0
+	engineErrorCount := 0
 
 	for _, st := range allStates {
 		v2rayLink := st.Config.URL
@@ -1406,6 +1407,21 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 				abroadRTT = diag.AbroadRTTMs
 				domesticTCP = diag.DomesticReachable
 				domesticPing = diag.DomesticPing
+			} else if res.OfflineReason == "probe_engine_error" {
+				faultType = model.FaultProbeEngineError
+				actionType = "RETRY_PROBE"
+			}
+
+			// 如果 targetIP 或 targetPort 仍为空，尝试从节点 URL 解析兜底，杜绝生成空 targetIP
+			if targetIP == "" || targetPort == 0 {
+				if parsed, parseErr := probe.ParseLink(st.Config.URL); parseErr == nil && parsed.RawOutbound != nil {
+					if host, ok := parsed.RawOutbound["server"].(string); ok && host != "" {
+						targetIP = host
+					}
+					if port, ok := parsed.RawOutbound["server_port"].(int); ok && port > 0 {
+						targetPort = port
+					}
+				}
 			}
 
 			switch faultType {
@@ -1423,6 +1439,8 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 				offlineCount++
 			case model.FaultResidentialDirectBlocked:
 				residentialChainCount++
+			case model.FaultProbeEngineError:
+				engineErrorCount++
 			default:
 				offlineCount++
 			}
@@ -1454,6 +1472,8 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 				aiInstruction = fmt.Sprintf("【中转宿主机故障】中转跳板机(%s)网络中断或宕机。请排查懒猫云宿主机网络与容器运行状态。", targetIP)
 			case model.FaultResidentialDirectBlocked:
 				aiInstruction = "【家宽直连受阻】国内直连受阻但海外隧道正常。系统已自动合成全网状链式中继(ashan-chain)，无需换端口或人工干预。"
+			case model.FaultProbeEngineError:
+				aiInstruction = "【探针引擎异常】本地沙箱端口连接或调度瞬态异常，非目标 VPS 故障，无需更换端口，系统将在下一轮体检自动复测。"
 			default:
 				aiInstruction = fmt.Sprintf("请根据排查指引处理: %s", tip)
 			}
@@ -1502,10 +1522,15 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 		if congestionCount > 0 {
 			parts = append(parts, fmt.Sprintf("%d 个网络拥塞/超时(无需换端口)", congestionCount))
 		}
+		if engineErrorCount > 0 {
+			parts = append(parts, fmt.Sprintf("%d 个探针引擎瞬态异常(等待下轮复测)", engineErrorCount))
+		}
 		overallPrompt = fmt.Sprintf("检测到 %d 个节点需要自愈或人工排查 (其中 %s)。请按 nodes_requiring_action 中的 v2ray_link 与 ai_heal_instruction 执行处置。",
 			len(actionList), strings.Join(parts, ", "))
 	} else if residentialTunnelCount > 0 {
 		overallPrompt = fmt.Sprintf("自建核心专线全部在线，检测到 %d 个住宅家宽节点反向穿透隧道等待家庭端建连或暂时断开（中转服务器正常，严禁更换端口），系统静候家庭端自动恢复重连。", residentialTunnelCount)
+	} else if engineErrorCount > 0 {
+		overallPrompt = fmt.Sprintf("自建核心专线全部在线，检测到 %d 个节点出现本地探针沙箱瞬态异常，非目标 VPS 故障，系统将在下一轮体检自动复测，无需更换端口或人工干预。", engineErrorCount)
 	} else if residentialChainCount > 0 && congestionCount > 0 {
 		overallPrompt = fmt.Sprintf("检测到 %d 个住宅家宽节点直连受阻(已自动合成链式中继)，且有 %d 个节点出现跨境网络拥塞/抖动超时(机器正常无需换端口)，系统保持持续观测。", residentialChainCount, congestionCount)
 	} else if residentialChainCount > 0 {
@@ -1528,6 +1553,7 @@ func (s *APIServer) handleAISummary(c *fiber.Ctx) error {
 			"residential_tunnel_offline_nodes": residentialTunnelCount,
 			"congestion_nodes":                 congestionCount,
 			"residential_chain_nodes":          residentialChainCount,
+			"engine_error_nodes":               engineErrorCount,
 			"requires_healing_action":          requiresHealing,
 			"ai_instruction":                   overallPrompt,
 		},
@@ -1565,6 +1591,21 @@ func (s *APIServer) handleAlerts(c *fiber.Ctx) error {
 				statusText = diag.StatusText
 				actionType = diag.ActionType
 				tip = diag.TroubleshootTip
+			} else if st.LastResult.OfflineReason == "probe_engine_error" {
+				faultType = model.FaultProbeEngineError
+				actionType = "RETRY_PROBE"
+			}
+
+			// 如果 targetIP 或 targetPort 仍为空，尝试从节点 URL 解析兜底，杜绝生成空 targetIP
+			if targetIP == "" || targetPort == 0 {
+				if parsed, parseErr := probe.ParseLink(st.Config.URL); parseErr == nil && parsed.RawOutbound != nil {
+					if host, ok := parsed.RawOutbound["server"].(string); ok && host != "" {
+						targetIP = host
+					}
+					if port, ok := parsed.RawOutbound["server_port"].(int); ok && port > 0 {
+						targetPort = port
+					}
+				}
 			}
 
 			alertList = append(alertList, fiber.Map{

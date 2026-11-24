@@ -30,6 +30,8 @@ var (
 	rePBK = regexp.MustCompile(`([?&]pbk=)([^&#]+)`)
 	// 正则匹配 query params: sid=...
 	reSID = regexp.MustCompile(`([?&]sid=)([^&#]+)`)
+	// 正则匹配 query params: obfs-password=... 或 obfs_password=...
+	reObfsPass = regexp.MustCompile(`([?&]obfs[-_]password=)([^&#]+)`)
 )
 
 // MaskNodeURL 对各种协议的节点链接进行脱敏处理，遮蔽密码、UUID、Reality密钥等机密信息
@@ -78,19 +80,6 @@ func MaskNodeURL(raw string) string {
 			}
 			return m
 		})
-		res = rePBK.ReplaceAllStringFunc(res, func(m string) string {
-			parts := rePBK.FindStringSubmatch(m)
-			if len(parts) == 3 {
-				pbk := parts[2]
-				maskedPBK := "****"
-				if len(pbk) > 8 {
-					maskedPBK = pbk[:4] + "****"
-				}
-				return parts[1] + maskedPBK
-			}
-			return m
-		})
-		res = reSID.ReplaceAllString(res, "${1}****")
 
 	case strings.HasPrefix(lower, "trojan://"):
 		res = reTrojanPass.ReplaceAllString(res, "${1}******${3}")
@@ -112,6 +101,28 @@ func MaskNodeURL(raw string) string {
 		} else {
 			res = "vmess://******"
 		}
+	}
+
+	// 通用查询参数脱敏 (无论协议类型，统一过滤 pbk, sid, obfs-password 等机密参数)
+	if strings.Contains(res, "pbk=") {
+		res = rePBK.ReplaceAllStringFunc(res, func(m string) string {
+			parts := rePBK.FindStringSubmatch(m)
+			if len(parts) == 3 {
+				pbk := parts[2]
+				maskedPBK := "****"
+				if len(pbk) > 8 {
+					maskedPBK = pbk[:4] + "****"
+				}
+				return parts[1] + maskedPBK
+			}
+			return m
+		})
+	}
+	if strings.Contains(res, "sid=") {
+		res = reSID.ReplaceAllString(res, "${1}****")
+	}
+	if strings.Contains(res, "obfs-password=") || strings.Contains(res, "obfs_password=") {
+		res = reObfsPass.ReplaceAllString(res, "${1}******")
 	}
 
 	return res

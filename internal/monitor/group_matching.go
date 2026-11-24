@@ -124,8 +124,15 @@ func MatchAtoms(atoms []model.AtomNode, f model.GroupFilter) []model.AtomNode {
 		if f.OnlineOnly && !a.Online {
 			continue
 		}
-		if !seen[a.ID] {
-			seen[a.ID] = true
+		dedupKey := a.ID
+		if dedupKey == "" {
+			dedupKey = a.Name
+		}
+		if dedupKey == "" {
+			dedupKey = a.URL
+		}
+		if !seen[dedupKey] {
+			seen[dedupKey] = true
 			out = append(out, a)
 		}
 	}

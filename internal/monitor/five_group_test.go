@@ -110,19 +110,19 @@ func TestClassifyIntoFiveGroups(t *testing.T) {
 		}
 	}
 
-	// 4. 验证美区全家桶 (美西4837线路 + LZ-US家宽直连 + 链式美西拉家宽)
-	if len(payload.USResiNodes) != 3 {
-		t.Errorf("expected 3 US nodes (transit + resi + chain), got %d: %v", len(payload.USResiNodes), payload.USResiNodes)
+	// 4. 验证美国家宽分组 (LZ-US家宽直连 + 链式美西拉家宽，纯家宽不混入线路机，杜绝同名冲突)
+	if len(payload.USResiNodes) != 2 {
+		t.Errorf("expected 2 US nodes (resi + chain), got %d: %v", len(payload.USResiNodes), payload.USResiNodes)
 	}
 
-	// 5. 验证日区全家桶 (东京软银 + 东京IIJ + LZ-JP家宽直连 + 链式软银拉家宽)
-	if len(payload.JPResiNodes) != 4 {
-		t.Errorf("expected 4 JP nodes, got %d: %v", len(payload.JPResiNodes), payload.JPResiNodes)
+	// 5. 验证日本家宽分组 (LZ-JP家宽直连 + 链式软银拉家宽，纯家宽不混入线路机)
+	if len(payload.JPResiNodes) != 2 {
+		t.Errorf("expected 2 JP nodes (resi + chain), got %d: %v", len(payload.JPResiNodes), payload.JPResiNodes)
 	}
 
-	// 6. 验证其他组 (新加坡自建)
-	if len(payload.OtherNodes) != 1 || !strings.Contains(payload.OtherNodes[0], "SG-Direct") {
-		t.Errorf("expected Singapore node in OtherNodes, got: %v", payload.OtherNodes)
+	// 6. 验证其他家宽组 (无其他家宽)
+	if len(payload.OtherNodes) != 0 {
+		t.Errorf("expected 0 other resi nodes, got: %v", payload.OtherNodes)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestClassifyIntoFiveGroups_ChainURLParameterSafety(t *testing.T) {
 
 	payload := ClassifyIntoFiveGroups(transits, resis, chains)
 
-	if len(payload.JPResiNodes) != 3 { // 1 transit + 1 resi + 1 chain
+	if len(payload.JPResiNodes) != 2 { // 1 resi + 1 chain (纯家宽分组不混入线路机，杜绝同名冲突)
 		t.Fatalf("expected 3 nodes in JPResiNodes, got %d: %v", len(payload.JPResiNodes), payload.JPResiNodes)
 	}
 	foundChain := false

@@ -67,14 +67,19 @@ func NewScheduler(
 
 	for _, n := range cfg.Monitor.Nodes {
 		if n.IsSelf {
-			s.nodeStates[n.Name] = &NodeState{
+			nodeName := n.Name
+			if parsed, err := probe.ParseLink(n.URL); err == nil && parsed.Tag != "" {
+				nodeName = parsed.Tag
+			}
+			s.nodeStates[nodeName] = &NodeState{
 				Config: n,
 				LastResult: &model.NodeProbeResult{
-					Name:        n.Name,
+					ID:          nodeName,
+					Name:        nodeName,
 					OriginalURL: n.URL,
 					NodeType:    "transit",
 					Online:      true,
-					ExitCountry: model.ResolveCountry("", n.Name),
+					ExitCountry: model.ResolveCountry("", nodeName),
 				},
 			}
 		}
@@ -95,14 +100,19 @@ func NewScheduler(
 	for _, r := range resiNodes {
 		if r.IsSelf || r.Name != "" {
 			r.IsSelf = true
-			s.nodeStates[r.Name] = &NodeState{
+			nodeName := r.Name
+			if parsed, err := probe.ParseLink(r.URL); err == nil && parsed.Tag != "" {
+				nodeName = parsed.Tag
+			}
+			s.nodeStates[nodeName] = &NodeState{
 				Config: r,
 				LastResult: &model.NodeProbeResult{
-					Name:        r.Name,
+					ID:          nodeName,
+					Name:        nodeName,
 					OriginalURL: r.URL,
 					NodeType:    "residential",
 					Online:      true,
-					ExitCountry: model.ResolveCountry("", r.Name),
+					ExitCountry: model.ResolveCountry("", nodeName),
 				},
 			}
 		}
@@ -955,21 +965,7 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 	}
 
 	// 4. 地域划分：美区 (US) 与 日区 (JP) 以及 其他 (Other)
-	// 4.1 线路机归类 (基于通用国别判定，绝不绑定具体运营商/机房)
-	for _, t := range transits {
-		if t == nil || !t.Online || leakURLs[t.OriginalURL] || !activeTransitSet[t.OriginalURL] {
-			continue
-		}
-		country := model.ResolveCountry(t.ExitCountry, t.Name)
-		switch country {
-		case "US":
-			payload.USResiNodes = append(payload.USResiNodes, t.OriginalURL)
-		case "JP":
-			payload.JPResiNodes = append(payload.JPResiNodes, t.OriginalURL)
-		default:
-			payload.OtherNodes = append(payload.OtherNodes, t.OriginalURL)
-		}
-	}
+	// 4.1 线路机严格隔离于家宽组外（线路机专属于 ashan-transit 自建-线路机，严禁混入美日家宽组，彻底杜绝 Clash 出现 duplicate proxy 错误）
 
 	// 4.2 家宽直连归类 (自建-美国家宽 / 自建-日本家宽)
 	uniqueResis := deduplicateNodeResults(resis)

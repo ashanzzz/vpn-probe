@@ -111,9 +111,13 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 		if !activeSet[t.OriginalURL] {
 			continue
 		}
+		tID := t.ID
+		if tID == "" {
+			tID = t.Name
+		}
 		country := model.ResolveCountry(t.ExitCountry, t.Name)
 		atoms = append(atoms, model.AtomNode{
-			ID:        t.ID,
+			ID:        tID,
 			Name:      t.Name,
 			URL:       t.OriginalURL,
 			Protocol:  t.Protocol,
@@ -129,9 +133,13 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 	// 2. 家宽机原子 (直连)
 	uniqueResis := deduplicateNodeResults(resis)
 	for _, r := range uniqueResis {
+		rID := r.ID
+		if rID == "" {
+			rID = r.Name
+		}
 		country := model.ResolveCountry(r.ExitCountry, r.Name)
 		atoms = append(atoms, model.AtomNode{
-			ID:        r.ID,
+			ID:        rID,
 			Name:      r.Name,
 			URL:       r.OriginalURL,
 			Protocol:  r.Protocol,

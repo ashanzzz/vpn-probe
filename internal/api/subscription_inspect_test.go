@@ -231,6 +231,9 @@ rule-providers:
 					if !p.IsSelfHosted {
 						t.Errorf("expected LAX-US-Pavlov-家宽 to have IsSelfHosted=true")
 					}
+					if p.Country != "US" {
+						t.Errorf("expected LAX-US-Pavlov-家宽 country to be 'US', got %q", p.Country)
+					}
 				}
 				if p.Name == "链式|东京软银 ➔ 未知家宽01" {
 					if p.Kind != "chain" {
@@ -238,6 +241,9 @@ rule-providers:
 					}
 					if !p.IsSelfHosted {
 						t.Errorf("expected 链式|东京软银 ➔ 未知家宽01 to have IsSelfHosted=true")
+					}
+					if p.Country != "JP" {
+						t.Errorf("expected 链式|东京软银 ➔ 未知家宽01 country to be 'JP', got %q", p.Country)
 					}
 				}
 			}
@@ -377,5 +383,29 @@ rules:
 				t.Errorf("expected %s to have self_ category, got %s", g.Name, g.Category)
 			}
 		}
+	}
+}
+
+func TestDeleteSubStoreItem_InvalidTypeReturns400(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "test-auth-token",
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     "http://127.0.0.1:3001",
+		},
+	}
+	sc := substore.NewClient(&cfg.SubStore)
+	server := NewAPIServer(cfg, nil, nil, sc, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/substore/invalid-type/some-name", nil)
+	req.Header.Set("Authorization", "Bearer test-auth-token")
+	resp, err := server.app.Test(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected HTTP 400 for invalid item type, got %d", resp.StatusCode)
 	}
 }

@@ -127,11 +127,15 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       return parts[0] || n.name;
     };
 
-    // Filter nodes that belong to transit / self infrastructure
+    // Filter nodes that belong to pure transit / backbone infrastructure
     rawNodes.forEach((node) => {
-      // Only process self-hosted or transit-related nodes here
-      const isTransit = node.is_self || node.node_type === 'transit' || node.category?.includes('自有') || node.category?.includes('线路');
-      if (!isTransit && node.category?.includes('家宽')) return;
+      // 严格排除家宽节点：家宽节点专属于下方的「原生家宽与链式网络」大盘，严禁混入自建骨干线路机大盘
+      const isResi = node.node_type === 'residential' || node.name.includes('家宽') || node.name.toLowerCase().includes('resi') || node.category?.includes('家宽');
+      if (isResi) return;
+
+      // 仅纳入纯骨干/线路机 (transit)
+      const isTransit = node.node_type === 'transit' || node.category?.includes('线路') || /4837|IIJ|Softbank|软银|专线|骨干|Transit|BGP/i.test(node.name);
+      if (!isTransit) return;
 
       const hostKey = extractHostKey(node);
       let entry = hostMap.get(hostKey);

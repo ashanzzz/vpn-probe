@@ -133,7 +133,7 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 				Name:        "q-transit",
 				DisplayName: "自建-线路机",
 				Enabled:     true,
-				Type:        "url-test",
+				Type:        "select",
 				Order:       10,
 				AddToEntry:  true,
 				Filter: GroupFilter{
@@ -146,7 +146,7 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 				Name:        "q-us-line",
 				DisplayName: "自建-美国线路",
 				Enabled:     true,
-				Type:        "url-test",
+				Type:        "select",
 				Order:       20,
 				AddToEntry:  true,
 				Filter: GroupFilter{
@@ -160,7 +160,7 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 				Name:        "q-jp-line",
 				DisplayName: "自建-日本线路",
 				Enabled:     true,
-				Type:        "url-test",
+				Type:        "select",
 				Order:       30,
 				AddToEntry:  true,
 				Filter: GroupFilter{
@@ -204,7 +204,7 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 			Name:        "ashan-transit",
 			DisplayName: "自建-线路机",
 			Enabled:     true,
-			Type:        "url-test",
+			Type:        "select",
 			Order:       10,
 			AddToEntry:  true,
 			Filter: GroupFilter{
@@ -217,7 +217,7 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 			Name:        "ashan-us-resi",
 			DisplayName: "自建-美国家宽",
 			Enabled:     true,
-			Type:        "url-test",
+			Type:        "select",
 			Order:       20,
 			AddToEntry:  true,
 			Filter: GroupFilter{
@@ -231,7 +231,7 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 			Name:        "ashan-jp-resi",
 			DisplayName: "自建-日本家宽",
 			Enabled:     true,
-			Type:        "url-test",
+			Type:        "select",
 			Order:       30,
 			AddToEntry:  true,
 			Filter: GroupFilter{
@@ -245,7 +245,7 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 			Name:        "ashan-tw-resi",
 			DisplayName: "自建-台湾家宽",
 			Enabled:     true,
-			Type:        "url-test",
+			Type:        "select",
 			Order:       40,
 			AddToEntry:  true,
 			Filter: GroupFilter{
@@ -259,7 +259,7 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 			Name:        "ashan-other",
 			DisplayName: "自建-其他",
 			Enabled:     true,
-			Type:        "url-test",
+			Type:        "select",
 			Order:       50,
 			AddToEntry:  true,
 			Filter: GroupFilter{

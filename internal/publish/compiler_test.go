@@ -352,11 +352,11 @@ console.log(JSON.stringify(processed));
 			if len(g.Proxies) < 3 {
 				t.Fatalf("expected external app group '%s' to have at least 3 proxies, got: %v", g.Name, g.Proxies)
 			}
-			if g.Proxies[0] != "自动选择" {
-				t.Fatalf("expected '%s' first proxy to be '自动选择', got: %v", g.Name, g.Proxies[0])
+			if g.Proxies[0] != "选择代理" {
+				t.Fatalf("expected '%s' first proxy to be '选择代理', got: %v", g.Name, g.Proxies[0])
 			}
-			if g.Proxies[1] != "选择代理" {
-				t.Fatalf("expected '%s' second proxy to be '选择代理', got: %v", g.Name, g.Proxies[1])
+			if g.Proxies[1] != "自动选择" {
+				t.Fatalf("expected '%s' second proxy to be '自动选择', got: %v", g.Name, g.Proxies[1])
 			}
 			// Verify that self-built groups are at the tail
 			lastProxy := g.Proxies[len(g.Proxies)-1]

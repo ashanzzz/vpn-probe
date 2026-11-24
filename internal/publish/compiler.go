@@ -334,8 +334,8 @@ function processConfig(vpnCfg) {
         // External application policy group (TikTok, Spotify, AI服务, etc.)
         const externalMembers = g.proxies.filter(p => !isSelfName(p) && p !== '自动选择' && p !== '选择代理' && p !== '故障转移' && !isDirtyLeakName(p));
         const prefix = [];
-        if (existingGroupNames.has('自动选择')) prefix.push('自动选择');
         if (existingGroupNames.has('选择代理')) prefix.push('选择代理');
+        if (existingGroupNames.has('自动选择')) prefix.push('自动选择');
         if (existingGroupNames.has('故障转移')) prefix.push('故障转移');
 
         const finalProxies = [...prefix];

@@ -305,15 +305,16 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 					}
 				}
 				if !matched {
-					if strings.Contains(pName, "链式") || strings.Contains(pName, "➔") {
+					_, _, isChain := monitor.ParseChainParts(pName)
+					if isChain || strings.Contains(pName, "链式") || strings.Contains(pName, "➔") {
 						psum.Kind = "chain"
 						psum.IsSelfHosted = true
 						psum.Online = false
-					} else if strings.Contains(pName, "家宽") {
+					} else if model.IsResidentialNode(pName, "", "") || strings.Contains(pName, "家宽") || strings.Contains(pName, "LZ-") {
 						psum.Kind = "residential"
 						psum.IsSelfHosted = true
 						psum.Online = false
-					} else if strings.Contains(pName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(pName, "Softbank") || strings.Contains(pName, "SoftBank") || strings.Contains(pName, "4837") || strings.Contains(pName, "LAX") || strings.Contains(pName, "洛杉矶") || strings.Contains(pName, "美西") || strings.Contains(pName, "ACCK") || strings.Contains(pName, "-SB") || strings.Contains(pName, "SB-") {
+					} else if strings.Contains(pName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(pName, "Softbank") || strings.Contains(pName, "SoftBank") || strings.Contains(pName, "4837") || strings.Contains(pName, "LAX") || strings.Contains(pName, "洛杉矶") || strings.Contains(pName, "美西") || strings.Contains(pName, "ACCK") || strings.Contains(pName, "-SB") || strings.Contains(pName, "SB-") || strings.Contains(pName, "自建") || strings.Contains(pName, "骨干") || strings.Contains(strings.ToLower(pName), "transit") || strings.Contains(pName, "Akile") {
 						psum.Kind = "transit"
 						psum.IsSelfHosted = true
 						psum.Online = false

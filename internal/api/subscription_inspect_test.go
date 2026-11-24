@@ -468,10 +468,116 @@ proxy-groups:
 	}
 
 	for _, g := range res.Groups {
+	if g.Name == "手动选择" {
+		for _, p := range g.Proxies {
+			if p.Online {
+				t.Errorf("expected unmatched self-hosted proxy %q to have Online=false in inspect fallback, got true", p.Name)
+			}
+		}
+	}
+	}
+	}
+
+func TestSubscriptionInspect_CompactChainFallback(t *testing.T) {
+	yamlData := `
+proxies:
+  - name: IIJ-美宽-Frontier
+    type: vless
+    server: 1.2.3.4
+    port: 443
+  - name: SB-日宽-SoftBank
+    type: shadowsocks
+    server: 1.2.3.4
+    port: 24443
+  - name: LZ-US-Pavlov
+    type: socks5
+    server: 1.2.3.4
+    port: 10001
+proxy-groups:
+  - name: 手动选择
+    type: select
+    proxies:
+      - IIJ-美宽-Frontier
+      - SB-日宽-SoftBank
+      - LZ-US-Pavlov
+`
+	tmpDir := t.TempDir()
+	snapDir := filepath.Join(tmpDir, "snapshots")
+	_ = os.MkdirAll(snapDir, 0o755)
+	_ = os.WriteFile(filepath.Join(snapDir, "ashan.yaml"), []byte(yamlData), 0o644)
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "test-token",
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     "http://127.0.0.1:3001",
+		},
+	}
+	sc := substore.NewClient(&cfg.SubStore)
+	server := NewAPIServer(cfg, nil, nil, sc, nil, nil, nil)
+	sm := substore.NewSnapshotManager(sc, snapDir)
+	server.snapshotMgr = sm
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/subscription/ashan/inspect", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := server.app.Test(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var res SubscriptionInspectResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+
+	for _, g := range res.Groups {
 		if g.Name == "手动选择" {
 			for _, p := range g.Proxies {
-				if p.Online {
-					t.Errorf("expected unmatched self-hosted proxy %q to have Online=false in inspect fallback, got true", p.Name)
+				switch p.Name {
+				case "IIJ-美宽-Frontier":
+					if p.Kind != "chain" {
+						t.Errorf("expected IIJ-美宽-Frontier Kind=chain, got %q", p.Kind)
+					}
+					if !p.IsSelfHosted {
+						t.Errorf("expected IIJ-美宽-Frontier IsSelfHosted=true, got false")
+					}
+					if p.Country != "US" {
+						t.Errorf("expected IIJ-美宽-Frontier Country=US, got %q", p.Country)
+					}
+					if p.Online {
+						t.Errorf("expected IIJ-美宽-Frontier Online=false in unmatched fallback, got true")
+					}
+				case "SB-日宽-SoftBank":
+					if p.Kind != "chain" {
+						t.Errorf("expected SB-日宽-SoftBank Kind=chain, got %q", p.Kind)
+					}
+					if !p.IsSelfHosted {
+						t.Errorf("expected SB-日宽-SoftBank IsSelfHosted=true, got false")
+					}
+					if p.Country != "JP" {
+						t.Errorf("expected SB-日宽-SoftBank Country=JP, got %q", p.Country)
+					}
+					if p.Online {
+						t.Errorf("expected SB-日宽-SoftBank Online=false in unmatched fallback, got true")
+					}
+				case "LZ-US-Pavlov":
+					if p.Kind != "residential" {
+						t.Errorf("expected LZ-US-Pavlov Kind=residential, got %q", p.Kind)
+					}
+					if !p.IsSelfHosted {
+						t.Errorf("expected LZ-US-Pavlov IsSelfHosted=true, got false")
+					}
+					if p.Country != "US" {
+						t.Errorf("expected LZ-US-Pavlov Country=US, got %q", p.Country)
+					}
+					if p.Online {
+						t.Errorf("expected LZ-US-Pavlov Online=false in unmatched fallback, got true")
+					}
 				}
 			}
 		}

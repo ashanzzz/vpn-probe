@@ -154,6 +154,9 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 		prof = "q"
 	}
 	customGroups, _ := monitor.LoadCustomGroups(prof)
+	if len(customGroups) == 0 {
+		customGroups = model.DefaultCustomGroups(prof)
+	}
 	customMap := make(map[string]model.CustomGroupDef)
 	for _, cg := range customGroups {
 		if cg.Name != "" {

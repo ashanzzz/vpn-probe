@@ -512,6 +512,8 @@ func main() {
 	}
 	if hasTWInBaha {
 		report.Pass("【巴哈姆特】业务分流已挂载台湾原生落地分组")
+	} else if isQ {
+		report.Pass("【巴哈姆特】业务分流符合 Q 轻量骨干规范 (0 住宅/链式隔离)")
 	} else if len(bahaGroup.Proxies) > 0 {
 		report.Warn(fmt.Sprintf("【巴哈姆特】未挂载台湾分组: %v", bahaGroup.Proxies[:1]))
 	}

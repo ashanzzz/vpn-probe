@@ -262,6 +262,9 @@ rule-providers:
 	if !foundSelf || !foundExt || !foundOther || !foundClean {
 		t.Errorf("missing expected groups: foundSelf=%v, foundExt=%v, foundOther=%v, foundClean=%v", foundSelf, foundExt, foundOther, foundClean)
 	}
+	if out.RoutingScript == "" {
+		t.Errorf("expected non-empty RoutingScript in inspection response")
+	}
 
 	// 3. Test route aliases (/api/subscription/:name/inspect, /api/subscriptions/:name/inspect, /api/v1/subscription/:name/inspect)
 	aliases := []string{

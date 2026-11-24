@@ -570,22 +570,20 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 		}
 	}
 
-	if len(files) > 0 {
-		if !hasAshanFile && (audit.Collections["col-ashan"] != nil || audit.Collections["ashan-master"] != nil) {
-			audit.Healthy = false
-			audit.Discrepancies = append(audit.Discrepancies, "缺少核心全量订阅文件 'ashan' (或 'Ashan')")
-			audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("创建核心全量订阅文件 'ashan' 并绑定至集合 '%s'", ashanTarget))
-		}
-		if !hasQFile && (audit.Collections["col-q"] != nil || audit.Collections["Q-汇总"] != nil) {
-			audit.Healthy = false
-			audit.Discrepancies = append(audit.Discrepancies, "缺少核心骨干订阅文件 'Q' (或 'q')")
-			audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("创建核心骨干订阅文件 'Q' 并绑定至集合 '%s'", qTarget))
-		}
-		if !hasBusinessFile && audit.Collections["col-business"] != nil {
-			audit.Healthy = false
-			audit.Discrepancies = append(audit.Discrepancies, "缺少核心纯自建商务订阅文件 'business' (或 'Business')")
-			audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("创建核心商务订阅文件 'business' 并绑定至集合 '%s'", businessTarget))
-		}
+	if !hasAshanFile && (audit.Collections["col-ashan"] != nil || audit.Collections["ashan-master"] != nil) {
+		audit.Healthy = false
+		audit.Discrepancies = append(audit.Discrepancies, "缺少核心全量订阅文件 'ashan' (或 'Ashan')")
+		audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("创建核心全量订阅文件 'ashan' 并绑定至集合 '%s'", ashanTarget))
+	}
+	if !hasQFile && (audit.Collections["col-q"] != nil || audit.Collections["Q-汇总"] != nil) {
+		audit.Healthy = false
+		audit.Discrepancies = append(audit.Discrepancies, "缺少核心骨干订阅文件 'Q' (或 'q')")
+		audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("创建核心骨干订阅文件 'Q' 并绑定至集合 '%s'", qTarget))
+	}
+	if !hasBusinessFile && audit.Collections["col-business"] != nil {
+		audit.Healthy = false
+		audit.Discrepancies = append(audit.Discrepancies, "缺少核心纯自建商务订阅文件 'business' (或 'Business')")
+		audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("创建核心商务订阅文件 'business' 并绑定至集合 '%s'", businessTarget))
 	}
 
 	return audit, nil
@@ -632,8 +630,10 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 	}
 
 	// 2. 修复 Q 集合 (col-q 与 Q-汇总)：确保仅包含外部机场与自建纯骨干专线，彻底剔除家宽！
+	hasQCol := false
 	for _, qColName := range []string{"col-q", "Q-汇总"} {
 		if qSummary, exists := audit.Collections[qColName]; exists {
+			hasQCol = true
 			hasResi := false
 			hasTransit := false
 			hasAirport := false
@@ -668,10 +668,31 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 			}
 		}
 	}
+	if !hasQCol {
+		exts := c.GetExternalSources()
+		if len(exts) == 0 {
+			exts = []string{"蜂窝云"}
+		}
+		cleanQSubs := append([]string{"ashan-transit"}, exts...)
+		payload := map[string]any{
+			"name":                  "col-q",
+			"displayName":           "Q 高速骨干轻量组 (外部+自建骨干专线)",
+			"subscriptions":         cleanQSubs,
+			"ignoreFailedRemoteSub": "quiet",
+		}
+		if err := c.UpdateCollection(ctx, "col-q", payload); err != nil {
+			return nil, fmt.Errorf("create missing col-q: %w", err)
+		}
+		audit.Collections["col-q"] = cleanQSubs
+		actions = append(actions, fmt.Sprintf("已为 SubStore 自动创建缺失的集合 'col-q' -> %v (0 家宽)", cleanQSubs))
+		logger.Sync("Created missing collection 'col-q'")
+	}
 
 	// 3. 修复 ashan 集合 (col-ashan 与 ashan-master)：全量全家桶 (外部机场 + 纯骨干专线 + 全量家宽)
+	hasAshanCol := false
 	for _, aColName := range []string{"col-ashan", "ashan-master"} {
 		if aSummary, exists := audit.Collections[aColName]; exists {
+			hasAshanCol = true
 			hasAirport := false
 			hasResi := false
 			for _, s := range aSummary {
@@ -701,6 +722,25 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 				logger.Sync("Reconciled collection '%s' -> 全量全家桶", aColName)
 			}
 		}
+	}
+	if !hasAshanCol {
+		exts := c.GetExternalSources()
+		if len(exts) == 0 {
+			exts = []string{"蜂窝云"}
+		}
+		fullSubs := append([]string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}, exts...)
+		payload := map[string]any{
+			"name":                  "col-ashan",
+			"displayName":           "Ashan 全量全家桶 (外部+自建全景)",
+			"subscriptions":         fullSubs,
+			"ignoreFailedRemoteSub": "quiet",
+		}
+		if err := c.UpdateCollection(ctx, "col-ashan", payload); err != nil {
+			return nil, fmt.Errorf("create missing col-ashan: %w", err)
+		}
+		audit.Collections["col-ashan"] = fullSubs
+		actions = append(actions, fmt.Sprintf("已为 SubStore 自动创建缺失的集合 'col-ashan' -> %v", fullSubs))
+		logger.Sync("Created missing collection 'col-ashan'")
 	}
 
 	// 3.1 修复 business 集合 (col-business)：纯自建商务合集 (纯自建骨干 + 原生家宽，0 外部机场)
@@ -743,6 +783,7 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 		if err := c.UpdateCollection(ctx, "col-business", payload); err != nil {
 			return nil, fmt.Errorf("create missing col-business: %w", err)
 		}
+		audit.Collections["col-business"] = bizSubs
 		actions = append(actions, fmt.Sprintf("已为 SubStore 自动创建缺失的集合 'col-business' -> %v (0 外部机场)", bizSubs))
 		logger.Sync("Created missing collection 'col-business'")
 	}
@@ -839,8 +880,89 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 		if err := c.UpdateFile(ctx, "business", newFile); err != nil {
 			return nil, fmt.Errorf("create missing business file: %w", err)
 		}
+		audit.Files["business"] = "col-business"
 		actions = append(actions, "已在 Sub-Store 中自动创建缺失的商业自建订阅文件 'business'")
 		logger.Sync("Created missing file 'business' in SubStore")
+	}
+
+	// 4.2 确保 ashan 文件存在；若缺失，自动以现有订阅为基准模板创建
+	hasAshanFile := false
+	for fName := range audit.Files {
+		if strings.EqualFold(fName, "ashan") {
+			hasAshanFile = true
+			break
+		}
+	}
+	if !hasAshanFile && (audit.Collections["col-ashan"] != nil || audit.Collections["ashan-master"] != nil) {
+		baseFiles, _ := c.GetFileConfigurations(ctx)
+		var templateProcess []any
+		for _, bf := range baseFiles {
+			if strings.EqualFold(fmt.Sprint(bf["name"]), "q") || strings.EqualFold(fmt.Sprint(bf["name"]), "business") {
+				if proc, ok := bf["process"].([]any); ok {
+					templateProcess = proc
+					break
+				}
+			}
+		}
+		newFile := map[string]any{
+			"name":                    "ashan",
+			"displayName":             "Ashan 全量全家桶订阅 (外部机场+自建全景)",
+			"source":                  "local",
+			"sourceType":              "collection",
+			"sourceName":              ashanTargetCol,
+			"type":                    "mihomoConfig",
+			"mode":                    "config",
+			"includeUnsupportedProxy": true,
+		}
+		if len(templateProcess) > 0 {
+			newFile["process"] = templateProcess
+		}
+		if err := c.UpdateFile(ctx, "ashan", newFile); err != nil {
+			return nil, fmt.Errorf("create missing ashan file: %w", err)
+		}
+		audit.Files["ashan"] = ashanTargetCol
+		actions = append(actions, fmt.Sprintf("已在 Sub-Store 中自动创建缺失的全量全家桶订阅文件 'ashan' (绑定至 %s)", ashanTargetCol))
+		logger.Sync("Created missing file 'ashan' in SubStore")
+	}
+
+	// 4.3 确保 Q 文件存在；若缺失，自动以现有订阅为基准模板创建
+	hasQFile := false
+	for fName := range audit.Files {
+		if strings.EqualFold(fName, "q") {
+			hasQFile = true
+			break
+		}
+	}
+	if !hasQFile && (audit.Collections["col-q"] != nil || audit.Collections["Q-汇总"] != nil) {
+		baseFiles, _ := c.GetFileConfigurations(ctx)
+		var templateProcess []any
+		for _, bf := range baseFiles {
+			if strings.EqualFold(fmt.Sprint(bf["name"]), "ashan") || strings.EqualFold(fmt.Sprint(bf["name"]), "business") {
+				if proc, ok := bf["process"].([]any); ok {
+					templateProcess = proc
+					break
+				}
+			}
+		}
+		newFile := map[string]any{
+			"name":                    "Q",
+			"displayName":             "Q 极速骨干轻量订阅 (外部机场+自建骨干专线)",
+			"source":                  "local",
+			"sourceType":              "collection",
+			"sourceName":              qTargetCol,
+			"type":                    "mihomoConfig",
+			"mode":                    "config",
+			"includeUnsupportedProxy": true,
+		}
+		if len(templateProcess) > 0 {
+			newFile["process"] = templateProcess
+		}
+		if err := c.UpdateFile(ctx, "Q", newFile); err != nil {
+			return nil, fmt.Errorf("create missing Q file: %w", err)
+		}
+		audit.Files["Q"] = qTargetCol
+		actions = append(actions, fmt.Sprintf("已在 Sub-Store 中自动创建缺失的骨干轻量订阅文件 'Q' (绑定至 %s)", qTargetCol))
+		logger.Sync("Created missing file 'Q' in SubStore")
 	}
 
 	// 5. 再次执行复查，生成最终报告

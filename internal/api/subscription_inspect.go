@@ -152,6 +152,8 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 	prof := "ashan"
 	if strings.EqualFold(name, "q") {
 		prof = "q"
+	} else if strings.EqualFold(name, "business") {
+		prof = "business"
 	}
 	customGroups, _ := monitor.LoadCustomGroups(prof)
 	if len(customGroups) == 0 {

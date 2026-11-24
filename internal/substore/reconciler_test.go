@@ -487,3 +487,108 @@ func TestAuditTopology_BusinessCollectionAndFileValidation(t *testing.T) {
 		t.Errorf("Expected discrepancy for missing business file, got: %v", audit.Discrepancies)
 	}
 }
+
+func TestReconcileTopology_AutoCreateMissingCoreCollectionsAndFiles(t *testing.T) {
+	createdCollections := make(map[string]map[string]any)
+	createdFiles := make(map[string]map[string]any)
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/subs":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success","data":[
+				{"name":"ashan-transit","displayName":"Transit","source":"local","content":"vless://1"},
+				{"name":"ashan-us-resi","displayName":"US Resi","source":"local","content":"socks5://2"},
+				{"name":"ashan-jp-resi","displayName":"JP Resi","source":"local","content":"socks5://3"},
+				{"name":"ashan-other","displayName":"Other","source":"local","content":"socks5://4"},
+				{"name":"ashan-china-leak","displayName":"Leak","source":"local","content":"vless://5"},
+				{"name":"蜂窝云","displayName":"蜂窝云","source":"remote","url":"https://example.com"}
+			]}`))
+		case r.URL.Path == "/api/collections":
+			w.WriteHeader(http.StatusOK)
+			// Return initially empty or updated collections
+			colList := make([]map[string]any, 0)
+			for name, payload := range createdCollections {
+				colList = append(colList, map[string]any{
+					"name":          name,
+					"subscriptions": payload["subscriptions"],
+				})
+			}
+			data, _ := json.Marshal(map[string]any{
+				"status": "success",
+				"data":   colList,
+			})
+			w.Write(data)
+		case r.URL.Path == "/api/files":
+			w.WriteHeader(http.StatusOK)
+			fileList := make([]map[string]any, 0)
+			for name, payload := range createdFiles {
+				fileList = append(fileList, map[string]any{
+					"name":       name,
+					"sourceName": payload["sourceName"],
+				})
+			}
+			data, _ := json.Marshal(map[string]any{
+				"status": "success",
+				"data":   fileList,
+			})
+			w.Write(data)
+		case strings.HasPrefix(r.URL.Path, "/api/collection/"):
+			cName := strings.TrimPrefix(r.URL.Path, "/api/collection/")
+			var payload map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			createdCollections[cName] = payload
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success"}`))
+		case strings.HasPrefix(r.URL.Path, "/api/file/"):
+			fName := strings.TrimPrefix(r.URL.Path, "/api/file/")
+			var payload map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			createdFiles[fName] = payload
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled: true,
+		URL:     mockServer.URL,
+	}
+	client := NewClient(cfg)
+
+	finalAudit, err := client.ReconcileTopology(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileTopology failed: %v", err)
+	}
+
+	// 1. Verify collections were created
+	if _, ok := createdCollections["col-q"]; !ok {
+		t.Errorf("Expected col-q collection to be created, created collections: %v", createdCollections)
+	}
+	if _, ok := createdCollections["col-ashan"]; !ok {
+		t.Errorf("Expected col-ashan collection to be created, created collections: %v", createdCollections)
+	}
+	if _, ok := createdCollections["col-business"]; !ok {
+		t.Errorf("Expected col-business collection to be created, created collections: %v", createdCollections)
+	}
+
+	// 2. Verify files were created
+	if _, ok := createdFiles["Q"]; !ok {
+		t.Errorf("Expected Q file to be created, created files: %v", createdFiles)
+	}
+	if _, ok := createdFiles["ashan"]; !ok {
+		t.Errorf("Expected ashan file to be created, created files: %v", createdFiles)
+	}
+	if _, ok := createdFiles["business"]; !ok {
+		t.Errorf("Expected business file to be created, created files: %v", createdFiles)
+	}
+
+	// 3. Verify final audit is fully healthy
+	if !finalAudit.Healthy {
+		t.Errorf("Expected final audit to be healthy after auto-reconciliation, got discrepancies: %v", finalAudit.Discrepancies)
+	}
+}

@@ -592,3 +592,114 @@ func TestReconcileTopology_AutoCreateMissingCoreCollectionsAndFiles(t *testing.T
 		t.Errorf("Expected final audit to be healthy after auto-reconciliation, got discrepancies: %v", finalAudit.Discrepancies)
 	}
 }
+
+func TestReconcileTopology_AutoPurgeLegacyAndConflictingSubscriptions(t *testing.T) {
+	deletedSubs := make(map[string]bool)
+
+	// Mock collections & files
+	collections := []CollectionItem{
+		{Name: "col-q", DisplayName: "Q", Subscriptions: []string{"ashan-transit", "蜂窝云"}},
+		{Name: "col-ashan", DisplayName: "Ashan", Subscriptions: []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak", "蜂窝云"}},
+		{Name: "col-business", DisplayName: "Business", Subscriptions: []string{"ashan-transit", "ashan-us-resi", "ashan-jp-resi", "ashan-other", "ashan-china-leak"}},
+	}
+	files := []FileItem{
+		{Name: "Q", SourceName: "col-q"},
+		{Name: "ashan", SourceName: "col-ashan"},
+		{Name: "business", SourceName: "col-business"},
+	}
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/subs":
+			// Return active subs plus legacy and conflicting orphan subs
+			subs := []SubscriptionItem{
+				{Name: "ashan-transit"},
+				{Name: "ashan-us-resi"},
+				{Name: "ashan-jp-resi"},
+				{Name: "ashan-other"},
+				{Name: "ashan-china-leak"},
+				{Name: "蜂窝云"},
+			}
+			if !deletedSubs["ashan-residential"] {
+				subs = append(subs, SubscriptionItem{Name: "ashan-residential"})
+			}
+			if !deletedSubs["ashan-clean"] {
+				subs = append(subs, SubscriptionItem{Name: "ashan-clean"})
+			}
+			if !deletedSubs["Q"] {
+				subs = append(subs, SubscriptionItem{Name: "Q"})
+			}
+			data, _ := json.Marshal(map[string]any{"status": "success", "data": subs})
+			w.Write(data)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/collections":
+			data, _ := json.Marshal(map[string]any{"status": "success", "data": collections})
+			w.Write(data)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/files":
+			data, _ := json.Marshal(map[string]any{"status": "success", "data": files})
+			w.Write(data)
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/sub/"):
+			subName := strings.TrimPrefix(r.URL.Path, "/api/sub/")
+			deletedSubs[subName] = true
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success"}`))
+		default:
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success"}`))
+		}
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled: true,
+		URL:     mockServer.URL,
+	}
+	client := NewClient(cfg)
+
+	// 1. Initial audit should be unhealthy and identify legacy / conflict discrepancies
+	initialAudit, err := client.AuditTopology(context.Background())
+	if err != nil {
+		t.Fatalf("AuditTopology failed: %v", err)
+	}
+	if initialAudit.Healthy {
+		t.Errorf("Expected initial audit to be unhealthy due to legacy & conflict subs, got healthy")
+	}
+
+	foundLegacy := false
+	foundConflict := false
+	for _, d := range initialAudit.Discrepancies {
+		if strings.Contains(d, "ashan-residential") && strings.Contains(d, "历史三层架构遗留订阅") {
+			foundLegacy = true
+		}
+		if strings.Contains(d, "Q") && strings.Contains(d, "与核心输出文件名冲突") {
+			foundConflict = true
+		}
+	}
+	if !foundLegacy {
+		t.Errorf("Expected discrepancy identifying ashan-residential as legacy sub, got: %v", initialAudit.Discrepancies)
+	}
+	if !foundConflict {
+		t.Errorf("Expected discrepancy identifying Q as file conflict orphan, got: %v", initialAudit.Discrepancies)
+	}
+
+	// 2. Run ReconcileTopology - it must auto-purge the legacy and conflict subs
+	finalAudit, err := client.ReconcileTopology(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileTopology failed: %v", err)
+	}
+
+	if !deletedSubs["ashan-residential"] {
+		t.Errorf("Expected ashan-residential to be deleted during reconciliation")
+	}
+	if !deletedSubs["ashan-clean"] {
+		t.Errorf("Expected ashan-clean to be deleted during reconciliation")
+	}
+	if !deletedSubs["Q"] {
+		t.Errorf("Expected conflicting orphan sub Q to be deleted during reconciliation")
+	}
+
+	// 3. Final audit after reconciliation must be 100% healthy
+	if !finalAudit.Healthy {
+		t.Errorf("Expected final audit to be healthy after auto-reconciliation, got discrepancies: %v", finalAudit.Discrepancies)
+	}
+}

@@ -520,12 +520,27 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 	}
 
 	// 3. 检查孤儿订阅
+	legacySet := make(map[string]bool, len(LegacyThreeTierSubNames))
+	for _, leg := range LegacyThreeTierSubNames {
+		legacySet[leg] = true
+	}
+
 	for _, s := range audit.Subscriptions {
 		if !referencedSubs[s] {
 			audit.Healthy = false
-			msg := fmt.Sprintf("订阅 '%s' 处于孤儿状态，未被任何集合引用 (导致其内部节点无法被任何下游分享产物使用)", s)
-			audit.Discrepancies = append(audit.Discrepancies, msg)
-			audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("将孤儿订阅 '%s' 纳入对应集合或在无需使用时清理", s))
+			if legacySet[s] {
+				msg := fmt.Sprintf("订阅 '%s' 为历史三层架构遗留订阅且未被引用，建议执行平退清理", s)
+				audit.Discrepancies = append(audit.Discrepancies, msg)
+				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("执行自愈整理 (POST /api/substore/reconcile) 或平退清理 (POST /api/substore/purge-legacy) 清除遗留订阅 '%s'", s))
+			} else if strings.EqualFold(s, "Q") || strings.EqualFold(s, "ashan") || strings.EqualFold(s, "business") {
+				msg := fmt.Sprintf("订阅 '%s' 与核心输出文件名冲突且处于孤儿状态，破坏命名空间隔离", s)
+				audit.Discrepancies = append(audit.Discrepancies, msg)
+				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("执行自愈整理 (POST /api/substore/reconcile) 清理冲突订阅 '%s'", s))
+			} else {
+				msg := fmt.Sprintf("订阅 '%s' 处于孤儿状态，未被任何集合引用 (导致其内部节点无法被任何下游分享产物使用)", s)
+				audit.Discrepancies = append(audit.Discrepancies, msg)
+				audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("将孤儿订阅 '%s' 纳入对应集合或在无需使用时清理", s))
+			}
 		}
 	}
 
@@ -599,6 +614,41 @@ func (c *Client) ReconcileTopology(ctx context.Context) (*TopologyAudit, error) 
 	}
 
 	actions := make([]string, 0)
+
+	// 0. 自动清理 SubStore 中历史遗留的已废弃三层架构订阅与同名冲突孤儿订阅
+	referencedSubs := make(map[string]bool)
+	for _, subs := range audit.Collections {
+		for _, s := range subs {
+			referencedSubs[s] = true
+		}
+	}
+
+	legacySet := make(map[string]bool, len(LegacyThreeTierSubNames))
+	for _, leg := range LegacyThreeTierSubNames {
+		legacySet[leg] = true
+	}
+
+	for _, s := range audit.Subscriptions {
+		shouldPurge := false
+		var purgeReason string
+
+		if legacySet[s] {
+			shouldPurge = true
+			purgeReason = "历史遗留废弃订阅"
+		} else if !referencedSubs[s] && (strings.EqualFold(s, "Q") || strings.EqualFold(s, "ashan") || strings.EqualFold(s, "business")) {
+			shouldPurge = true
+			purgeReason = "与核心输出文件名冲突的孤儿订阅"
+		}
+
+		if shouldPurge {
+			if err := c.DeleteSubscription(ctx, s); err != nil {
+				logger.Warnf("[SUBSTORE] Reconcile: failed to delete subscription '%s': %v", s, err)
+			} else {
+				actions = append(actions, fmt.Sprintf("已从 SubStore 自动清理%s '%s'", purgeReason, s))
+				logger.Sync("Reconciled: purged %s '%s'", purgeReason, s)
+			}
+		}
+	}
 
 	extSources := c.GetExternalSources()
 	extSet := make(map[string]bool, len(extSources)+1)

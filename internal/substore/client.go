@@ -54,6 +54,9 @@ func isLocalOrTestEndpoint(rawURL string) bool {
 // 确保即使生产环境 Token 置空仅在 URL Path 中携带凭据时，直连兜底端点亦能精准对齐 Sub-Store 后端路由，杜绝 404 故障。
 func ResolveFallbackURL(cfg *config.SubStoreConfig) string {
 	fallbackBase := "http://156.231.113.91:3001"
+	if cfg != nil && cfg.FallbackURL != "" {
+		fallbackBase = strings.TrimRight(cfg.FallbackURL, "/")
+	}
 	if cfg == nil {
 		return fallbackBase
 	}

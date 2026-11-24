@@ -276,14 +276,19 @@ function processConfig(vpnCfg) {
 
   const nonAppGroupNames = new Set([
     '选择代理', '手动选择', '自动选择', '故障转移', '负载均衡',
-    '广告拦截', '搜狗输入法', 'DIRECT', 'REJECT', 'REJECT-DROP'
+    '广告拦截', '搜狗输入法', 'DIRECT', 'REJECT', 'REJECT-DROP',
+    '外部分组', '外部节点', '自有节点', '自建节点', 'GLOBAL', 'Final',
+    '前置代理', '落地节点', '低倍率节点'
   ]);
+
+  const entryGroupEarly = vpnGroups.find(g => g.name === '选择代理');
+  const entryMembers = new Set(entryGroupEarly && Array.isArray(entryGroupEarly.proxies) ? entryGroupEarly.proxies : []);
 
   for (const g of vpnGroups) {
     if (!g || !Array.isArray(g.proxies)) continue;
-    if (isSelfName(g.name) || nonAppGroupNames.has(g.name)) continue;
+    if (isSelfName(g.name) || nonAppGroupNames.has(g.name) || entryMembers.has(g.name)) continue;
 
-    const isSpecialPool = g.name.endsWith('节点') || g.type === 'url-test' || g.type === 'fallback' || g.type === 'load-balance';
+    const isSpecialPool = g.name.endsWith('节点') || g.name.endsWith('分组') || g.type === 'url-test' || g.type === 'fallback' || g.type === 'load-balance';
     if (!isSpecialPool) {
       // 业务策略组：所有策略组的首选默认必须是「选择代理」
       const rest = g.proxies.filter(n => n !== '选择代理');

@@ -248,6 +248,42 @@ func ValidateYAMLWithMembers(body []byte, wanted []string, required map[string][
 		}
 	}
 
+	// Cycle detection in proxy groups
+	groupAdj := make(map[string][]string, len(cfg.Groups))
+	for _, g := range cfg.Groups {
+		for _, n := range g.Proxies {
+			if groups[n] {
+				groupAdj[g.Name] = append(groupAdj[g.Name], n)
+			}
+		}
+	}
+	visited := make(map[string]int, len(cfg.Groups)) // 0: unvisited, 1: visiting, 2: visited
+	var dfs func(u string, path []string) error
+	dfs = func(u string, path []string) error {
+		visited[u] = 1
+		path = append(path, u)
+		for _, v := range groupAdj[u] {
+			if visited[v] == 1 {
+				cycle := append(path, v)
+				return fmt.Errorf("loop is detected in ProxyGroup, please check following ProxyGroups: [%s]", strings.Join(cycle, " -> "))
+			}
+			if visited[v] == 0 {
+				if err := dfs(v, path); err != nil {
+					return err
+				}
+			}
+		}
+		visited[u] = 2
+		return nil
+	}
+	for _, g := range cfg.Groups {
+		if visited[g.Name] == 0 {
+			if err := dfs(g.Name, nil); err != nil {
+				return err
+			}
+		}
+	}
+
 	// For wanted groups
 	for _, n := range wanted {
 		if isQ && (strings.Contains(n, "家宽") || strings.Contains(strings.ToLower(n), "resi")) {

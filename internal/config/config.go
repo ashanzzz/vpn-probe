@@ -51,8 +51,9 @@ type SubStoreConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	URL      string `yaml:"url"`      // e.g. "https://sub.example.com"
 	Username string `yaml:"username"` // SubStore HTTP Basic Auth Username
-	Password string `yaml:"password"` // SubStore HTTP Basic Auth Password
-	Token    string `yaml:"token"`    // SubStore API Token
+	Password    string `yaml:"password"`     // SubStore HTTP Basic Auth Password
+	Token       string `yaml:"token"`        // SubStore API Token
+	FallbackURL string `yaml:"fallback_url"` // 可选直连兜底端点 (默认 http://156.231.113.91:3001)
 
 	// 动态全周期解耦架构字段 (Issue #18)
 	ExternalSources []string `yaml:"external_sources"` // 动态外部机场订阅列表 (如 ["蜂窝云"])

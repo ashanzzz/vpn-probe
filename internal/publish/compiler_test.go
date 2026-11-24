@@ -1,6 +1,8 @@
 package publish
 
 import (
+	"encoding/json"
+	"os/exec"
 	"strings"
 	"testing"
 	"vpn-probe/internal/model"
@@ -252,6 +254,9 @@ func TestCompileScript_AppGroupCleanInject(t *testing.T) {
 	if !strings.Contains(script, "finalProxies = ['选择代理']") {
 		t.Fatalf("expected 选择代理 placed first in finalProxies")
 	}
+	if !strings.Contains(script, "'外部分组'") || !strings.Contains(script, "entryMembers.has(g.name)") {
+		t.Fatalf("expected nonAppGroupNames and entryMembers check to prevent circular proxy-group loops")
+	}
 }
 
 func TestCompileScript_VpnEntryAndGroupsDefensiveFallback(t *testing.T) {
@@ -264,5 +269,65 @@ func TestCompileScript_VpnEntryAndGroupsDefensiveFallback(t *testing.T) {
 	}
 	if !strings.Contains(script, "!Array.isArray(g.proxies) || g.proxies.length === 0") {
 		t.Fatalf("expected final defensive loop over all groups")
+	}
+}
+
+func TestNodeProcessConfigAcyclic(t *testing.T) {
+	groups := model.DefaultCustomGroups()
+	atoms := []model.AtomNode{
+		{Name: "US-LAX-ACCK-4837-Reality", Kind: "transit", Country: "US"},
+		{Name: "JP-Tokyo-IIJ-Reality", Kind: "transit", Country: "JP"},
+		{Name: "JP-Tokyo-Softbank-Reality-Vision", Kind: "transit", Country: "JP"},
+	}
+	script, err := CompileScript(groups, atoms, "ashan")
+	if err != nil {
+		t.Fatalf("CompileScript: %v", err)
+	}
+
+	mockCfg := map[string]any{
+		"proxies": []any{
+			map[string]any{"name": "🇺🇸 US-LAX-ACCK-4837-Reality"},
+			map[string]any{"name": "🇯🇵 JP-Tokyo-IIJ-Reality"},
+			map[string]any{"name": "ExternalNode1"},
+		},
+		"proxy-groups": []any{
+			map[string]any{"name": "选择代理", "proxies": []any{"自动选择", "外部分组", "自建-线路机"}},
+			map[string]any{"name": "手动选择", "proxies": []any{"自动选择", "外部分组", "自建-线路机"}},
+			map[string]any{"name": "外部分组", "proxies": []any{"ExternalNode1"}},
+			map[string]any{"name": "AI服务", "proxies": []any{"选择代理", "自建-线路机"}},
+			map[string]any{"name": "金融服务", "proxies": []any{"选择代理", "自建-线路机"}},
+		},
+	}
+	cfgBytes, _ := json.Marshal(mockCfg)
+
+	jsCode := script + `
+const input = ` + string(cfgBytes) + `;
+const processed = processConfig(input);
+console.log(JSON.stringify(processed));
+`
+	cmd := exec.Command("node", "-e", jsCode)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node execution failed: %v, out: %s", err, string(out))
+	}
+
+	var processed struct {
+		Groups []struct {
+			Name    string   `json:"name"`
+			Proxies []string `json:"proxies"`
+		} `json:"proxy-groups"`
+	}
+	if err := json.Unmarshal(out, &processed); err != nil {
+		t.Fatalf("unmarshal processed: %v", err)
+	}
+
+	for _, g := range processed.Groups {
+		if g.Name == "外部分组" {
+			for _, p := range g.Proxies {
+				if p == "选择代理" {
+					t.Fatalf("CRITICAL BUG: '外部分组' still contains '选择代理'!")
+				}
+			}
+		}
 	}
 }

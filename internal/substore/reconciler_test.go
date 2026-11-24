@@ -387,3 +387,34 @@ func TestReconcileTopology_DynamicExternalAirports(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateFile_FallbackOn403(t *testing.T) {
+	var fallbackHit bool
+	primaryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("WAF 403 Forbidden"))
+	}))
+	defer primaryServer.Close()
+
+	fallbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackHit = true
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"success"}`))
+	}))
+	defer fallbackServer.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled:     true,
+		URL:         primaryServer.URL,
+		FallbackURL: fallbackServer.URL,
+	}
+	client := NewClient(cfg)
+
+	err := client.UpdateFile(context.Background(), "test-file", map[string]any{"key": "value"})
+	if err != nil {
+		t.Fatalf("expected UpdateFile to succeed via fallback, got error: %v", err)
+	}
+	if !fallbackHit {
+		t.Errorf("expected fallbackServer to be hit on 403 from primary")
+	}
+}

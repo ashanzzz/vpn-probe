@@ -262,11 +262,13 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 			c.setAuth(req)
 
 			resp, lastErr = c.httpClient.Do(req)
-			if lastErr == nil && resp != nil && resp.StatusCode < 500 {
-				break
-			}
-			if resp != nil && resp.Body != nil {
+			if lastErr == nil && resp != nil {
+				if resp.StatusCode < 400 || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+					break
+				}
+				lastErr = fmt.Errorf("patch %s: http %d", endpoint, resp.StatusCode)
 				resp.Body.Close()
+				resp = nil
 			}
 			if attempt < 2 {
 				select {
@@ -276,12 +278,15 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 				}
 			}
 		}
-		if lastErr == nil && resp != nil && resp.StatusCode < 500 {
+		if resp != nil {
 			break
 		}
 	}
-	if lastErr != nil {
-		return fmt.Errorf("http request: %w", lastErr)
+	if resp == nil {
+		if lastErr != nil {
+			return fmt.Errorf("http request: %w", lastErr)
+		}
+		return fmt.Errorf("http request: all substore endpoints failed")
 	}
 
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {

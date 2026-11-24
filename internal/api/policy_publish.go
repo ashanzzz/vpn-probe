@@ -167,6 +167,9 @@ func (s *APIServer) handlePolicyGroupUpsert(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 	if err := monitor.SaveCustomGroup(def); err != nil {
+		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 	}
 	return s.enqueuePolicyPublish(c, id == "")

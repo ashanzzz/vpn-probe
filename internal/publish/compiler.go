@@ -240,6 +240,15 @@ if (vpnEntry) {
   const additions = vpnUserGroups.filter(g => g.add_to_entry).map(g => g.name);
   const next = [...new Set(current.concat(additions))];
   vpnEntry.proxies = next.includes('自动选择') ? ['自动选择', ...next.filter(n => n !== '自动选择')] : next;
+  if (!Array.isArray(vpnEntry.proxies) || vpnEntry.proxies.length === 0) {
+    vpnEntry.proxies = ['DIRECT'];
+  }
+}
+
+for (const g of vpnGroups) {
+  if (!Array.isArray(g.proxies) || g.proxies.length === 0) {
+    g.proxies = ['DIRECT'];
+  }
 }
 
 vpnCfg['proxy-groups'] = vpnGroups;

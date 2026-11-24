@@ -758,3 +758,117 @@ func TestOrchestrator_CollectAtoms_LandingEmojiFallbackInheritance(t *testing.T)
 	}
 }
 
+func TestUnbindExplicitChain_SubstringCollisionSafety(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := tmpDir + "/custom_chains.json"
+	revert := SetCustomChainsFileForTest(customPath)
+	defer revert()
+
+	chains := []CustomChainBind{
+		{
+			ID:              "bind-us-1",
+			TransitName:     "US-LAX-4837",
+			ResidentialName: "LZ-US-Pavlov-家宽",
+			ChainName:       "链式|US-LAX-4837 ➔ LZ-US-Pavlov-家宽",
+		},
+		{
+			ID:              "bind-jp-1",
+			TransitName:     "JP-Tokyo-IIJ",
+			ResidentialName: "LZ-JP-KDDI-家宽",
+			ChainName:       "链式|JP-Tokyo-IIJ ➔ LZ-JP-KDDI-家宽",
+		},
+	}
+	if err := SaveCustomChains(chains); err != nil {
+		t.Fatalf("save custom chains: %v", err)
+	}
+
+	orc := NewOrchestrator(nil)
+
+	// 通用子串不能误杀任何绑定
+	riskySubstrings := []string{"US", "家宽", "Reality", "➔", "链式", "4837", "LAX", "Tokyo"}
+	for _, sub := range riskySubstrings {
+		if err := orc.UnbindExplicitChain(sub); err == nil {
+			t.Fatalf("expected error when unbinding with general substring %q, got nil (potential collision wipeout)", sub)
+		}
+	}
+
+	saved, err := LoadCustomChains()
+	if err != nil || len(saved) != 2 {
+		t.Fatalf("expected both chains retained after failed substring unbinds, got %d (err: %v)", len(saved), err)
+	}
+
+	// 精确组合解绑：只解绑 bind-us-1
+	target := "US-LAX-4837 ➔ LZ-US-Pavlov-家宽"
+	if err := orc.UnbindExplicitChain(target); err != nil {
+		t.Fatalf("expected exact unbind to succeed, got %v", err)
+	}
+
+	saved, err = LoadCustomChains()
+	if err != nil || len(saved) != 1 || saved[0].ID != "bind-jp-1" {
+		t.Fatalf("expected only bind-jp-1 to remain, got %v (err: %v)", saved, err)
+	}
+
+	// 精确 ID 解绑剩余项
+	if err := orc.UnbindExplicitChain("bind-jp-1"); err != nil {
+		t.Fatalf("expected unbind by ID to succeed, got %v", err)
+	}
+
+	saved, err = LoadCustomChains()
+	if err != nil || len(saved) != 0 {
+		t.Fatalf("expected 0 chains remaining, got %d", len(saved))
+	}
+}
+
+func TestGetCategoriesSummary_CustomGroupsConsistency(t *testing.T) {
+	tmpDir := t.TempDir()
+	customGroupsPath := tmpDir + "/custom_groups.json"
+	revert := SetCustomGroupsFileForTest(customGroupsPath)
+	defer revert()
+
+	defs := []model.CustomGroupDef{
+		{
+			Name:        "group-us",
+			DisplayName: "测试-美国组",
+			Enabled:     true,
+			Type:        "url-test",
+			Filter: model.GroupFilter{
+				Mode:      "filter",
+				Countries: []string{"US"},
+				Kinds:     []string{"transit"},
+			},
+		},
+	}
+	if err := SaveCustomGroupsBatch(defs); err != nil {
+		t.Fatalf("save custom groups: %v", err)
+	}
+
+	sch := &Scheduler{
+		nodeStates: make(map[string]*NodeState),
+	}
+	sch.nodeStates["n1"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "1",
+			Name:        "US-Node-1",
+			OriginalURL: "vless://u1@38.175.222.44:36564#US-Node-1",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "transit",
+			TestedAt:    time.Now(),
+		},
+	}
+
+	orc := NewOrchestrator(sch)
+	summary := orc.GetCategoriesSummary()
+	if summary["status"] != "ok" {
+		t.Fatalf("expected status ok, got %v", summary["status"])
+	}
+
+	customGroupsSummary, ok := summary["custom_groups"].([]map[string]any)
+	if !ok || len(customGroupsSummary) != 1 {
+		t.Fatalf("expected 1 custom group in summary, got %v", summary["custom_groups"])
+	}
+	if customGroupsSummary[0]["count"] != 1 {
+		t.Fatalf("expected custom group count to be 1, got %v", customGroupsSummary[0]["count"])
+	}
+}
+

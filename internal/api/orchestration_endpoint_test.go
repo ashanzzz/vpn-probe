@@ -630,4 +630,29 @@ func TestPolicyGroupBatchAndDefaultsEndpoints(t *testing.T) {
 			t.Errorf("expected error when saving empty slice, got nil")
 		}
 	})
+
+	// 8. POST /api/v1/policy-groups single upsert returns 400 on duplicate display_name
+	t.Run("Upsert_DuplicateDisplayName_Returns400", func(t *testing.T) {
+		baseGroup := model.CustomGroupDef{
+			Name:        "group_existing",
+			DisplayName: "冲突显示名",
+			Enabled:     true,
+			Type:        "url-test",
+		}
+		if err := monitor.SaveCustomGroup(baseGroup); err != nil {
+			t.Fatalf("setup base group failed: %v", err)
+		}
+
+		conflictingJSON := `{"name": "group_another", "display_name": "冲突显示名", "enabled": true, "type": "url-test"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/policy-groups", bytes.NewBufferString(conflictingJSON))
+		req.Header.Set("Authorization", "Bearer admin-token-123")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := server.app.Test(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected HTTP 400 for duplicate display_name, got %d", resp.StatusCode)
+		}
+	})
 }

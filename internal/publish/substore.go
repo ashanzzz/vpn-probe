@@ -215,6 +215,7 @@ func ValidateYAMLWithMembers(body []byte, wanted []string, required map[string][
 	var cfg struct {
 		Proxies []struct {
 			Name string `yaml:"name"`
+			Type string `yaml:"type"`
 		} `yaml:"proxies"`
 		Groups []struct {
 			Name    string   `yaml:"name"`
@@ -230,7 +231,24 @@ func ValidateYAMLWithMembers(body []byte, wanted []string, required map[string][
 
 	names := map[string]bool{"DIRECT": true, "REJECT": true, "REJECT-DROP": true, "PASS": true, "COMPATIBLE": true}
 	for _, p := range cfg.Proxies {
+		if strings.EqualFold(p.Type, "anytls") || strings.EqualFold(p.Type, "unknown") {
+			return fmt.Errorf("unsupported proxy type %q for node %q", p.Type, p.Name)
+		}
+		if names[p.Name] {
+			return fmt.Errorf("duplicate proxy name %q", p.Name)
+		}
 		names[p.Name] = true
+	}
+
+	// Sent-to-China leak check in core clean groups (Ironclad Rule #19)
+	for _, g := range cfg.Groups {
+		if g.Name == "选择代理" || g.Name == "谷歌服务" || g.Name == "Youtube" || g.Name == "AI服务" {
+			for _, px := range g.Proxies {
+				if px == "自建-送中" || px == "自建-送中分组" || px == "ashan-china-leak" {
+					return fmt.Errorf("core clean group %q illegally contains dirty leak group %q", g.Name, px)
+				}
+			}
+		}
 	}
 
 	isQ := len(isQFile) > 0 && isQFile[0]

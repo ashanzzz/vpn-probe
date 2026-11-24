@@ -387,3 +387,75 @@ console.log(JSON.stringify(processed));
 		}
 	}
 }
+
+func TestNodeProcessConfigSanitizeUnsupportedAndLeak(t *testing.T) {
+	groups := model.DefaultCustomGroups()
+	atoms := []model.AtomNode{
+		{Name: "US-LAX-ACCK-4837-Reality", Kind: "transit", Country: "US"},
+		{Name: "JP-Tokyo-IIJ-Reality", Kind: "transit", Country: "JP"},
+	}
+	script, err := CompileScript(groups, atoms, "ashan")
+	if err != nil {
+		t.Fatalf("CompileScript: %v", err)
+	}
+
+	mockCfg := map[string]any{
+		"proxies": []any{
+			map[string]any{"name": "Valid-Node-1", "type": "vless", "server": "1.1.1.1"},
+			map[string]any{"name": "Valid-Node-1", "type": "vless", "server": "1.1.1.1"}, // duplicate by name
+			map[string]any{"name": "Bad-AnyTLS", "type": "anytls", "server": "2.2.2.2"},   // unsupported protocol
+			map[string]any{"name": "到期时间: 2026-12", "type": "vmess", "server": "3.3.3.3"}, // informational
+		},
+		"proxy-groups": []any{
+			map[string]any{"name": "选择代理", "proxies": []any{"自动选择", "Valid-Node-1", "Bad-AnyTLS", "自建-送中"}},
+			map[string]any{"name": "谷歌服务", "proxies": []any{"选择代理", "Valid-Node-1", "Bad-AnyTLS", "自建-送中"}},
+			map[string]any{"name": "Youtube", "proxies": []any{"选择代理", "Valid-Node-1", "自建-送中"}},
+		},
+	}
+	cfgBytes, _ := json.Marshal(mockCfg)
+
+	jsCode := script + `
+const input = ` + string(cfgBytes) + `;
+const processed = processConfig(input);
+console.log(JSON.stringify(processed));
+`
+	cmd := exec.Command("node", "-e", jsCode)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node execution failed: %v, out: %s", err, string(out))
+	}
+
+	var processed struct {
+		Proxies []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		} `json:"proxies"`
+		Groups []struct {
+			Name    string   `json:"name"`
+			Proxies []string `json:"proxies"`
+		} `json:"proxy-groups"`
+	}
+	if err := json.Unmarshal(out, &processed); err != nil {
+		t.Fatalf("unmarshal processed: %v", err)
+	}
+
+	// 1. Assert proxies sanitization (no anytls, no informational, no duplicate names)
+	if len(processed.Proxies) != 1 {
+		t.Fatalf("expected exactly 1 sanitized proxy, got %d: %+v", len(processed.Proxies), processed.Proxies)
+	}
+	if processed.Proxies[0].Name != "Valid-Node-1" {
+		t.Fatalf("expected Valid-Node-1, got %s", processed.Proxies[0].Name)
+	}
+
+	// 2. Assert clean groups do NOT contain Bad-AnyTLS or 自建-送中
+	for _, g := range processed.Groups {
+		for _, p := range g.Proxies {
+			if p == "Bad-AnyTLS" {
+				t.Fatalf("group %s still contains purged node Bad-AnyTLS", g.Name)
+			}
+			if (g.Name == "选择代理" || g.Name == "谷歌服务" || g.Name == "Youtube") && (p == "自建-送中" || strings.Contains(p, "送中")) {
+				t.Fatalf("clean group %s illegally contains dirty group %s", g.Name, p)
+			}
+		}
+	}
+}

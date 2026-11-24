@@ -84,6 +84,51 @@ proxy-groups:
 	}
 }
 
+func TestValidateYAMLWithMembers_UnsupportedProtocolAndDirtyGroups(t *testing.T) {
+	anytlsYAML := []byte(`
+proxies:
+  - name: "HK 香港01-test"
+    type: "anytls"
+proxy-groups:
+  - name: "选择代理"
+    proxies: ["HK 香港01-test"]
+`)
+	err := ValidateYAMLWithMembers(anytlsYAML, nil, nil, false)
+	if err == nil || !strings.Contains(err.Error(), "unsupported proxy type") {
+		t.Fatalf("expected unsupported proxy type error, got: %v", err)
+	}
+
+	dupYAML := []byte(`
+proxies:
+  - name: "Node1"
+    type: "vless"
+  - name: "Node1"
+    type: "vless"
+proxy-groups:
+  - name: "选择代理"
+    proxies: ["Node1"]
+`)
+	err = ValidateYAMLWithMembers(dupYAML, nil, nil, false)
+	if err == nil || !strings.Contains(err.Error(), "duplicate proxy name") {
+		t.Fatalf("expected duplicate proxy name error, got: %v", err)
+	}
+
+	dirtyInCleanYAML := []byte(`
+proxies:
+  - name: "Node1"
+    type: "vless"
+proxy-groups:
+  - name: "自建-送中"
+    proxies: ["Node1"]
+  - name: "谷歌服务"
+    proxies: ["自建-送中", "Node1"]
+`)
+	err = ValidateYAMLWithMembers(dirtyInCleanYAML, nil, nil, false)
+	if err == nil || !strings.Contains(err.Error(), "illegally contains dirty leak group") {
+		t.Fatalf("expected dirty leak group error, got: %v", err)
+	}
+}
+
 func TestPatchFile_PurgesLegacyPollutedOperators(t *testing.T) {
 	mockFile := map[string]any{
 		"name": "Ashan",

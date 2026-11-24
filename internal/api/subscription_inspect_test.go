@@ -41,6 +41,10 @@ proxies:
     type: socks5
     server: 2.3.4.5
     port: 1080
+  - name: "JP--ACCK-SB"
+    type: vless
+    server: 4.5.6.7
+    port: 443
 
 proxy-groups:
   - name: "选择代理"
@@ -49,6 +53,9 @@ proxy-groups:
   - name: "自建-美国家宽"
     type: select
     proxies: ["LZ-US-Pavlov-家宽", "美西 ACCK 洛杉矶 4837 — VLESS Reality", "LAX-US-Pavlov-家宽", "链式|东京软银 ➔ 未知家宽01"]
+  - name: "自建-不送中"
+    type: select
+    proxies: ["JP--ACCK-SB"]
   - name: "自建-其他"
     type: select
     proxies: ["LZ-US-Pavlov-家宽"]
@@ -140,11 +147,11 @@ rule-providers:
 	if out.Subscription != "test-sub" {
 		t.Errorf("expected subscription 'test-sub', got %s", out.Subscription)
 	}
-	if out.TotalProxies != 5 {
-		t.Errorf("expected 5 proxies, got %d", out.TotalProxies)
+	if out.TotalProxies != 6 {
+		t.Errorf("expected 6 proxies, got %d", out.TotalProxies)
 	}
-	if out.TotalGroups != 4 {
-		t.Errorf("expected 4 groups, got %d", out.TotalGroups)
+	if out.TotalGroups != 5 {
+		t.Errorf("expected 5 groups, got %d", out.TotalGroups)
 	}
 	if len(out.Rules) != 3 {
 		t.Errorf("expected 3 rules, got %d", len(out.Rules))
@@ -156,8 +163,37 @@ rule-providers:
 	}
 
 	// Verify group classification and proxy alias resolution
-	var foundSelf, foundExt, foundOther bool
+	var foundSelf, foundExt, foundOther, foundClean bool
 	for _, g := range out.Groups {
+		if g.Name == "自建-不送中" {
+			foundClean = true
+			if g.IsExternal {
+				t.Errorf("expected 自建-不送中 to have IsExternal=false")
+			}
+			if g.Category != "self_clean" {
+				t.Errorf("expected 自建-不送中 to have Category='self_clean', got %q", g.Category)
+			}
+			hasTag := false
+			for _, tag := range g.Tags {
+				if tag == "自建·防送中直通" {
+					hasTag = true
+					break
+				}
+			}
+			if !hasTag {
+				t.Errorf("expected 自建-不送中 to have tag '自建·防送中直通', got %v", g.Tags)
+			}
+			for _, p := range g.Proxies {
+				if p.Name == "JP--ACCK-SB" {
+					if p.Kind != "transit" {
+						t.Errorf("expected JP--ACCK-SB to fallback to transit kind, got %q", p.Kind)
+					}
+					if !p.IsSelfHosted {
+						t.Errorf("expected JP--ACCK-SB to have IsSelfHosted=true")
+					}
+				}
+			}
+		}
 		if g.Name == "自建-其他" {
 			foundOther = true
 			if g.IsExternal {
@@ -223,8 +259,8 @@ rule-providers:
 			}
 		}
 	}
-	if !foundSelf || !foundExt || !foundOther {
-		t.Errorf("missing expected groups: foundSelf=%v, foundExt=%v, foundOther=%v", foundSelf, foundExt, foundOther)
+	if !foundSelf || !foundExt || !foundOther || !foundClean {
+		t.Errorf("missing expected groups: foundSelf=%v, foundExt=%v, foundOther=%v, foundClean=%v", foundSelf, foundExt, foundOther, foundClean)
 	}
 
 	// 3. Test route aliases (/api/subscription/:name/inspect, /api/subscriptions/:name/inspect, /api/v1/subscription/:name/inspect)

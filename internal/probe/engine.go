@@ -88,53 +88,85 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 		serverPort, _ = parsed.RawOutbound["server_port"].(int)
 	}
 
-	// 2. 启动临时 sing-box 沙箱
-	sandboxCtx, cancel := context.WithTimeout(ctx, timeout+5*time.Second)
-	defer cancel()
+	// 2. 启动临时 sing-box 沙箱并执行在线状态与延迟检测 (支持本地沙箱启动或环回端口瞬时连接失败自动重试，规避瞬时端口复用竞争)
+	var inst *SandboxInstance
+	var activeSandboxCtx context.Context
+	var activeSandboxCancel context.CancelFunc
+	var online bool
+	var latency int
+	var checkErr error
 
-	inst, err := e.sandboxMgr.Launch(sandboxCtx, parsed.RawOutbound)
-	if err != nil {
-		result.Online = false
-		result.OfflineReason = "probe_engine_error"
-		result.StatusText = "【引擎异常】启动沙箱失败"
-		result.ErrorMsg = fmt.Sprintf("launch proxy sandbox failed: %v", err)
-		result.Category = classifier.Classify(isSelf, false, false)
-		result.Diagnostic = &model.DiagnosticInfo{
-			FaultType:       model.FaultProbeEngineError,
-			StatusText:      result.StatusText,
-			TargetIP:        serverHost,
-			TargetPort:      serverPort,
-			ActionType:      "RETRY_PROBE",
-			TroubleshootTip: result.ErrorMsg,
-		}
-		logger.Errorf("[%s] Sandbox launch failed: %v", parsed.Tag, err)
-		return result
-	}
 	defer func() {
-		inst.Close(e.sandboxMgr)
-		logger.Debugf("[%s] Sandbox on port %d released", parsed.Tag, inst.Port)
+		if activeSandboxCancel != nil {
+			activeSandboxCancel()
+		}
+		if inst != nil {
+			inst.Close(e.sandboxMgr)
+			logger.Debugf("[%s] Sandbox on port %d released", parsed.Tag, inst.Port)
+		}
 	}()
 
-	logger.Debugf("[%s] Sandbox listening on 127.0.0.1:%d", parsed.Tag, inst.Port)
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			logger.Warnf("[%s] Transient probe engine failure encountered, retrying with fresh sandbox (attempt %d)...", parsed.Tag, attempt+1)
+			time.Sleep(150 * time.Millisecond)
+		}
 
-	// 3. 在线检测与延迟
-	online, latency, err := CheckOnline(sandboxCtx, inst.Port, e.cfg.Probe.LatencyCheckURL, timeout)
-	result.Online = online
-	result.LatencyMs = latency
+		sCtx, sCancel := context.WithTimeout(ctx, timeout+5*time.Second)
+		launchInst, launchErr := e.sandboxMgr.Launch(sCtx, parsed.RawOutbound)
+		if launchErr != nil {
+			sCancel()
+			if attempt < 1 {
+				continue
+			}
+			result.Online = false
+			result.OfflineReason = "probe_engine_error"
+			result.StatusText = "【引擎异常】启动沙箱失败"
+			result.ErrorMsg = fmt.Sprintf("launch proxy sandbox failed: %v", launchErr)
+			result.Category = classifier.Classify(isSelf, false, false)
+			result.Diagnostic = &model.DiagnosticInfo{
+				FaultType:       model.FaultProbeEngineError,
+				StatusText:      result.StatusText,
+				TargetIP:        serverHost,
+				TargetPort:      serverPort,
+				ActionType:      "RETRY_PROBE",
+				TroubleshootTip: result.ErrorMsg,
+			}
+			logger.Errorf("[%s] Sandbox launch failed: %v", parsed.Tag, launchErr)
+			return result
+		}
 
-	if !online {
-		// 校验是否属于本地临时沙箱进程/端口连接被拒 (探针引擎内部故障，而非远端节点故障)
-		// 严格校验是否针对本地环回端口自身的 dial 握手失败，排除远端节点经由 SOCKS 返回的连接拒绝 (如 "unknown error connection refused")
-		if err != nil {
-			errStr := strings.ToLower(err.Error())
-			loopbackDialFail := strings.Contains(errStr, fmt.Sprintf("dial tcp 127.0.0.1:%d", inst.Port)) &&
+		logger.Debugf("[%s] Sandbox listening on 127.0.0.1:%d (attempt %d)", parsed.Tag, launchInst.Port, attempt+1)
+
+		online, latency, checkErr = CheckOnline(sCtx, launchInst.Port, e.cfg.Probe.LatencyCheckURL, timeout)
+		if !online && checkErr != nil {
+			errStr := strings.ToLower(checkErr.Error())
+			loopbackDialFail := strings.Contains(errStr, fmt.Sprintf("dial tcp 127.0.0.1:%d", launchInst.Port)) &&
 				(strings.Contains(errStr, "connect: connection refused") || strings.Contains(errStr, "connection refused")) &&
 				!strings.Contains(errStr, "unknown error")
+
 			if loopbackDialFail {
+				var sbLog string
+				if launchInst.LogBuf != nil {
+					sbLog = strings.TrimSpace(launchInst.GetRecentLogs(3))
+				}
+				launchInst.Close(e.sandboxMgr)
+				sCancel()
+
+				if attempt < 1 {
+					continue
+				}
+
+				result.Online = false
+				result.LatencyMs = 0
 				result.OfflineReason = "probe_engine_error"
 				result.Category = classifier.Classify(isSelf, false, false)
 				result.StatusText = "【引擎异常】本地沙箱端口连接被拒"
-				result.ErrorMsg = fmt.Sprintf("local sandbox connection refused: %v", err)
+				errMsg := fmt.Sprintf("local sandbox connection refused: %v", checkErr)
+				if sbLog != "" {
+					errMsg = fmt.Sprintf("%s | sing-box: %s", errMsg, sbLog)
+				}
+				result.ErrorMsg = errMsg
 				result.Diagnostic = &model.DiagnosticInfo{
 					FaultType:       model.FaultProbeEngineError,
 					StatusText:      result.StatusText,
@@ -143,11 +175,21 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 					ActionType:      "RETRY_PROBE",
 					TroubleshootTip: result.ErrorMsg,
 				}
-				logger.Errorf("[%s] Local sandbox loopback connection failed on 127.0.0.1:%d: %v", parsed.Tag, inst.Port, err)
+				logger.Errorf("[%s] Local sandbox loopback connection failed on 127.0.0.1:%d: %v", parsed.Tag, launchInst.Port, checkErr)
 				return result
 			}
 		}
 
+		inst = launchInst
+		activeSandboxCtx = sCtx
+		activeSandboxCancel = sCancel
+		break
+	}
+
+	result.Online = online
+	result.LatencyMs = latency
+
+	if !online {
 		result.OfflineReason = "node_down"
 		result.Category = classifier.Classify(isSelf, false, false)
 		e.RemoveHealthyPeer(link)
@@ -156,14 +198,15 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 			sbLog = inst.GetRecentLogs(3)
 		}
 		if sbLog != "" {
-			logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v | sing-box: %s)", parsed.Tag, err, sbLog)
+			logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v | sing-box: %s)", parsed.Tag, checkErr, sbLog)
 		} else {
-			logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v)", parsed.Tag, err)
+			logger.Probe("[%s] Status: ❌ OFFLINE (domestic error: %v)", parsed.Tag, checkErr)
 		}
 
 		// 提前释放无用的本地临时沙箱进程，避免后续深度诊断期间空占端口与文件句柄
 		if inst != nil {
 			inst.Close(e.sandboxMgr)
+			inst = nil
 		}
 
 		// 触发深度故障诊断：严格切分「离线」与「被墙」
@@ -180,9 +223,9 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 				}
 			}
 			isResi := model.IsResidentialNode(parsed.Tag, link, parsed.Protocol)
-			diagErr := err
+			diagErr := checkErr
 			if sbLog != "" {
-				diagErr = fmt.Errorf("%w | sing-box: %s", err, sbLog)
+				diagErr = fmt.Errorf("%w | sing-box: %s", checkErr, sbLog)
 			}
 			diag := DiagnoseNode(diagCtx, serverHost, serverPort, protoDesc, false, e.sandboxMgr, peers, e.cfg, isResi, diagErr)
 			result.Diagnostic = diag
@@ -209,7 +252,9 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 	logger.Probe("[%s] Status: 🟢 ONLINE (latency: %dms)", parsed.Tag, latency)
 
 	// 4. 送中检测 (Google NCR + CF trace)
-	gfwRes := CheckGFW(sandboxCtx, inst.Port, e.cfg.Probe.GoogleNCRURL, e.cfg.Probe.CloudflareTrace, timeout)
+	gfwCtx, gfwCancel := context.WithTimeout(ctx, timeout)
+	defer gfwCancel()
+	gfwRes := CheckGFW(gfwCtx, inst.Port, e.cfg.Probe.GoogleNCRURL, e.cfg.Probe.CloudflareTrace, timeout)
 	result.ChinaExit = gfwRes.IsChina
 	result.ExitIP = gfwRes.ExitIP
 	result.ExitCountry = gfwRes.ExitCountry
@@ -236,7 +281,7 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 	// 6. 拓展分流探测 (可选，仅展示)
 	if checkSplit {
 		logger.Debugf("[%s] Running split targets probe (ChatGPT/Claude/YouTube/Baidu)...", parsed.Tag)
-		result.Split = CheckDetailedSplit(sandboxCtx, inst.Port, timeout)
+		result.Split = CheckDetailedSplit(activeSandboxCtx, inst.Port, timeout)
 		logger.Probe("[%s] Split results: ChatGPT=%s, Claude=%s, YouTube=%s, Baidu=%s",
 			parsed.Tag, result.Split.ChatGPT, result.Split.Claude, result.Split.YouTube, result.Split.Baidu)
 	}

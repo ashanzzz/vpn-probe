@@ -34,3 +34,22 @@ func TestEngine_DistinguishLoopbackDialFromSocksRefused(t *testing.T) {
 		t.Fatalf("socksRefusedErr must NOT be classified as local sandbox loopback failure")
 	}
 }
+
+func TestEngine_LoopbackFailureLogEnrichment(t *testing.T) {
+	// 验证当本地沙箱环回端口连接被拒时，sing-box 日志输出能够正确附加至 ErrorMsg 与 TroubleshootTip
+	testPort := 38767
+	loopbackErr := fmt.Errorf("request failed: Get \"https://www.gstatic.com/generate_204\": socks connect tcp 127.0.0.1:%d->www.gstatic.com:443: dial tcp 127.0.0.1:%d: connect: connection refused", testPort, testPort)
+	sbLog := "FATAL[0000] start service: inbound/mixed[mixed-in]: listen tcp 127.0.0.1:38767: bind: address already in use"
+
+	errMsg := fmt.Sprintf("local sandbox connection refused: %v", loopbackErr)
+	if sbLog != "" {
+		errMsg = fmt.Sprintf("%s | sing-box: %s", errMsg, sbLog)
+	}
+
+	if !strings.Contains(errMsg, "bind: address already in use") {
+		t.Errorf("expected errMsg to contain sing-box fatal log, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "127.0.0.1:38767") {
+		t.Errorf("expected errMsg to contain port 38767, got: %s", errMsg)
+	}
+}

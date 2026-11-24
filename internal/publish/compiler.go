@@ -137,6 +137,21 @@ function isSelfName(n) {
   return typeof n === 'string' && (n.startsWith('自建-') || n.startsWith('自建·') || n === '不送中');
 }
 
+function isInformationalOrUnsupportedNode(p) {
+  if (!p || !p.name) return true;
+  const name = String(p.name);
+  if (/剩余流量|到期时间|官网|群组|通知|公告|Traffic|Expire|Website|故障|飞行模式|恢复|客服|说明|提示|注意|规则|备用/i.test(name)) return true;
+  const pType = String(p.type || '').toLowerCase();
+  const unsupportedTypes = ['anytls', 'unknown'];
+  if (unsupportedTypes.includes(pType)) return true;
+  return false;
+}
+
+function isDirtyLeakName(n) {
+  if (typeof n !== 'string') return false;
+  return n === '自建-送中' || n === '自建-送中分组' || n === 'ashan-china-leak' || n.includes('送中') || n.includes('China-Leak');
+}
+
 function resolveProxyName(targetName, allNames) {
   const trimmed = (targetName || '').trim();
   if (trimmed === 'DIRECT' || trimmed === 'REJECT') return trimmed;
@@ -196,6 +211,23 @@ function processConfig(vpnCfg) {
     return vpnCfg;
   }
 
+  const purgedNodeNames = new Set();
+  const seenNodeNames = new Set();
+  const dedupedProxies = [];
+  for (const p of vpnCfg.proxies) {
+    if (!p) continue;
+    if (isInformationalOrUnsupportedNode(p)) {
+      if (p.name) purgedNodeNames.add(p.name);
+      continue;
+    }
+    if (seenNodeNames.has(p.name)) {
+      continue;
+    }
+    seenNodeNames.add(p.name);
+    dedupedProxies.push(p);
+  }
+  vpnCfg.proxies = dedupedProxies;
+
   const vpnExisting = Array.isArray(vpnCfg['proxy-groups']) ? vpnCfg['proxy-groups'] : [];
   const vpnNames = new Set(vpnCfg.proxies.map(p => p && p.name).filter(Boolean));
   const vpnDefined = new Set(vpnUserGroups.map(g => g.name));
@@ -210,8 +242,11 @@ function processConfig(vpnCfg) {
     return true;
   });
   for (const g of vpnGroups) {
-    if (Array.isArray(g.proxies) && g.proxies.length === 0) {
-      g.proxies = ['DIRECT'];
+    if (Array.isArray(g.proxies)) {
+      g.proxies = g.proxies.filter(p => !purgedNodeNames.has(p));
+      if (g.proxies.length === 0) {
+        g.proxies = ['DIRECT'];
+      }
     }
   }
 
@@ -290,11 +325,11 @@ function processConfig(vpnCfg) {
 
     const isSpecialPool = g.name.endsWith('节点') || g.name.endsWith('分组') || g.type === 'url-test' || g.type === 'fallback' || g.type === 'load-balance';
     if (!isSpecialPool) {
-      // 业务策略组：所有策略组的首选默认必须是「选择代理」
-      const rest = g.proxies.filter(n => n !== '选择代理');
+      // 业务策略组：所有策略组的首选默认必须是「选择代理」，且绝不混入送中隔离箱与无效节点
+      const rest = g.proxies.filter(n => n !== '选择代理' && !isDirtyLeakName(n) && !purgedNodeNames.has(n));
       const gNameLower = (g.name || '').toLowerCase();
       const matchKey = Object.keys(appGroupCleanInject).find(k => k.toLowerCase() === gNameLower);
-      const customInject = matchKey ? appGroupCleanInject[matchKey].filter(n => existingGroupNames.has(n)) : [];
+      const customInject = matchKey ? appGroupCleanInject[matchKey].filter(n => existingGroupNames.has(n) && !isDirtyLeakName(n)) : [];
       const finalProxies = ['选择代理'];
       for (const c of customInject) {
         if (!finalProxies.includes(c)) finalProxies.push(c);
@@ -314,9 +349,9 @@ function processConfig(vpnCfg) {
 
   const vpnEntry = vpnGroups.find(g => g.name === '选择代理');
   if (vpnEntry) {
-    const allowedAdditions = new Set(vpnUserGroups.filter(g => g.add_to_entry).map(g => g.name));
-    const current = Array.isArray(vpnEntry.proxies) ? vpnEntry.proxies.filter(n => (!isSelfName(n) && !vpnDefined.has(n)) || allowedAdditions.has(n)) : [];
-    const additions = vpnUserGroups.filter(g => g.add_to_entry).map(g => g.name);
+    const allowedAdditions = new Set(vpnUserGroups.filter(g => g.add_to_entry && !isDirtyLeakName(g.name)).map(g => g.name));
+    const current = Array.isArray(vpnEntry.proxies) ? vpnEntry.proxies.filter(n => ((!isSelfName(n) && !vpnDefined.has(n)) || allowedAdditions.has(n)) && !isDirtyLeakName(n) && !purgedNodeNames.has(n)) : [];
+    const additions = vpnUserGroups.filter(g => g.add_to_entry && !isDirtyLeakName(g.name)).map(g => g.name);
     const next = [...new Set(current.concat(additions))];
     vpnEntry.proxies = next.includes('自动选择') ? ['自动选择', ...next.filter(n => n !== '自动选择')] : next;
     if (!Array.isArray(vpnEntry.proxies) || vpnEntry.proxies.length === 0) {
@@ -325,6 +360,9 @@ function processConfig(vpnCfg) {
   }
 
   for (const g of vpnGroups) {
+    if (Array.isArray(g.proxies)) {
+      g.proxies = Array.from(new Set(g.proxies.filter(p => !purgedNodeNames.has(p))));
+    }
     if (!Array.isArray(g.proxies) || g.proxies.length === 0) {
       g.proxies = ['DIRECT'];
     }

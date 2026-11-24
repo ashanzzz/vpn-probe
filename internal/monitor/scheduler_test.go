@@ -188,6 +188,13 @@ func TestCFRescueStandbyAndFailover(t *testing.T) {
 			Online:      true,
 			NodeType:    "transit",
 		},
+		// 东京软银 节点: 直连离线且未配置 CF 救活节点
+		{
+			Name:        "JP-Tokyo-Softbank-Reality",
+			OriginalURL: "vless://uuid@45.192.242.72:24444#JP-Tokyo-Softbank",
+			Online:      false,
+			NodeType:    "transit",
+		},
 	}
 
 	activeLinks := filterActiveTransitNodes(nodes)
@@ -222,9 +229,37 @@ func TestCFRescueStandbyAndFailover(t *testing.T) {
 		t.Fatalf("expected tokyo-free CF rescue node to be PROMOTED when direct nodes are down, but it was missing!")
 	}
 
-	// 校验 4: activeLinks 总数应为 3 (LAX Reality, LAX SS, Tokyo CF-Rescue)
+	// 校验 4: activeLinks 总数应为 3 (LAX Reality, LAX SS, Tokyo CF-Rescue，未配置救活且离线的软银被正确排除)
 	if len(activeLinks) != 3 {
 		t.Fatalf("expected exactly 3 active links, got %d: %v", len(activeLinks), activeLinks)
+	}
+}
+
+func TestScheduler_FilterActiveTransitNodes_NoRescueAndAllDown(t *testing.T) {
+	nodes := []*model.NodeProbeResult{
+		{
+			Name:        "JP-Tokyo-Softbank-Reality",
+			OriginalURL: "vless://uuid@45.192.242.72:24444#JP-Tokyo-Softbank",
+			Online:      false,
+			NodeType:    "transit",
+		},
+		{
+			Name:        "JP-Tokyo-IIJ-Reality",
+			OriginalURL: "vless://uuid@156.231.113.91:33339#JP-Tokyo-IIJ",
+			Online:      false,
+			NodeType:    "transit",
+		},
+		{
+			Name:        "JP-Tokyo-IIJ-CF-WS",
+			OriginalURL: "vless://uuid@tokyo-free.1992004.xyz:443?type=ws&path=/cf-vless#JP-Tokyo-IIJ-CF-WS",
+			Online:      false, // 救活节点也离线
+			NodeType:    "transit",
+		},
+	}
+
+	activeLinks := filterActiveTransitNodes(nodes)
+	if len(activeLinks) != 0 {
+		t.Fatalf("expected 0 active links when all nodes are down, got %d: %v", len(activeLinks), activeLinks)
 	}
 }
 

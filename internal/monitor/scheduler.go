@@ -583,17 +583,8 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 				fmt.Sprintf("reason=engine_error_ratio ratio=%.2f threshold=0.30 total=%d engine_err=%d",
 					ratio, total, resp.EngineErrors))
 		} else {
-			// 5. 线路机节点去重与灾备逃生热备联动 (CF救活原则: 一切能直连时热备隐藏，直连全军覆没时自动提升)
-			transitLinks := filterActiveTransitNodes(rankedTransits)
-			var resiLinks []string
-			uniqueResis := deduplicateNodeResults(resiNodes)
-			for _, r := range uniqueResis {
-				if r.Diagnostic == nil || r.Diagnostic.FaultType != model.FaultMachineDown {
-					resiLinks = append(resiLinks, r.OriginalURL)
-				}
-			}
-
 			// 方案B：全量区域网状池化中继 (美西4837全量挂载美国家宽)
+			uniqueResis := deduplicateNodeResults(resiNodes)
 			fullMeshChains := s.healer.BuildFullMeshRegionalChains(rankedTransits, uniqueResis)
 			if len(fullMeshChains) > 0 {
 				chainLinks = fullMeshChains
@@ -609,7 +600,7 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 				logger.Event(logger.LevelWarn, "substore", "sync_failed", fmt.Sprintf("error=%v", err))
 			} else {
 				logger.Event(logger.LevelInfo, "substore", "sync_done",
-					fmt.Sprintf("transit=%d resi=%d chains=%d five_groups=synced", len(transitLinks), len(uniqueResis), len(chainLinks)))
+					fmt.Sprintf("transit=%d resi=%d chains=%d five_groups=synced", len(fiveGroups.TransitNodes), len(uniqueResis), len(chainLinks)))
 			}
 		}
 	}
@@ -822,7 +813,11 @@ func filterActiveTransitNodes(transits []*model.NodeProbeResult) []string {
 				}
 			}
 			if promoted == 0 {
-				logger.Warnf("[RESCUE-FAILED] ⚠️ VPS主机 [%s] 直连与CF救活节点均不可用！", gid)
+				if len(grp.RescueNodes) == 0 {
+					logger.Warnf("[TRANSIT-OFFLINE] ⚠️ VPS主机 [%s] 主力直连节点离线且未配置CF救活备用节点！", gid)
+				} else {
+					logger.Warnf("[RESCUE-FAILED] ⚠️ VPS主机 [%s] 直连与CF救活节点均不可用！", gid)
+				}
 			}
 		}
 	}

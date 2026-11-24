@@ -171,15 +171,7 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 
 			// 优先从标签名中解析中继与落地目标，避免 URL 参数/密码中的特殊符号干扰
 			chainLabel := chainName
-			if pipeIdx := strings.Index(chainLabel, "|"); pipeIdx != -1 {
-				chainLabel = strings.TrimSpace(chainLabel[pipeIdx+1:])
-			}
-			transitPart := ""
-			targetPart := chainLabel
-			if arrowIdx := strings.Index(chainLabel, "➔"); arrowIdx != -1 {
-				transitPart = strings.TrimSpace(chainLabel[:arrowIdx])
-				targetPart = strings.TrimSpace(chainLabel[arrowIdx+len("➔"):])
-			}
+			transitPart, targetPart, _ := ParseChainParts(chainLabel)
 			country := model.ResolveCountry("", chainLabel)
 
 			chainOnline := true
@@ -194,7 +186,7 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 					if t == nil || strings.TrimSpace(t.Name) == "" {
 						continue
 					}
-					if MatchNodeName(transitPart, t.Name) {
+					if MatchTransitCandidate(t.Name, transitPart) {
 						transitFound = true
 						chainLatency += t.LatencyMs
 						if t.ChinaExit {
@@ -215,7 +207,7 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 					if r == nil || strings.TrimSpace(r.Name) == "" {
 						continue
 					}
-					if MatchNodeName(targetPart, r.Name) {
+					if MatchResidentialCandidate(r.Name, targetPart) {
 						targetFound = true
 						testedAt = r.TestedAt
 						if r.Diagnostic != nil && r.Diagnostic.AbroadRTTMs > 0 {
@@ -284,22 +276,25 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 		if atoms[i].Kind != "chain" {
 			continue
 		}
-		parts := strings.SplitN(atoms[i].Name, "➔", 2)
-		if len(parts) != 2 {
+		transitPart, targetPart, isChain := ParseChainParts(atoms[i].Name)
+		if !isChain {
 			continue
 		}
-		landingName := strings.TrimSpace(parts[1])
-		landing, ok := landings[landingName]
-		if !ok && landingName != "" {
-			for k, v := range landings {
-				if MatchNodeName(k, landingName) {
+		var landing model.AtomNode
+		landingOk := false
+		if l, ok := landings[targetPart]; ok {
+			landing = l
+			landingOk = true
+		} else if targetPart != "" {
+			for _, v := range landings {
+				if MatchResidentialCandidate(v.Name, targetPart) {
 					landing = v
-					ok = true
+					landingOk = true
 					break
 				}
 			}
 		}
-		if ok {
+		if landingOk {
 			if atoms[i].InfraType == "" {
 				atoms[i].InfraType = landing.InfraType
 			}
@@ -310,14 +305,15 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 				atoms[i].ChinaExit = true
 			}
 		}
-		transitName := strings.TrimSpace(parts[0])
-		if pipeIdx := strings.Index(transitName, "|"); pipeIdx != -1 {
-			transitName = strings.TrimSpace(transitName[pipeIdx+1:])
-		}
-		tr, trOk := transitMap[transitName]
-		if !trOk && transitName != "" {
-			for k, v := range transitMap {
-				if MatchNodeName(k, transitName) {
+
+		var tr model.AtomNode
+		trOk := false
+		if t, ok := transitMap[transitPart]; ok {
+			tr = t
+			trOk = true
+		} else if transitPart != "" {
+			for _, v := range transitMap {
+				if MatchTransitCandidate(v.Name, transitPart) {
 					tr = v
 					trOk = true
 					break
@@ -974,15 +970,10 @@ func matchesChainTarget(c CustomChainBind, target string) bool {
 	if c.ResidentialName == target || MatchNodeName(c.ResidentialName, target) {
 		return true
 	}
-	// 支持按 "中继 ➔ 落地" 组合精确解绑
-	if strings.Contains(target, "➔") {
-		parts := strings.SplitN(target, "➔", 2)
-		transit := strings.TrimSpace(parts[0])
-		if pipeIdx := strings.Index(transit, "|"); pipeIdx != -1 {
-			transit = strings.TrimSpace(transit[pipeIdx+1:])
-		}
-		resi := strings.TrimSpace(parts[1])
-		if MatchNodeName(c.TransitName, transit) && MatchNodeName(c.ResidentialName, resi) {
+	// 支持按 "中继 ➔ 落地" 组合或紧凑命名 "[前置]-[落地区域]-[运营商]" 精确解绑
+	transit, resi, isChain := ParseChainParts(target)
+	if isChain && transit != "" && resi != "" {
+		if MatchTransitCandidate(c.TransitName, transit) && MatchResidentialCandidate(c.ResidentialName, resi) {
 			return true
 		}
 	}
@@ -1024,4 +1015,86 @@ func (o *Orchestrator) UnbindExplicitChain(target string) error {
 
 	logger.Sync("[CHAIN-UNBIND] ✂️ Custom chain removed for target: %s", target)
 	return nil
+}
+
+// ParseChainParts 解析链式代理标签中的中继前置机与落地端，同时兼容长格式 (链式|Transit ➔ Resi) 与紧凑精简别名格式 ([前置]-[落地区域]-[运营商])
+func ParseChainParts(chainLabel string) (transitPart, targetPart string, isChain bool) {
+	chainLabel = strings.TrimSpace(chainLabel)
+	if pipeIdx := strings.Index(chainLabel, "|"); pipeIdx != -1 {
+		chainLabel = strings.TrimSpace(chainLabel[pipeIdx+1:])
+	}
+
+	// 1. 标准长格式：带箭头 ➔
+	if arrowIdx := strings.Index(chainLabel, "➔"); arrowIdx != -1 {
+		transitPart = strings.TrimSpace(chainLabel[:arrowIdx])
+		targetPart = strings.TrimSpace(chainLabel[arrowIdx+len("➔"):])
+		return transitPart, targetPart, true
+	}
+
+	// 2. 紧凑精简格式：形如 [前置]-[落地区域]-[运营商/品牌] (如 IIJ-美宽-Frontier, SB-日宽-SoftBank, LAX-美宽-Pavlov, SB-台宽-HiNet)
+	if parts := strings.Split(chainLabel, "-"); len(parts) >= 3 {
+		middle := parts[1]
+		if strings.Contains(middle, "宽") || strings.EqualFold(middle, "resi") || strings.EqualFold(middle, "residential") {
+			transitPart = strings.TrimSpace(parts[0])
+			targetPart = strings.TrimSpace(strings.Join(parts[2:], "-"))
+			return transitPart, targetPart, true
+		}
+	}
+
+	return "", chainLabel, false
+}
+
+// MatchTransitCandidate 针对线路机候选进行精确或别名匹配 (兼容 IIJ, SB, LAX/4837 等简写代号)
+func MatchTransitCandidate(candidateName, transitPart string) bool {
+	candidateName = strings.TrimSpace(candidateName)
+	transitPart = strings.TrimSpace(transitPart)
+	if candidateName == "" || transitPart == "" {
+		return false
+	}
+	if MatchNodeName(transitPart, candidateName) {
+		return true
+	}
+	tUpper := strings.ToUpper(transitPart)
+	cUpper := strings.ToUpper(candidateName)
+
+	if strings.Contains(tUpper, "IIJ") && strings.Contains(cUpper, "IIJ") {
+		return true
+	}
+	if (strings.Contains(tUpper, "SB") || strings.Contains(tUpper, "SOFTBANK") || strings.Contains(transitPart, "软银")) &&
+		(strings.Contains(cUpper, "SB") || strings.Contains(cUpper, "SOFTBANK") || strings.Contains(candidateName, "软银")) {
+		return true
+	}
+	if (strings.Contains(tUpper, "LAX") || strings.Contains(tUpper, "4837") || strings.Contains(transitPart, "洛杉矶") || strings.Contains(transitPart, "美西")) &&
+		(strings.Contains(cUpper, "LAX") || strings.Contains(cUpper, "4837") || strings.Contains(candidateName, "洛杉矶") || strings.Contains(candidateName, "美西")) {
+		return true
+	}
+	return false
+}
+
+// MatchResidentialCandidate 针对住宅落地机候选进行精确或别名匹配 (兼容 Pavlov, Frontier, Verizon, SoftBank 等 10 大住宅品牌)
+func MatchResidentialCandidate(candidateName, targetPart string) bool {
+	candidateName = strings.TrimSpace(candidateName)
+	targetPart = strings.TrimSpace(targetPart)
+	if candidateName == "" || targetPart == "" {
+		return false
+	}
+	if MatchNodeName(targetPart, candidateName) {
+		return true
+	}
+	tgtUpper := strings.ToUpper(targetPart)
+	candUpper := strings.ToUpper(candidateName)
+
+	// 10 大家宽运营商/品牌规范
+	keywords := []string{"PAVLOV", "FRONTIER", "VERIZON", "BIGLOBE", "KDDI", "SOFTBANK", "GLBB", "STARHUB", "KT", "HINET"}
+	for _, kw := range keywords {
+		if strings.Contains(tgtUpper, kw) && strings.Contains(candUpper, kw) {
+			return true
+		}
+	}
+
+	// 通用子串兜底
+	if strings.Contains(candUpper, tgtUpper) || strings.Contains(tgtUpper, candUpper) {
+		return true
+	}
+	return false
 }

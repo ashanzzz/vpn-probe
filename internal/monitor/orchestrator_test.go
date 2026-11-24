@@ -1087,3 +1087,196 @@ func TestOrchestrator_ChainCountry_TransitFallbackWhenTargetHasNoCountry(t *test
 	}
 }
 
+func TestOrchestrator_CompactChain_LivenessAndMetadataInheritance(t *testing.T) {
+	tmpChains := filepath.Join(t.TempDir(), "custom_chains_compact.json")
+	defer SetCustomChainsFileForTest(tmpChains)()
+
+	sch := &Scheduler{
+		healer:     healer.NewHealer(nil, nil),
+		nodeStates: make(map[string]*NodeState),
+	}
+
+	// 1. 线路机：东京 IIJ
+	sch.nodeStates["jp-iij"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "jp-iij",
+			Name:        "JP-Tokyo-IIJ-Reality",
+			OriginalURL: "vless://u1@1.1.1.1:443#JP-Tokyo-IIJ-Reality",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   false,
+			LatencyMs:   120,
+		},
+	}
+
+	// 2. 线路机：美西 4837 (送中且离线测试)
+	sch.nodeStates["us-lax-leak-offline"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "us-lax",
+			Name:        "US-LAX-ACCK-4837-Reality",
+			OriginalURL: "vless://u2@2.2.2.2:443#US-LAX-ACCK-4837-Reality",
+			ExitCountry: "CN",
+			Online:      false,
+			NodeType:    "transit",
+			ChinaExit:   true,
+			LatencyMs:   200,
+		},
+	}
+
+	// 3. 住宅家宽：美宽 Frontier (带元数据与标签)
+	sch.nodeStates["lz-frontier"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "resi-frontier",
+			Name:        "LZ-US-Frontier-家宽",
+			OriginalURL: "vless://u3@3.3.3.3:443#LZ-US-Frontier-家宽",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   false,
+			LatencyMs:   80,
+			Diagnostic: &model.DiagnosticInfo{
+				AbroadRTTMs:     90,
+				AbroadReachable: true,
+			},
+		},
+	}
+
+	// 4. 住宅家宽：美宽 Pavlov (家庭端断开)
+	sch.nodeStates["lz-pavlov-down"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "resi-pavlov",
+			Name:        "LZ-US-Pavlov-家宽",
+			OriginalURL: "vless://u4@4.4.4.4:443#LZ-US-Pavlov-家宽",
+			ExitCountry: "US",
+			Online:      false,
+			NodeType:    "residential",
+			ChinaExit:   false,
+			LatencyMs:   0,
+			Diagnostic: &model.DiagnosticInfo{
+				FaultType:       model.FaultResidentialTunnelOffline,
+				AbroadReachable: false,
+			},
+		},
+	}
+
+	customChains := []CustomChainBind{
+		{
+			ID:              "compact-healthy",
+			TransitName:     "JP-Tokyo-IIJ-Reality",
+			ResidentialName: "LZ-US-Frontier-家宽",
+			ChainName:       "IIJ-美宽-Frontier",
+			ChainURL:        "vless://u3@3.3.3.3:443?dialerProxy=JP-Tokyo-IIJ-Reality#IIJ-美宽-Frontier",
+		},
+		{
+			ID:              "compact-offline-transit",
+			TransitName:     "US-LAX-ACCK-4837-Reality",
+			ResidentialName: "LZ-US-Frontier-家宽",
+			ChainName:       "LAX-美宽-Frontier",
+			ChainURL:        "vless://u3@3.3.3.3:443?dialerProxy=US-LAX-ACCK-4837-Reality#LAX-美宽-Frontier",
+		},
+		{
+			ID:              "compact-offline-resi",
+			TransitName:     "JP-Tokyo-IIJ-Reality",
+			ResidentialName: "LZ-US-Pavlov-家宽",
+			ChainName:       "IIJ-美宽-Pavlov",
+			ChainURL:        "vless://u4@4.4.4.4:443?dialerProxy=JP-Tokyo-IIJ-Reality#IIJ-美宽-Pavlov",
+		},
+	}
+	if err := SaveCustomChains(customChains); err != nil {
+		t.Fatalf("failed to save custom chains: %v", err)
+	}
+
+	orc := NewOrchestrator(sch)
+	atoms := orc.CollectAtoms()
+
+	atomMap := make(map[string]model.AtomNode)
+	for _, a := range atoms {
+		atomMap[a.Name] = a
+	}
+
+	// 1. IIJ-美宽-Frontier 应该成功在线且延迟由两端累加 (120 + 90 = 210)
+	c1, ok := atomMap["IIJ-美宽-Frontier"]
+	if !ok {
+		t.Fatalf("expected IIJ-美宽-Frontier to be present in atoms")
+	}
+	if !c1.Online {
+		t.Errorf("expected IIJ-美宽-Frontier to be Online=true, got false")
+	}
+	if c1.Country != "US" {
+		t.Errorf("expected IIJ-美宽-Frontier country to be US, got %q", c1.Country)
+	}
+	if c1.LatencyMs != 210 {
+		t.Errorf("expected IIJ-美宽-Frontier latency to be 210ms, got %dms", c1.LatencyMs)
+	}
+	if c1.ChinaExit {
+		t.Errorf("expected IIJ-美宽-Frontier ChinaExit to be false, got true")
+	}
+
+	// 2. LAX-美宽-Frontier 因为前置 4837 离线且送中，必须判定为 Online=false 且 ChinaExit=true
+	c2, ok := atomMap["LAX-美宽-Frontier"]
+	if !ok {
+		t.Fatalf("expected LAX-美宽-Frontier to be present in atoms")
+	}
+	if c2.Online {
+		t.Errorf("expected LAX-美宽-Frontier with offline transit to be Online=false, got true")
+	}
+	if !c2.ChinaExit {
+		t.Errorf("expected LAX-美宽-Frontier to inherit ChinaExit=true from transit relay")
+	}
+
+	// 3. IIJ-美宽-Pavlov 因为落地 Pavlov 家庭端断开，必须判定为 Online=false
+	c3, ok := atomMap["IIJ-美宽-Pavlov"]
+	if !ok {
+		t.Fatalf("expected IIJ-美宽-Pavlov to be present in atoms")
+	}
+	if c3.Online {
+		t.Errorf("expected IIJ-美宽-Pavlov with offline residential target to be Online=false, got true")
+	}
+}
+
+func TestOrchestrator_CompactChain_Unbind(t *testing.T) {
+	tmpChains := filepath.Join(t.TempDir(), "custom_chains_unbind.json")
+	defer SetCustomChainsFileForTest(tmpChains)()
+
+	customChains := []CustomChainBind{
+		{
+			ID:              "chain-1",
+			TransitName:     "JP-Tokyo-IIJ-Reality",
+			ResidentialName: "LZ-US-Frontier-家宽",
+			ChainName:       "链式|JP-Tokyo-IIJ-Reality ➔ LZ-US-Frontier-家宽",
+		},
+		{
+			ID:              "chain-2",
+			TransitName:     "JP--ACCK-SB",
+			ResidentialName: "LZ-JP-SoftBank-家宽",
+			ChainName:       "SB-日宽-SoftBank",
+		},
+	}
+	if err := SaveCustomChains(customChains); err != nil {
+		t.Fatalf("failed to save custom chains: %v", err)
+	}
+
+	orc := NewOrchestrator(nil)
+
+	// 1. 使用紧凑别名 "IIJ-美宽-Frontier" 精确解绑 chain-1 (长格式名称链)
+	if err := orc.UnbindExplicitChain("IIJ-美宽-Frontier"); err != nil {
+		t.Fatalf("failed to unbind chain using compact alias IIJ-美宽-Frontier: %v", err)
+	}
+
+	remaining, _ := LoadCustomChains()
+	if len(remaining) != 1 || remaining[0].ID != "chain-2" {
+		t.Fatalf("expected only chain-2 remaining after unbinding, got %+v", remaining)
+	}
+
+	// 2. 使用紧凑别名 "SB-日宽-SoftBank" 精确解绑 chain-2
+	if err := orc.UnbindExplicitChain("SB-日宽-SoftBank"); err != nil {
+		t.Fatalf("failed to unbind chain using compact name SB-日宽-SoftBank: %v", err)
+	}
+
+	remainingAfter, _ := LoadCustomChains()
+	if len(remainingAfter) != 0 {
+		t.Fatalf("expected all chains to be removed, got %+v", remainingAfter)
+	}
+}
+

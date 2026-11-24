@@ -994,15 +994,7 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 
 		// 优先从标签名中解析中继与落地目标，避免 URL 参数/密码中的特殊符号干扰
 		chainLabel := chainName
-		if pipeIdx := strings.Index(chainLabel, "|"); pipeIdx != -1 {
-			chainLabel = strings.TrimSpace(chainLabel[pipeIdx+1:])
-		}
-		transitPart := ""
-		targetPart := chainLabel
-		if arrowIdx := strings.Index(chainLabel, "➔"); arrowIdx != -1 {
-			transitPart = strings.TrimSpace(chainLabel[:arrowIdx])
-			targetPart = strings.TrimSpace(chainLabel[arrowIdx+len("➔"):])
-		}
+		transitPart, targetPart, _ := ParseChainParts(chainLabel)
 
 		// 检查中继专线或落地家宽是否有任一端送中 (严格匹配节点名称与 emoji 变体，防短 ID / 包含串误判)
 		chainLeaked := false
@@ -1011,7 +1003,7 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 				if t == nil || !t.ChinaExit || strings.TrimSpace(t.Name) == "" {
 					continue
 				}
-				if MatchNodeName(transitPart, t.Name) {
+				if MatchTransitCandidate(t.Name, transitPart) {
 					chainLeaked = true
 					break
 				}
@@ -1022,7 +1014,7 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 				if r == nil || !r.ChinaExit || strings.TrimSpace(r.Name) == "" {
 					continue
 				}
-				if MatchNodeName(targetPart, r.Name) {
+				if MatchResidentialCandidate(r.Name, targetPart) {
 					chainLeaked = true
 					break
 				}

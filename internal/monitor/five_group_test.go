@@ -496,3 +496,103 @@ func TestMatchNodeName_NonASCIICollisionProtection(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyIntoFiveGroups_CompactChainQuarantineAndClassification(t *testing.T) {
+	transits := []*model.NodeProbeResult{
+		{
+			Name:        "JP-Tokyo-IIJ-Reality",
+			OriginalURL: "vless://u1@1.1.1.1:443#JP-Tokyo-IIJ-Reality",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   false,
+		},
+		{
+			Name:        "JP--ACCK-SB",
+			OriginalURL: "ss://m:p@2.2.2.2:24443#JP--ACCK-SB",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   false,
+		},
+		{
+			Name:        "US-LAX-ACCK-4837-Reality",
+			OriginalURL: "vless://u3@3.3.3.3:443#US-LAX-ACCK-4837-Reality",
+			ExitCountry: "CN",
+			Online:      true,
+			NodeType:    "transit",
+			ChinaExit:   true, // 送中线路机
+		},
+	}
+
+	resis := []*model.NodeProbeResult{
+		{
+			Name:        "LZ-US-Frontier-家宽",
+			OriginalURL: "vless://u4@4.4.4.4:443#LZ-US-Frontier-家宽",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   false,
+		},
+		{
+			Name:        "LZ-JP-SoftBank-家宽",
+			OriginalURL: "vless://u5@5.5.5.5:443#LZ-JP-SoftBank-家宽",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   false,
+		},
+		{
+			Name:        "LZ-TW-HiNet-家宽",
+			OriginalURL: "vless://u6@6.6.6.6:443#LZ-TW-HiNet-家宽",
+			ExitCountry: "TW",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   false,
+		},
+		{
+			Name:        "LZ-US-Pavlov-家宽",
+			OriginalURL: "vless://u7@7.7.7.7:443#LZ-US-Pavlov-家宽",
+			ExitCountry: "CN",
+			Online:      true,
+			NodeType:    "residential",
+			ChinaExit:   true, // 送中家宽
+		},
+	}
+
+	chains := []string{
+		"vless://u4@4.4.4.4:443?dialerProxy=JP-Tokyo-IIJ-Reality#IIJ-美宽-Frontier", // 洁净美区中继
+		"ss://u5@5.5.5.5:443?dialerProxy=JP--ACCK-SB#SB-日宽-SoftBank",              // 洁净日区中继
+		"vless://u6@6.6.6.6:443?dialerProxy=JP--ACCK-SB#SB-台宽-HiNet",               // 洁净其他(台湾)中继
+		"vless://u4@4.4.4.4:443?dialerProxy=US-LAX-ACCK-4837-Reality#LAX-美宽-Frontier", // 前置送中
+		"vless://u7@7.7.7.7:443?dialerProxy=JP-Tokyo-IIJ-Reality#IIJ-美宽-Pavlov",     // 落地送中
+	}
+
+	payload := ClassifyIntoFiveGroups(transits, resis, chains)
+
+	// 1. 验证洁净紧凑链式中继分别落入对应区域全家桶
+	assertContains(t, payload.USResiNodes, chains[0], "IIJ-美宽-Frontier must be in USResiNodes")
+	assertContains(t, payload.JPResiNodes, chains[1], "SB-日宽-SoftBank must be in JPResiNodes")
+	assertContains(t, payload.OtherNodes, chains[2], "SB-台宽-HiNet must be in OtherNodes")
+
+	// 2. 验证前置送中或落地送中的紧凑链式中继被送入 ChinaLeakNodes 隔离箱
+	assertContains(t, payload.ChinaLeakNodes, chains[3], "LAX-美宽-Frontier (transit leaked) must be in ChinaLeakNodes")
+	assertContains(t, payload.ChinaLeakNodes, chains[4], "IIJ-美宽-Pavlov (landing leaked) must be in ChinaLeakNodes")
+
+	// 3. 验证纯净组绝对未混入任何送中链式中继
+	for _, n := range payload.USResiNodes {
+		if n == chains[3] || n == chains[4] {
+			t.Errorf("USResiNodes illegally contains leaked compact chain: %s", n)
+		}
+	}
+}
+
+func assertContains(t *testing.T, slice []string, item string, msg string) {
+	t.Helper()
+	for _, s := range slice {
+		if s == item {
+			return
+		}
+	}
+	t.Fatalf("%s (not found in slice: %v)", msg, slice)
+}

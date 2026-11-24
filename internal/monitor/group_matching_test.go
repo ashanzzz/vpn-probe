@@ -47,4 +47,20 @@ func TestMatchAtomsManualFilterAndTags(t *testing.T) {
 	if len(matchedLeak) != 1 || matchedLeak[0].ID != "two" {
 		t.Fatalf("expected ashan-china-leak default group to isolate node 'two', got: %+v", matchedLeak)
 	}
+
+	// Test UK and GB synonym normalization in MatchAtoms
+	ukNodes := []model.AtomNode{
+		{ID: "uk-1", Name: "London-01", Country: "UK", Kind: "residential", Online: true},
+		{ID: "gb-1", Name: "London-02", Country: "GB", Kind: "residential", Online: true},
+	}
+	filterUK := model.GroupFilter{Countries: []string{"UK"}, Kinds: []string{"residential"}}
+	matchedUK := MatchAtoms(ukNodes, filterUK)
+	if len(matchedUK) != 2 {
+		t.Fatalf("expected both UK and GB nodes to match filter with 'UK', got %d", len(matchedUK))
+	}
+	filterGB := model.GroupFilter{Countries: []string{"GB"}, Kinds: []string{"residential"}}
+	matchedGB := MatchAtoms(ukNodes, filterGB)
+	if len(matchedGB) != 2 {
+		t.Fatalf("expected both UK and GB nodes to match filter with 'GB', got %d", len(matchedGB))
+	}
 }

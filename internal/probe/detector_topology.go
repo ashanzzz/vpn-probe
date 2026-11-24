@@ -119,44 +119,18 @@ func BuildNodeHopTrace(result *model.NodeProbeResult, parsed *ParsedNode, rawURL
 	return traces
 }
 
-// hasRegionToken 判断节点名称中是否包含作为独立词元出现的区域代号 (避免 "NODE" 误判为 "DE", "BUSINESS" 误判为 "US"/"SG", "PROJEKT" 误判为 "KR", "INFRA" 误判为 "DE")
+// hasRegionToken 判断节点名称中是否包含作为独立词元出现的区域代号 (委托给 model.HasRegionToken)
 func hasRegionToken(upper, code string) bool {
-	tokens := strings.FieldsFunc(upper, func(r rune) bool {
-		return r == '-' || r == '_' || r == ' ' || r == '[' || r == ']' ||
-			r == '(' || r == ')' || r == '/' || r == '|' || r == '➔' ||
-			r == ':' || r == '.' || r == ','
-	})
-	for _, t := range tokens {
-		if t == code || strings.HasPrefix(t, code+"-") || strings.HasPrefix(t, code+"_") || strings.TrimRight(t, "0123456789") == code {
-			return true
-		}
-	}
-	return false
+	return model.HasRegionToken(upper, code)
 }
 
 // DetectRegionFromName 根据节点名推导区域代码 (JP, US, HK, TW, SG, KR, DE, UK...)
 func DetectRegionFromName(name, fallback string) string {
-	upper := strings.ToUpper(name)
-	switch {
-	case hasRegionToken(upper, "JP") || strings.Contains(upper, "东京") || strings.Contains(upper, "大阪") || strings.Contains(upper, "日本") || hasRegionToken(upper, "NRT") || hasRegionToken(upper, "HND"):
-		return "JP"
-	case hasRegionToken(upper, "US") || strings.Contains(upper, "美西") || strings.Contains(upper, "洛杉矶") || strings.Contains(upper, "美国") || strings.Contains(upper, "4837") || hasRegionToken(upper, "LAX") || hasRegionToken(upper, "SJC") || strings.Contains(upper, "PAVLOV") || strings.Contains(upper, "FRONTIER") || strings.Contains(upper, "VERIZON"):
-		return "US"
-	case hasRegionToken(upper, "HK") || strings.Contains(upper, "香港") || hasRegionToken(upper, "HKG"):
-		return "HK"
-	case hasRegionToken(upper, "TW") || strings.Contains(upper, "台湾") || strings.Contains(upper, "台北") || strings.Contains(upper, "HINET") || hasRegionToken(upper, "TPE"):
-		return "TW"
-	case hasRegionToken(upper, "SG") || strings.Contains(upper, "新加坡") || strings.Contains(upper, "狮城") || strings.Contains(upper, "STARHUB") || hasRegionToken(upper, "SIN"):
-		return "SG"
-	case hasRegionToken(upper, "KR") || strings.Contains(upper, "韩国") || strings.Contains(upper, "首尔") || hasRegionToken(upper, "ICN") || hasRegionToken(upper, "KT"):
-		return "KR"
-	case hasRegionToken(upper, "DE") || strings.Contains(upper, "德国") || strings.Contains(upper, "法兰克福") || hasRegionToken(upper, "FRA"):
-		return "DE"
-	case hasRegionToken(upper, "UK") || hasRegionToken(upper, "GB") || strings.Contains(upper, "英国") || strings.Contains(upper, "伦敦") || hasRegionToken(upper, "LHR"):
-		return "UK"
-	default:
-		return fallback
+	reg := model.ResolveCountry("", name)
+	if reg != "OTHER" && reg != "" {
+		return reg
 	}
+	return fallback
 }
 
 // DetectNATRegion 识别 NAT 宿主所在区域 (支持 JP / US / HK / SG 等动态区域切换)

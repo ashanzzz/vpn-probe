@@ -109,12 +109,12 @@ func main() {
 		scriptBusiness,
 		func(fileName string, yamlBytes []byte) error {
 			if strings.EqualFold(fileName, "q") {
-				return publish.ValidateYAML(yamlBytes, expectedQ)
+				return publish.ValidateYAMLWithProfile(yamlBytes, expectedQ, nil, "q")
 			}
 			if strings.EqualFold(fileName, "business") {
-				return publish.ValidateYAML(yamlBytes, expectedBusiness)
+				return publish.ValidateYAMLWithProfile(yamlBytes, expectedBusiness, nil, "business")
 			}
-			return publish.ValidateYAML(yamlBytes, expectedAshan)
+			return publish.ValidateYAMLWithProfile(yamlBytes, expectedAshan, nil, "ashan")
 		},
 		func(step string) {
 			fmt.Printf("   [Progress] %s\n", step)

@@ -418,3 +418,72 @@ func TestUpdateFile_FallbackOn403(t *testing.T) {
 		t.Errorf("expected fallbackServer to be hit on 403 from primary")
 	}
 }
+
+func TestAuditTopology_BusinessCollectionAndFileValidation(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/subs":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"success","data":[
+				{"name":"ashan-transit","displayName":"Transit","source":"local","content":"vless://1"},
+				{"name":"ashan-us-resi","displayName":"US Resi","source":"local","content":"socks5://2"},
+				{"name":"ashan-jp-resi","displayName":"JP Resi","source":"local","content":"socks5://3"},
+				{"name":"ashan-other","displayName":"Other","source":"local","content":"socks5://4"},
+				{"name":"ashan-china-leak","displayName":"Leak","source":"local","content":"vless://5"},
+				{"name":"蜂窝云","displayName":"蜂窝云","source":"remote","url":"https://example.com"}
+			]}`))
+		case "/api/collections":
+			w.WriteHeader(http.StatusOK)
+			// 模拟错配：col-business 混入了外部商业机场 "蜂窝云"
+			w.Write([]byte(`{"status":"success","data":[
+				{"name":"col-ashan","displayName":"Ashan 全量全家桶","subscriptions":["ashan-transit","ashan-us-resi","ashan-jp-resi","ashan-other","ashan-china-leak","蜂窝云"]},
+				{"name":"col-q","displayName":"Q 骨干轻量组","subscriptions":["ashan-transit","蜂窝云"]},
+				{"name":"col-business","displayName":"Business 纯自建商务合集","subscriptions":["ashan-transit","ashan-us-resi","ashan-jp-resi","ashan-other","蜂窝云"]}
+			]}`))
+		case "/api/files":
+			w.WriteHeader(http.StatusOK)
+			// 模拟文件缺失与错配：只有 ashan 和 Q，缺少 business 文件
+			w.Write([]byte(`{"status":"success","data":[
+				{"name":"ashan","displayName":"ashan","sourceName":"col-ashan"},
+				{"name":"Q","displayName":"Q","sourceName":"col-q"}
+			]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer mockServer.Close()
+
+	cfg := &config.SubStoreConfig{
+		Enabled: true,
+		URL:     mockServer.URL,
+	}
+	client := NewClient(cfg)
+
+	audit, err := client.AuditTopology(context.Background())
+	if err != nil {
+		t.Fatalf("AuditTopology failed: %v", err)
+	}
+
+	if audit.Healthy {
+		t.Errorf("Expected topology to be unhealthy due to business discrepancies, got healthy")
+	}
+
+	hasBizAirportPollution := false
+	hasBizFileMissing := false
+	for _, d := range audit.Discrepancies {
+		if strings.Contains(d, "col-business") && strings.Contains(d, "商业机场") {
+			hasBizAirportPollution = true
+		}
+		if strings.Contains(d, "business") && strings.Contains(d, "缺少核心") {
+			hasBizFileMissing = true
+		}
+	}
+
+	if !hasBizAirportPollution {
+		t.Errorf("Expected discrepancy for col-business airport pollution, got: %v", audit.Discrepancies)
+	}
+	if !hasBizFileMissing {
+		t.Errorf("Expected discrepancy for missing business file, got: %v", audit.Discrepancies)
+	}
+}

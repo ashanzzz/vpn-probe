@@ -32,6 +32,23 @@ func GenerateRandomHighPort() int {
 	return 20000 + rand.Intn(30000)
 }
 
+// cleanDialerProxyParam 剥离 URL 基础部分中已有的 dialerProxy 查询参数，防止链式或中继追加时产生重复参数
+func cleanDialerProxyParam(rawURL string) string {
+	if !strings.Contains(rawURL, "dialerProxy") {
+		return rawURL
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := u.Query()
+	if q.Has("dialerProxy") {
+		q.Del("dialerProxy")
+		u.RawQuery = q.Encode()
+	}
+	return u.String()
+}
+
 // HealPortBlocked 处理端口被墙换端口自愈逻辑 (生成候选端口，另存 healed_url，不单方面直接覆盖原 URL)
 func (h *Healer) HealPortBlocked(ctx context.Context, res *model.NodeProbeResult) (string, error) {
 	if res.Diagnostic == nil || res.Diagnostic.FaultType != model.FaultPortBlocked || res.NodeType == "residential" || strings.Contains(res.Name, "家宽") {
@@ -102,6 +119,7 @@ func (h *Healer) HealIPBlocked(res *model.NodeProbeResult, healthyRelays []*mode
 		base = origURL[:hashIdx]
 		nameTag = origURL[hashIdx+1:]
 	}
+	base = cleanDialerProxyParam(base)
 
 	separator := "?"
 	if strings.Contains(base, "?") {
@@ -170,6 +188,7 @@ func (h *Healer) BuildSmartChains(transitNodes []*model.NodeProbeResult, resiNod
 			base = origURL[:hashIdx]
 			resiLabel = origURL[hashIdx+1:]
 		}
+		base = cleanDialerProxyParam(base)
 
 		separator := "?"
 		if strings.Contains(base, "?") {
@@ -225,6 +244,7 @@ func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResu
 			base = origURL[:hashIdx]
 			resiLabel = origURL[hashIdx+1:]
 		}
+		base = cleanDialerProxyParam(base)
 
 		separator := "?"
 		if strings.Contains(base, "?") {

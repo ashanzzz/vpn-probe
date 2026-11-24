@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -129,7 +130,7 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		token = cfg.ShareToken
 	}
 
-	scriptSet := make(map[string]bool)
+	scriptURLMap := make(map[string]string)
 
 	for _, item := range filesResp.Data {
 		name, _ := item["name"].(string)
@@ -159,8 +160,10 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 
 				var scriptURL string
 				var argsMap map[string]string
+				var mode string
 				if args, ok := pMap["args"].(map[string]any); ok {
 					scriptURL, _ = args["content"].(string)
+					mode, _ = args["mode"].(string)
 					if am, ok := args["arguments"].(map[string]any); ok {
 						argsMap = make(map[string]string)
 						for k, v := range am {
@@ -170,8 +173,32 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 				}
 
 				if scriptURL != "" {
-					scriptFile := extractScriptFileName(scriptURL)
-					version := extractScriptVersion(scriptURL)
+					isInlineCode := mode == "code" || strings.Contains(scriptURL, "\n") || strings.Contains(scriptURL, ";") || (!strings.HasPrefix(scriptURL, "http://") && !strings.HasPrefix(scriptURL, "https://") && !strings.HasSuffix(scriptURL, ".js"))
+					var scriptFile, version string
+					if isInlineCode {
+						scriptFile = customName
+						if scriptFile == "" {
+							scriptFile = id
+						}
+						if scriptFile == "" {
+							scriptFile = "inline_script.js"
+						}
+						if _, exists := manifest.Scripts[scriptFile]; !exists {
+							manifest.Scripts[scriptFile] = ScriptFileInfo{
+								Name:        scriptFile,
+								URL:         "inline",
+								Description: fmt.Sprintf("内联 JavaScript 算子 (%s)", scriptFile),
+								Size:        len(scriptURL),
+								Content:     scriptURL,
+								UpdatedAt:   time.Now().Format("2006-01-02 15:04:05"),
+							}
+							manifest.ScriptList = append(manifest.ScriptList, scriptFile)
+						}
+					} else {
+						scriptFile = extractScriptFileName(scriptURL)
+						version = extractScriptVersion(scriptURL)
+						scriptURLMap[scriptFile] = scriptURL
+					}
 					ops = append(ops, ScriptOperatorInfo{
 						ID:         id,
 						CustomName: customName,
@@ -181,7 +208,6 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 						Disabled:   disabled,
 						Arguments:  argsMap,
 					})
-					scriptSet[scriptFile] = true
 				}
 			}
 		}
@@ -230,7 +256,7 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 	}
 
 	var validScriptNames []string
-	for sName := range scriptSet {
+	for sName := range scriptURLMap {
 		if sName != "" {
 			validScriptNames = append(validScriptNames, sName)
 		}
@@ -238,12 +264,13 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 
 	resChan := make(chan scriptRes, len(validScriptNames))
 	for _, sName := range validScriptNames {
-		go func(name string) {
+		targetURL := scriptURLMap[sName]
+		go func(name, fullURL string) {
 			sCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
-			content, err := c.GetScriptContent(sCtx, name)
+			content, err := c.GetScriptContent(sCtx, fullURL)
 			resChan <- scriptRes{name: name, content: content, err: err}
-		}(sName)
+		}(sName, targetURL)
 	}
 
 	for range validScriptNames {
@@ -266,15 +293,27 @@ func (c *Client) GetManifest(ctx context.Context) (*SubStoreManifest, error) {
 		}
 		manifest.ScriptList = append(manifest.ScriptList, res.name)
 	}
+	sort.Strings(manifest.ScriptList)
 	manifest.TotalScripts = len(manifest.ScriptList)
 
 	return manifest, nil
 }
 
 // GetScriptContent 读取指定脚本的源代码
-func (c *Client) GetScriptContent(ctx context.Context, scriptName string) (string, error) {
-	scriptURL := fmt.Sprintf("https://free.1992004.xyz/%s", url.PathEscape(scriptName))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, scriptURL, nil)
+func (c *Client) GetScriptContent(ctx context.Context, scriptNameOrURL string) (string, error) {
+	var targetURL string
+	if strings.HasPrefix(scriptNameOrURL, "http://") || strings.HasPrefix(scriptNameOrURL, "https://") {
+		targetURL = scriptNameOrURL
+	} else {
+		baseURL := "https://free.1992004.xyz"
+		if cfg := c.GetConfig(); cfg != nil && cfg.URL != "" {
+			if u, err := url.Parse(cfg.URL); err == nil && u.Host != "" {
+				baseURL = fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+			}
+		}
+		targetURL = fmt.Sprintf("%s/%s", baseURL, url.PathEscape(scriptNameOrURL))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -286,7 +325,7 @@ func (c *Client) GetScriptContent(ctx context.Context, scriptName string) (strin
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("http %d fetching %s", resp.StatusCode, scriptURL)
+		return "", fmt.Errorf("http %d fetching %s", resp.StatusCode, targetURL)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -455,13 +494,20 @@ func (c *Client) bustScriptCacheInFiles(ctx context.Context, scriptName, newVer 
 }
 
 func extractScriptFileName(rawURL string) string {
+	if strings.Contains(rawURL, "\n") || strings.Contains(rawURL, "{") || strings.Contains(rawURL, ";") {
+		return "inline_script.js"
+	}
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		parts := strings.Split(rawURL, "/")
 		last := parts[len(parts)-1]
 		return strings.Split(strings.Split(last, "?")[0], "#")[0]
 	}
-	return path.Base(u.Path)
+	base := path.Base(u.Path)
+	if base == "" || base == "." || base == "/" {
+		return "script.js"
+	}
+	return base
 }
 
 func extractScriptVersion(rawURL string) string {

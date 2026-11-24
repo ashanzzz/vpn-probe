@@ -203,11 +203,11 @@ func (m *SandboxManager) Launch(ctx context.Context, outbound map[string]any) (*
 		Cancel:     cancel,
 	}
 
-	// 轮询等待入站端口处于监听状态（最多等待 3 秒）
-	if err := waitForPort(cmd, logBuf, port, 3*time.Second); err != nil {
+	// 轮询等待入站端口处于监听状态（最高等待 6 秒，端口就绪即刻返回，兼容高并发调度）
+	if err := waitForPort(ctx, cmd, logBuf, port, 6*time.Second); err != nil {
 		outMsg := strings.TrimSpace(logBuf.String())
 		inst.Close(m)
-		if outMsg != "" {
+		if outMsg != "" && !strings.Contains(err.Error(), "sing-box:") {
 			return nil, fmt.Errorf("wait for proxy port %d ready [sing-box: %s]: %w", port, outMsg, err)
 		}
 		return nil, fmt.Errorf("wait for proxy port %d ready: %w", port, err)
@@ -265,10 +265,34 @@ func (m *SandboxManager) releasePort(port int) {
 	delete(m.usedPorts, port)
 }
 
-func waitForPort(cmd *exec.Cmd, logBuf *TailBuffer, port int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
+func waitForPort(ctx context.Context, cmd *exec.Cmd, logBuf *TailBuffer, port int, maxWait time.Duration) error {
+	if maxWait <= 0 {
+		maxWait = 6 * time.Second
+	}
+	deadline := time.Now().Add(maxWait)
+	if ctx != nil {
+		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+			deadline = d
+		}
+	}
+
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	for time.Now().Before(deadline) {
+	ticker := time.NewTicker(80 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if ctx != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+		}
+
+		if time.Now().After(deadline) {
+			break
+		}
+
 		if cmd != nil && cmd.Process != nil && cmd.Process.Pid > 0 {
 			if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
 				outMsg := ""
@@ -281,12 +305,30 @@ func waitForPort(cmd *exec.Cmd, logBuf *TailBuffer, port int, timeout time.Durat
 				return fmt.Errorf("sing-box process exited prematurely: %w", err)
 			}
 		}
-		conn, err := net.DialTimeout("tcp", addr, 150*time.Millisecond)
+
+		conn, err := net.DialTimeout("tcp", addr, 120*time.Millisecond)
 		if err == nil {
 			conn.Close()
 			return nil
 		}
-		time.Sleep(100 * time.Millisecond)
+
+		if ctx != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
+		} else {
+			time.Sleep(80 * time.Millisecond)
+		}
+	}
+
+	outMsg := ""
+	if logBuf != nil {
+		outMsg = strings.TrimSpace(logBuf.RecentLines(3))
+	}
+	if outMsg != "" {
+		return fmt.Errorf("timeout waiting for %s [sing-box: %s]", addr, outMsg)
 	}
 	return fmt.Errorf("timeout waiting for %s", addr)
 }

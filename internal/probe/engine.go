@@ -319,6 +319,12 @@ func (e *Engine) ProbeBatch(ctx context.Context, req *model.BatchProbeRequest) *
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			// 微秒级轻度错峰（0~60ms），规避数十个临时进程在同一毫秒内并发 fork/exec 导致的系统 CPU 调度颠簸与 I/O 争抢
+			if idx > 0 {
+				stagger := time.Duration((idx % 4) * 20) * time.Millisecond
+				time.Sleep(stagger)
+			}
+
 			res := e.ProbeOne(ctx, targetLink, req.IsSelf, req.CheckDetailedSplit, req.TimeoutSeconds)
 
 			mu.Lock()

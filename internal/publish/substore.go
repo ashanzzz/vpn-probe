@@ -141,7 +141,7 @@ func (p Publisher) ApplyDifferentiated(
 		if len(templateProcess) > 0 {
 			newBiz["process"] = templateProcess
 		}
-		if err := p.Client.UpdateFile(ctx, "business", patchFile(newBiz, scriptBusiness)); err == nil {
+		if err := p.Client.UpdateFile(ctx, "business", newBiz); err == nil {
 			selected = append(selected, newBiz)
 		}
 	}

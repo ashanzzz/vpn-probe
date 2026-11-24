@@ -253,6 +253,7 @@ func (s *APIServer) handlePolicyGroupPreview(c *fiber.Ctx) error {
 	}
 	atoms := s.orchestrator.CollectAtoms()
 	isQ := strings.EqualFold(profile, "q")
+	isBusiness := strings.EqualFold(profile, "business")
 	filter := def.Filter
 	if isQ {
 		filter.IncludeResidential = false
@@ -272,6 +273,14 @@ func (s *APIServer) handlePolicyGroupPreview(c *fiber.Ctx) error {
 		clean := make([]model.AtomNode, 0, len(matched))
 		for _, a := range matched {
 			if a.Kind == "transit" && !strings.Contains(a.Name, "家宽") && !strings.Contains(strings.ToLower(a.Name), "resi") {
+				clean = append(clean, a)
+			}
+		}
+		matched = clean
+	} else if isBusiness {
+		clean := make([]model.AtomNode, 0, len(matched))
+		for _, a := range matched {
+			if a.Kind != "airport" && !strings.Contains(a.Name, "蜂窝云") {
 				clean = append(clean, a)
 			}
 		}

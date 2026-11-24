@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,6 +282,100 @@ rule-providers:
 		}
 		if respAlias.StatusCode != http.StatusOK {
 			t.Errorf("expected 200 for alias %s, got %d", aliasPath, respAlias.StatusCode)
+		}
+	}
+}
+
+func TestSubscriptionInspectEndpoint_BusinessProfile(t *testing.T) {
+	tmpDir := t.TempDir()
+	mockYAML := `
+proxies:
+  - name: "美西 ACCK 洛杉矶 4837 — VLESS Reality"
+    type: vless
+    server: 38.175.222.44
+    port: 36564
+  - name: "LZ-US-Pavlov-家宽"
+    type: socks5
+    server: 167.104.167.151
+    port: 49040
+  - name: "LZ-JP-KDDI-家宽"
+    type: socks5
+    server: 167.104.167.151
+    port: 20640
+
+proxy-groups:
+  - name: "选择代理"
+    type: select
+    proxies: ["自建-线路机", "自建-美国家宽", "自建-日本家宽", "自建-不送中"]
+  - name: "自建-线路机"
+    type: select
+    proxies: ["美西 ACCK 洛杉矶 4837 — VLESS Reality"]
+  - name: "自建-美国家宽"
+    type: select
+    proxies: ["LZ-US-Pavlov-家宽"]
+  - name: "自建-日本家宽"
+    type: select
+    proxies: ["LZ-JP-KDDI-家宽"]
+  - name: "自建-不送中"
+    type: url-test
+    proxies: ["美西 ACCK 洛杉矶 4837 — VLESS Reality", "LZ-US-Pavlov-家宽", "LZ-JP-KDDI-家宽"]
+
+rules:
+  - MATCH,选择代理
+`
+
+	snapDir := filepath.Join(tmpDir, "snapshots")
+	_ = os.MkdirAll(snapDir, 0755)
+	_ = os.WriteFile(filepath.Join(snapDir, "business.yaml"), []byte(mockYAML), 0644)
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "test-auth-token",
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     "http://127.0.0.1:3001",
+		},
+	}
+	sc := substore.NewClient(&cfg.SubStore)
+	sch := monitor.NewScheduler(cfg, nil, nil, sc)
+	server := NewAPIServer(cfg, nil, nil, sc, nil, sch, nil)
+	server.snapshotMgr = substore.NewSnapshotManager(sc, snapDir)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions/business/inspect", nil)
+	req.Header.Set("Authorization", "Bearer test-auth-token")
+	resp, err := server.app.Test(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var out SubscriptionInspectResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+
+	if out.Subscription != "business" {
+		t.Errorf("expected subscription 'business', got %s", out.Subscription)
+	}
+	if out.TotalProxies != 3 {
+		t.Errorf("expected 3 proxies, got %d", out.TotalProxies)
+	}
+	if out.TotalGroups != 5 {
+		t.Errorf("expected 5 groups, got %d", out.TotalGroups)
+	}
+
+	// Verify that self-hosted groups in business profile are classified correctly
+	for _, g := range out.Groups {
+		if strings.HasPrefix(g.Name, "自建-") {
+			if g.IsExternal {
+				t.Errorf("expected %s to have IsExternal=false", g.Name)
+			}
+			if g.Category == "external_default" {
+				t.Errorf("expected %s to have self_ category, got %s", g.Name, g.Category)
+			}
 		}
 	}
 }

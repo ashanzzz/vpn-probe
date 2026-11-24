@@ -219,14 +219,15 @@ function processConfig(vpnCfg) {
     const members = [];
     for (const rawName of spec.proxies) {
       const resolved = resolveProxyName(rawName, vpnNames);
-      if (resolved && !members.includes(resolved)) {
+      if (resolved && resolved !== spec.name && !members.includes(resolved)) {
         members.push(resolved);
       }
     }
     const group = {
       name: spec.name,
       type: spec.type,
-      proxies: members.length ? members : ['DIRECT']
+      proxies: members.length ? members : ['DIRECT'],
+      _order: typeof spec.order === 'number' ? spec.order : 999
     };
     if (spec.type === 'url-test' || spec.type === 'fallback' || spec.type === 'load-balance') {
       group.url = 'http://www.gstatic.com/generate_204';
@@ -260,20 +261,6 @@ function processConfig(vpnCfg) {
     }
   }
 
-  // Inject clean user groups into application groups if present
-  const appGroupCleanInject = {
-    'AI服务': ['自建-美国线路', '自建-美国和美国家宽', '自建-家宽分组', '自建-线路机'],
-    'YouTube': ['自建-不送中', '不送中', '自建-线路机'],
-    'Youtube': ['自建-不送中', '不送中', '自建-线路机'],
-    '谷歌服务': ['自建-不送中', '不送中', '自建-线路机'],
-    'TikTok': ['自建-美国线路', '自建-日本线路', '自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组', '自建-线路机'],
-    'Netflix': ['自建-美国线路', '自建-日本线路', '自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组', '自建-线路机'],
-    '巴哈姆特': ['自建-台湾家宽分组', '自建-线路机'],
-    'Spotify': ['自建-美国线路', '自建-日本线路', '自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组', '自建-线路机'],
-    'Telegram': ['自建-不送中', '不送中', '自建-线路机'],
-    'Twitter': ['自建-不送中', '不送中', '自建-线路机']
-  };
-
   const nonAppGroupNames = new Set([
     '选择代理', '手动选择', '自动选择', '故障转移', '负载均衡',
     '广告拦截', '搜狗输入法', 'DIRECT', 'REJECT', 'REJECT-DROP',
@@ -281,46 +268,109 @@ function processConfig(vpnCfg) {
     '前置代理', '落地节点', '低倍率节点'
   ]);
 
-  const entryGroupEarly = vpnGroups.find(g => g.name === '选择代理');
-  const entryMembers = new Set(entryGroupEarly && Array.isArray(entryGroupEarly.proxies) ? entryGroupEarly.proxies : []);
+  // Extract active self-hosted groups in current subscription (ordered by spec.order)
+  const activeSelfGroups = vpnGroups.filter(g => isSelfName(g.name));
+  activeSelfGroups.sort((a, b) => (a._order || 999) - (b._order || 999));
+  const activeSelfNames = activeSelfGroups.map(g => g.name);
 
+  // Clean proxy groups:
+  // 1. Region node pools (ends with 节点 / 池) MUST ONLY contain genuine external/pure nodes (strictly purge self groups & other policy groups).
+  // 2. External app groups (TikTok, YouTube, AI服务, Spotify, Netflix, etc.):
+  //    Unified layout: ['自动选择', '选择代理', '故障转移', ...external node pools & DIRECT, ...activeSelfNames (trailing additions only if present)]
+  // 3. Self groups MUST NOT contain self reference (anti-nesting).
   for (const g of vpnGroups) {
     if (!g || !Array.isArray(g.proxies)) continue;
-    if (isSelfName(g.name) || nonAppGroupNames.has(g.name) || entryMembers.has(g.name)) continue;
 
-    const isSpecialPool = g.name.endsWith('节点') || g.name.endsWith('分组') || g.type === 'url-test' || g.type === 'fallback' || g.type === 'load-balance';
-    if (!isSpecialPool) {
-      // 业务策略组：所有策略组的首选默认必须是「选择代理」
-      const rest = g.proxies.filter(n => n !== '选择代理');
-      const gNameLower = (g.name || '').toLowerCase();
-      const matchKey = Object.keys(appGroupCleanInject).find(k => k.toLowerCase() === gNameLower);
-      const customInject = matchKey ? appGroupCleanInject[matchKey].filter(n => existingGroupNames.has(n)) : [];
-      const finalProxies = ['选择代理'];
-      for (const c of customInject) {
-        if (!finalProxies.includes(c)) finalProxies.push(c);
+    // Anti-nesting: no group should ever contain itself
+    g.proxies = g.proxies.filter(p => p !== g.name);
+
+    if (isSelfName(g.name)) {
+      // Self groups: only keep valid nodes or allowed group references
+      continue;
+    }
+
+    const isNodePool = g.name.endsWith('节点') || g.name.endsWith('池');
+    if (isNodePool) {
+      // Region node pool: strictly purge any self group or nested group names
+      g.proxies = g.proxies.filter(p => !isSelfName(p) && (!existingGroupNames.has(p) || p === 'DIRECT' || p === 'REJECT'));
+    } else if (g.name !== '选择代理' && g.name !== '手动选择') {
+      const isSpecialPool = g.name.endsWith('分组') || g.type === 'url-test' || g.type === 'fallback' || g.type === 'load-balance' || nonAppGroupNames.has(g.name);
+      if (!isSpecialPool) {
+        // External application policy group (TikTok, Spotify, AI服务, etc.)
+        const externalMembers = g.proxies.filter(p => !isSelfName(p) && p !== '自动选择' && p !== '选择代理' && p !== '故障转移');
+        const prefix = [];
+        if (existingGroupNames.has('自动选择')) prefix.push('自动选择');
+        if (existingGroupNames.has('选择代理')) prefix.push('选择代理');
+        if (existingGroupNames.has('故障转移')) prefix.push('故障转移');
+
+        const finalProxies = [...prefix];
+        for (const m of externalMembers) {
+          if (!finalProxies.includes(m)) finalProxies.push(m);
+        }
+        // Self groups placed strictly at the tail as optional additions (only if present)
+        for (const sa of activeSelfNames) {
+          if (sa !== g.name && !finalProxies.includes(sa)) {
+            finalProxies.push(sa);
+          }
+        }
+        g.proxies = finalProxies;
       }
-      for (const r of rest) {
-        if (!finalProxies.includes(r)) finalProxies.push(r);
-      }
-      g.proxies = finalProxies;
+    }
+
+    if (g.proxies.length === 0) {
+      g.proxies = ['DIRECT'];
     }
   }
 
-  // Reorder: place all self-hosted groups strictly at the end
-  const nonSelfGroups = vpnGroups.filter(g => !isSelfName(g.name));
-  const selfGroups = vpnGroups.filter(g => isSelfName(g.name));
-  vpnGroups.length = 0;
-  vpnGroups.push(...nonSelfGroups, ...selfGroups);
-
+  // Configure 选择代理: external connections first with 自动选择 leading, self-built optional additions strictly trailing
   const vpnEntry = vpnGroups.find(g => g.name === '选择代理');
   if (vpnEntry) {
     const allowedAdditions = new Set(vpnUserGroups.filter(g => g.add_to_entry).map(g => g.name));
-    const current = Array.isArray(vpnEntry.proxies) ? vpnEntry.proxies.filter(n => (!isSelfName(n) && !vpnDefined.has(n)) || allowedAdditions.has(n)) : [];
-    const additions = vpnUserGroups.filter(g => g.add_to_entry).map(g => g.name);
-    const next = [...new Set(current.concat(additions))];
-    vpnEntry.proxies = next.includes('自动选择') ? ['自动选择', ...next.filter(n => n !== '自动选择')] : next;
+    const externalProxies = Array.isArray(vpnEntry.proxies) ? vpnEntry.proxies.filter(n => (!isSelfName(n) && !vpnDefined.has(n)) && n !== '自动选择') : [];
+    const selfAdditions = vpnUserGroups.filter(g => g.add_to_entry).map(g => g.name);
+    
+    const finalEntryProxies = [];
+    if (existingGroupNames.has('自动选择')) {
+      finalEntryProxies.push('自动选择');
+    }
+    for (const ep of externalProxies) {
+      if (!finalEntryProxies.includes(ep)) finalEntryProxies.push(ep);
+    }
+    for (const sa of selfAdditions) {
+      if (!finalEntryProxies.includes(sa)) finalEntryProxies.push(sa);
+    }
+    vpnEntry.proxies = finalEntryProxies;
     if (!Array.isArray(vpnEntry.proxies) || vpnEntry.proxies.length === 0) {
       vpnEntry.proxies = ['DIRECT'];
+    }
+  }
+
+  // Deterministic Global Group Ordering:
+  // 1. Topmost headers: 选择代理, 自动选择 (strictly at the very beginning)
+  // 2. Control groups: 手动选择, 故障转移, 负载均衡
+  // 3. Middle groups: External application groups, region node pools, system groups
+  // 4. Bottom trailing: ALL self groups (isSelfName) strictly at the very end sorted by order
+  const topNames = ['选择代理', '自动选择', '手动选择', '故障转移', '负载均衡'];
+  const topGroups = [];
+  for (const name of topNames) {
+    const found = vpnGroups.find(g => g.name === name);
+    if (found) topGroups.push(found);
+  }
+  const topSet = new Set(topGroups.map(g => g.name));
+
+  const selfGroups = vpnGroups.filter(g => isSelfName(g.name));
+  selfGroups.sort((a, b) => (a._order || 999) - (b._order || 999));
+  const selfSet = new Set(selfGroups.map(g => g.name));
+
+  const middleGroups = vpnGroups.filter(g => !topSet.has(g.name) && !selfSet.has(g.name));
+
+  vpnGroups.length = 0;
+  vpnGroups.push(...topGroups, ...middleGroups, ...selfGroups);
+
+  for (const g of vpnGroups) {
+    delete g._order;
+    if (!Array.isArray(g.proxies) || g.proxies.length === 0) {
+      g.proxies = ['DIRECT'];
     }
   }
 

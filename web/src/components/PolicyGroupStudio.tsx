@@ -95,7 +95,7 @@ export const PolicyGroupStudio: React.FC = () => {
   return <section className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4">
     <div className="flex flex-wrap justify-between items-center gap-3">
       <div><h3 className="text-sm font-bold text-slate-900">用户自定义策略组（所见即所得）</h3>
-        <p className="text-xs text-slate-500 mt-1">不自动创建任何自建策略组；只有你保存且启用的组会进入 Q / ashan 的最终 Clash YAML。</p></div>
+        <p className="text-xs text-slate-500 mt-1">系统已默认内置 8 大核心自建基准组（线路机/美宽/日宽/全量家宽/送中隔离等）；此处用于自由创建更多个性化扩展组（如特定国别、业务标签或测速优选），保存启用后自动并入 Clash YAML。</p></div>
       <div className="flex gap-2">
         <button onClick={load} className="text-xs border rounded-lg px-3 py-2" title="刷新"><RefreshCw size={14}/></button>
         <button onClick={() => edit()} className="text-xs font-semibold bg-emerald-600 text-white rounded-lg px-3 py-2 flex items-center gap-1"><Plus size={14}/>新建策略组</button>

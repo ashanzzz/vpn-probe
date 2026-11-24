@@ -26,14 +26,14 @@ import {
 import { api } from '../api/client';
 import type { CustomGroupDef, GroupFilter, AtomNode, PublishJob } from '../types';
 
-const blank = (): CustomGroupDef => ({
+const blank = (isQ = false): CustomGroupDef => ({
   name: '', 
   display_name: '', 
   enabled: true, 
   type: 'url-test', 
   order: 100,
   add_to_entry: true, 
-  filter: { mode: 'filter', countries: [], kinds: ['transit', 'residential', 'chain'], clean_only: true },
+  filter: { mode: 'filter', countries: [], kinds: isQ ? ['transit'] : ['transit', 'residential', 'chain'], clean_only: true },
 });
 
 const options = ['US', 'JP', 'TW', 'HK', 'SG', 'KR', 'UK', 'DE', 'OTHER'];
@@ -45,7 +45,7 @@ const inputClass = 'w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text
 const split = (s: string) => s.split(',').map(x => x.trim()).filter(Boolean);
 const asText = (s?: string[]) => (s || []).join(', ');
 
-// 8 大内置核心基准组的标准名称清单
+// 内置核心基准组的标准名称清单 (包含 ashan 8 大组与 Q 纯骨干组)
 const BASELINE_GROUP_NAMES = new Set([
   '自建-线路机',
   '自建-美国和美国家宽',
@@ -56,6 +56,8 @@ const BASELINE_GROUP_NAMES = new Set([
   '自建-不送中',
   '不送中',
   '自建-送中',
+  '自建-美国线路',
+  '自建-日本线路',
 ]);
 
 // 外部应用策略组联动注入关系字典
@@ -125,10 +127,10 @@ export const PolicyGroupStudio: React.FC = () => {
   const [metadataType, setMetadataType] = useState('');
   const [metadataTags, setMetadataTags] = useState('');
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (prof: 'ashan' | 'q' = viewPerspective) => {
     try {
       const [g, a, j, m] = await Promise.all([
-        api.getCustomGroups(),
+        api.getPolicyGroups(prof),
         api.getAtoms({}).catch(() => ({ atoms: [], count: 0, status: '' })),
         api.latestPublishJob().catch(() => null),
         api.getSubStoreManifest().catch(() => null),
@@ -141,9 +143,25 @@ export const PolicyGroupStudio: React.FC = () => {
     } catch (e: any) { 
       setError(e.message || '读取失败'); 
     }
-  }, []);
+  }, [viewPerspective]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(viewPerspective); }, [viewPerspective]);
+
+  // 分轨切换（ashan vs Q 物理隔离工作台）
+  const switchPerspective = async (next: 'ashan' | 'q') => {
+    if (next === viewPerspective) return;
+    if (isDirty) {
+      if (!window.confirm(`当前工作台（${viewPerspective.toUpperCase()}）有未保存的暂存更改，切换分轨会导致未保存的内容丢失，确定切换到 ${next.toUpperCase()} 分轨吗？`)) {
+        return;
+      }
+    }
+    setViewPerspective(next);
+    setForm(null);
+    setPreview(null);
+    setError('');
+    setNotice(null);
+    await load(next);
+  };
 
   // 轮询发布任务
   useEffect(() => {
@@ -164,39 +182,43 @@ export const PolicyGroupStudio: React.FC = () => {
   };
 
   const edit = (g?: CustomGroupDef) => { 
-    setForm(g ? JSON.parse(JSON.stringify(g)) : blank()); 
+    setForm(g ? JSON.parse(JSON.stringify(g)) : blank(viewPerspective === 'q')); 
     setPreview(null); 
     setError(''); 
   };
 
-  // 单个策略组提交
+  // 单个策略组提交 (归属于当前分轨)
   const submitSingle = async (g: CustomGroupDef) => {
     if (!g.name || !g.display_name) { setError('请填写英文 ID 和显示名称'); return; }
     setBusy(true); setError('');
     try {
       const existing = groups.some(x => x.name === g.name);
-      const res = existing ? await api.updatePolicyGroup(g.name, g) : await api.createPolicyGroup(g);
+      const res = existing 
+        ? await api.updatePolicyGroup(g.name, g, viewPerspective) 
+        : await api.createPolicyGroup(g, viewPerspective);
       setJob({ id: res.job_id, revision: res.revision, status: 'queued' });
-      setNotice({ type: 'success', text: `策略组「${g.display_name}」保存成功，任务 #${res.revision} 已排队同步！` });
-      setForm(null); setPreview(null); await load();
+      setNotice({ type: 'success', text: `「${viewPerspective.toUpperCase()} 轨」策略组「${g.display_name}」保存成功，任务 #${res.revision} 已排队同步！` });
+      setForm(null); setPreview(null); await load(viewPerspective);
     } catch (e: any) { setError(e.message || '保存失败'); }
     finally { setBusy(false); }
   };
 
-  // 一键恢复官方 8 大核心基准组 (url-test 默认自动测速优选)
+  // 一键恢复官方基准组 (ashan 为 8 大组，Q 为专属纯骨干组)
   const handleResetDefaults = async () => {
-    if (!window.confirm('确定将策略列表重置为官方 8 大核心基准组（默认自动测速 url-test）？\n重置后您可以在此基础上任意增删节点、修改策略类型或添加个性化扩展，满意后再点击「保存全量策略并同步」生效。')) {
+    const isQ = viewPerspective === 'q';
+    const trackLabel = isQ ? 'Q 极速轻量骨干轨专属基准组（天然 0 家宽纯骨干）' : 'ashan 全栈旗舰轨 8 大核心基准组（含全量家宽与骨干）';
+    if (!window.confirm(`确定将当前工作台（${viewPerspective.toUpperCase()}）的策略列表重置为官方 ${trackLabel}？\n重置仅作用于当前选中的 ${viewPerspective.toUpperCase()} 分轨，绝不影响另一轨！检查满意后点击「保存全量策略并同步」生效。`)) {
       return;
     }
     setBusy(true);
     setError('');
     try {
-      const res = await api.getPolicyGroupDefaults();
+      const res = await api.getPolicyGroupDefaults(viewPerspective);
       setGroups(res.groups || []);
       setIsDirty(true);
       setNotice({
         type: 'info',
-        text: '已将暂存列表重置为 8 大核心基准组（默认全部配置为 url-test 自动测速优选）。您可以自由编辑、增删任意组，检查无误后点击「保存全量策略并同步」生效。'
+        text: `已将「${viewPerspective.toUpperCase()} 轨」策略列表重置为专属基准模板。您可以自由编辑、增删任意组，检查无误后点击「保存全量策略并同步」生效。`
       });
     } catch (e: any) {
       setError(`获取基准模板失败: ${e.message}`);
@@ -205,22 +227,22 @@ export const PolicyGroupStudio: React.FC = () => {
     }
   };
 
-  // 批量保存并同步所有策略组
+  // 批量保存并同步所有策略组 (双轨联动同步)
   const handleSaveAll = async () => {
     if (groups.length === 0) {
-      if (!window.confirm('当前没有任何策略组，确认保存空策略？')) return;
+      if (!window.confirm(`当前「${viewPerspective.toUpperCase()} 轨」没有任何策略组，确认保存空策略？`)) return;
     }
     setBusy(true);
     setError('');
     try {
-      const res = await api.batchSavePolicyGroups(groups);
+      const res = await api.batchSavePolicyGroups(groups, viewPerspective);
       setJob({ id: res.job_id, revision: res.revision, status: 'queued' });
       setIsDirty(false);
       setNotice({
         type: 'success',
-        text: `全量策略组已保存！发布任务 #${res.revision} 已排队编译同步至 Sub-Store。`
+        text: `「${viewPerspective.toUpperCase()} 轨」全量策略组已保存！发布任务 #${res.revision} 已排队，正在双轨联动编译同步至 Sub-Store。`
       });
-      await load();
+      await load(viewPerspective);
     } catch (e: any) {
       setError(e.message || '全量保存失败');
     } finally {
@@ -229,7 +251,7 @@ export const PolicyGroupStudio: React.FC = () => {
   };
 
   const remove = async (g: CustomGroupDef) => {
-    if (!window.confirm(`确定删除“${g.display_name}”？`)) return;
+    if (!window.confirm(`确定仅从「${viewPerspective.toUpperCase()} 轨」中删除策略组“${g.display_name}”？\n此操作仅作用于当前分轨，绝对不会删除或影响另一轨！`)) return;
     if (isDirty) {
       // 暂存模式直接在本地列表移除
       setGroups(groups.filter(x => x.name !== g.name));
@@ -237,9 +259,13 @@ export const PolicyGroupStudio: React.FC = () => {
     }
     setBusy(true); setError('');
     try {
-      const res = await api.removePolicyGroup(g.name);
+      const res = await api.removePolicyGroup(g.name, viewPerspective);
       setJob({ id: res.job_id, revision: res.revision, status: 'queued' });
-      await load();
+      setNotice({
+        type: 'info',
+        text: `已从「${viewPerspective.toUpperCase()} 轨」删除策略组“${g.display_name}”，发布任务 #${res.revision} 已排队同步！`
+      });
+      await load(viewPerspective);
     } catch (e: any) { setError(e.message || '删除失败'); }
     finally { setBusy(false); }
   };
@@ -247,7 +273,7 @@ export const PolicyGroupStudio: React.FC = () => {
   const doPreview = async () => {
     if (!form) return;
     setBusy(true); setError('');
-    try { setPreview(await api.previewPolicyGroup(form)); }
+    try { setPreview(await api.previewPolicyGroup(form, viewPerspective)); }
     catch (e: any) { setError(e.message || '预览失败'); }
     finally { setBusy(false); }
   };
@@ -344,25 +370,25 @@ export const PolicyGroupStudio: React.FC = () => {
           )}
 
           <button
-            onClick={load}
+            onClick={() => load(viewPerspective)}
             disabled={busy}
             className="text-xs border border-slate-200 rounded-lg p-2 text-slate-600 hover:bg-slate-50 transition"
-            title="重新从后端拉取"
+            title="重新从后端拉取当前分轨策略"
           >
             <RefreshCw size={14} className={busy ? 'animate-spin' : ''} />
           </button>
         </div>
       </div>
 
-      {/* 2. Target Perspective Switcher Pill (Q vs ashan) */}
+      {/* 2. Target Perspective Switcher Pill (Q vs ashan 独立工作台) */}
       <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
         <div className="flex items-center space-x-2">
           <span className="text-2xs font-semibold uppercase tracking-wider text-slate-400">
-            双轨呈现视角 (Preview Perspective):
+            工作台独立分轨 (Independent Workspace):
           </span>
           <div className="flex bg-white p-0.5 rounded-lg border border-slate-200 text-xs font-medium">
             <button
-              onClick={() => setViewPerspective('ashan')}
+              onClick={() => switchPerspective('ashan')}
               className={`px-3 py-1 rounded-md transition flex items-center space-x-1.5 ${
                 viewPerspective === 'ashan'
                   ? 'bg-purple-600 text-white font-bold shadow-2xs'
@@ -373,7 +399,7 @@ export const PolicyGroupStudio: React.FC = () => {
               <span className="text-2xs opacity-80 font-mono">(全量家宽+骨干)</span>
             </button>
             <button
-              onClick={() => setViewPerspective('q')}
+              onClick={() => switchPerspective('q')}
               className={`px-3 py-1 rounded-md transition flex items-center space-x-1.5 ${
                 viewPerspective === 'q'
                   ? 'bg-blue-600 text-white font-bold shadow-2xs'

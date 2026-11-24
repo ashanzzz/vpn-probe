@@ -2208,19 +2208,22 @@ func (s *APIServer) handleEvaluateGroup(c *fiber.Ctx) error {
 
 // handleGetCustomGroups 获取所有动态自定义分组定义
 func (s *APIServer) handleGetCustomGroups(c *fiber.Ctx) error {
-	groups, err := monitor.LoadCustomGroups()
+	profile := c.Query("profile", "ashan")
+	groups, err := monitor.LoadCustomGroups(profile)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
 	return c.JSON(fiber.Map{
-		"status": "ok",
-		"count":  len(groups),
-		"groups": groups,
+		"status":  "ok",
+		"profile": profile,
+		"count":   len(groups),
+		"groups":  groups,
 	})
 }
 
 // handleSaveCustomGroup 创建或更新自定义分组定义
 func (s *APIServer) handleSaveCustomGroup(c *fiber.Ctx) error {
+	profile := c.Query("profile", "ashan")
 	var def model.CustomGroupDef
 	if err := c.BodyParser(&def); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -2236,7 +2239,7 @@ func (s *APIServer) handleSaveCustomGroup(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("invalid custom_match_regex: %v", err)})
 		}
 	}
-	if err := monitor.SaveCustomGroup(def); err != nil {
+	if err := monitor.SaveCustomGroup(def, profile); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
 
@@ -2250,6 +2253,7 @@ func (s *APIServer) handleSaveCustomGroup(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"status":  "ok",
+		"profile": profile,
 		"message": "custom group saved successfully",
 		"group":   def,
 	})
@@ -2257,11 +2261,12 @@ func (s *APIServer) handleSaveCustomGroup(c *fiber.Ctx) error {
 
 // handleDeleteCustomGroup 删除自定义分组
 func (s *APIServer) handleDeleteCustomGroup(c *fiber.Ctx) error {
+	profile := c.Query("profile", "ashan")
 	name := c.Params("name")
 	if name == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "name parameter is required"})
 	}
-	if err := monitor.DeleteCustomGroup(name); err != nil {
+	if err := monitor.DeleteCustomGroup(name, profile); err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
 	}
 
@@ -2272,6 +2277,7 @@ func (s *APIServer) handleDeleteCustomGroup(c *fiber.Ctx) error {
 
 	return c.JSON(fiber.Map{
 		"status":  "ok",
+		"profile": profile,
 		"deleted": name,
 		"purge":   purge,
 	})

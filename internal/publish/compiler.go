@@ -203,7 +203,12 @@ function processConfig(vpnCfg) {
     vpnDefined.add('不送中');
   }
 
-  let vpnGroups = vpnExisting.filter(g => g && !vpnDefined.has(g.name));
+  let vpnGroups = vpnExisting.filter(g => {
+    if (!g) return false;
+    if (vpnDefined.has(g.name)) return false;
+    if (isSelfName(g.name)) return false;
+    return true;
+  });
   for (const g of vpnGroups) {
     if (Array.isArray(g.proxies) && g.proxies.length === 0) {
       g.proxies = ['DIRECT'];
@@ -246,16 +251,25 @@ function processConfig(vpnCfg) {
     }
   }
 
+  const existingGroupNames = new Set(vpnGroups.map(g => g.name));
+
+  // Purge dead self group references that do not exist in this subscription (e.g. residential groups in Q)
+  for (const g of vpnGroups) {
+    if (Array.isArray(g.proxies)) {
+      g.proxies = g.proxies.filter(p => !isSelfName(p) || existingGroupNames.has(p));
+    }
+  }
+
   // Inject clean user groups into application groups if present
   const appGroupCleanInject = {
-    'AI服务': ['自建-美国和美国家宽', '自建-家宽分组', '自建-线路机'],
+    'AI服务': ['自建-美国线路', '自建-美国和美国家宽', '自建-家宽分组', '自建-线路机'],
     'YouTube': ['自建-不送中', '不送中', '自建-线路机'],
     'Youtube': ['自建-不送中', '不送中', '自建-线路机'],
     '谷歌服务': ['自建-不送中', '不送中', '自建-线路机'],
-    'TikTok': ['自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组'],
-    'Netflix': ['自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组'],
-    '巴哈姆特': ['自建-台湾家宽分组'],
-    'Spotify': ['自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组'],
+    'TikTok': ['自建-美国线路', '自建-日本线路', '自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组', '自建-线路机'],
+    'Netflix': ['自建-美国线路', '自建-日本线路', '自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组', '自建-线路机'],
+    '巴哈姆特': ['自建-台湾家宽分组', '自建-线路机'],
+    'Spotify': ['自建-美国线路', '自建-日本线路', '自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组', '自建-线路机'],
     'Telegram': ['自建-不送中', '不送中', '自建-线路机'],
     'Twitter': ['自建-不送中', '不送中', '自建-线路机']
   };
@@ -264,7 +278,6 @@ function processConfig(vpnCfg) {
     '选择代理', '手动选择', '自动选择', '故障转移', '负载均衡',
     '广告拦截', '搜狗输入法', 'DIRECT', 'REJECT', 'REJECT-DROP'
   ]);
-  const existingGroupNames = new Set(vpnGroups.map(g => g.name));
 
   for (const g of vpnGroups) {
     if (!g || !Array.isArray(g.proxies)) continue;
@@ -297,7 +310,7 @@ function processConfig(vpnCfg) {
   const vpnEntry = vpnGroups.find(g => g.name === '选择代理');
   if (vpnEntry) {
     const allowedAdditions = new Set(vpnUserGroups.filter(g => g.add_to_entry).map(g => g.name));
-    const current = Array.isArray(vpnEntry.proxies) ? vpnEntry.proxies.filter(n => !vpnDefined.has(n) || allowedAdditions.has(n)) : [];
+    const current = Array.isArray(vpnEntry.proxies) ? vpnEntry.proxies.filter(n => (!isSelfName(n) && !vpnDefined.has(n)) || allowedAdditions.has(n)) : [];
     const additions = vpnUserGroups.filter(g => g.add_to_entry).map(g => g.name);
     const next = [...new Set(current.concat(additions))];
     vpnEntry.proxies = next.includes('自动选择') ? ['自动选择', ...next.filter(n => n !== '自动选择')] : next;

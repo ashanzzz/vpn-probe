@@ -32,30 +32,48 @@ func (s *APIServer) applyPolicyGroups(ctx context.Context, step func(string)) er
 	if s.orchestrator == nil || s.substoreClient == nil {
 		return fmt.Errorf("orchestrator/substore unavailable")
 	}
-	groups, err := monitor.LoadCustomGroups()
+	groupsAshan, err := monitor.LoadCustomGroups("ashan")
+	if err != nil {
+		return err
+	}
+	groupsQ, err := monitor.LoadCustomGroups("q")
 	if err != nil {
 		return err
 	}
 	atoms := s.orchestrator.CollectAtoms()
 
-	// Differentiated scripts: ashan gets all groups, Q strictly gets backbone-only groups
-	scriptAshan, err := publish.CompileScript(groups, atoms, "ashan")
+	// Differentiated scripts: ashan gets all groups from custom_groups_ashan, Q strictly gets groups from custom_groups_q
+	scriptAshan, err := publish.CompileScript(groupsAshan, atoms, "ashan")
 	if err != nil {
 		return err
 	}
-	scriptQ, err := publish.CompileScript(groups, atoms, "q")
+	scriptQ, err := publish.CompileScript(groupsQ, atoms, "q")
 	if err != nil {
 		return err
 	}
 
-	expected := []string{}
-	required := map[string][]string{}
-	for _, g := range groups {
+	expectedAshan := []string{}
+	requiredAshan := map[string][]string{}
+	for _, g := range groupsAshan {
 		if g.Enabled {
-			expected = append(expected, g.DisplayName)
+			expectedAshan = append(expectedAshan, g.DisplayName)
 			matched := s.orchestrator.EvaluateGroupAtoms(g.Filter)
 			for _, a := range matched {
-				required[g.DisplayName] = append(required[g.DisplayName], a.Name)
+				requiredAshan[g.DisplayName] = append(requiredAshan[g.DisplayName], a.Name)
+			}
+		}
+	}
+
+	expectedQ := []string{}
+	requiredQ := map[string][]string{}
+	for _, g := range groupsQ {
+		if g.Enabled {
+			expectedQ = append(expectedQ, g.DisplayName)
+			matched := s.orchestrator.EvaluateGroupAtoms(g.Filter)
+			for _, a := range matched {
+				if a.Kind == "transit" && !strings.Contains(a.Name, "家宽") && !strings.Contains(strings.ToLower(a.Name), "resi") {
+					requiredQ[g.DisplayName] = append(requiredQ[g.DisplayName], a.Name)
+				}
 			}
 		}
 	}
@@ -66,7 +84,10 @@ func (s *APIServer) applyPolicyGroups(ctx context.Context, step func(string)) er
 		scriptQ,
 		func(fileName string, yaml []byte) error {
 			isQ := strings.EqualFold(fileName, "q")
-			return publish.ValidateYAMLWithMembers(yaml, expected, required, isQ)
+			if isQ {
+				return publish.ValidateYAMLWithMembers(yaml, expectedQ, requiredQ, true)
+			}
+			return publish.ValidateYAMLWithMembers(yaml, expectedAshan, requiredAshan, false)
 		},
 		step,
 	)
@@ -108,17 +129,21 @@ func (s *APIServer) handlePolicyGroupList(c *fiber.Ctx) error {
 }
 
 func (s *APIServer) handlePolicyGroupDefaults(c *fiber.Ctx) error {
-	defaults := model.DefaultCustomGroups()
+	profile := c.Query("profile", "ashan")
+	defaults := model.DefaultCustomGroups(profile)
 	return c.JSON(fiber.Map{
-		"status": "ok",
-		"count":  len(defaults),
-		"groups": defaults,
+		"status":  "ok",
+		"profile": profile,
+		"count":   len(defaults),
+		"groups":  defaults,
 	})
 }
 
 func (s *APIServer) handlePolicyGroupBatchSave(c *fiber.Ctx) error {
+	profile := c.Query("profile", "ashan")
 	var payload struct {
-		Groups []model.CustomGroupDef `json:"groups"`
+		Profile string                 `json:"profile,omitempty"`
+		Groups  []model.CustomGroupDef `json:"groups"`
 	}
 	if err := c.BodyParser(&payload); err != nil || len(payload.Groups) == 0 {
 		var rawGroups []model.CustomGroupDef
@@ -128,16 +153,20 @@ func (s *APIServer) handlePolicyGroupBatchSave(c *fiber.Ctx) error {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 	}
+	if payload.Profile != "" {
+		profile = payload.Profile
+	}
 	if len(payload.Groups) == 0 {
 		return c.Status(400).JSON(fiber.Map{"error": "empty or invalid policy groups batch payload"})
 	}
-	if err := monitor.SaveCustomGroupsBatch(payload.Groups); err != nil {
+	if err := monitor.SaveCustomGroupsBatch(payload.Groups, profile); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
 	return s.enqueuePolicyPublish(c, true)
 }
 
 func (s *APIServer) handlePolicyGroupUpsert(c *fiber.Ctx) error {
+	profile := c.Query("profile", "ashan")
 	var def model.CustomGroupDef
 	if err := c.BodyParser(&def); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -148,7 +177,7 @@ func (s *APIServer) handlePolicyGroupUpsert(c *fiber.Ctx) error {
 			return c.Status(400).JSON(fiber.Map{"error": "ID is immutable"})
 		}
 		def.Name = id
-		groups, err := monitor.LoadCustomGroups()
+		groups, err := monitor.LoadCustomGroups(profile)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -166,7 +195,7 @@ func (s *APIServer) handlePolicyGroupUpsert(c *fiber.Ctx) error {
 	if err := def.Validate(); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
-	if err := monitor.SaveCustomGroup(def); err != nil {
+	if err := monitor.SaveCustomGroup(def, profile); err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -176,11 +205,12 @@ func (s *APIServer) handlePolicyGroupUpsert(c *fiber.Ctx) error {
 }
 
 func (s *APIServer) handlePolicyGroupDelete(c *fiber.Ctx) error {
+	profile := c.Query("profile", "ashan")
 	id := c.Params("id")
 	if id == "" {
 		return c.Status(400).JSON(fiber.Map{"error": "missing ID"})
 	}
-	if err := monitor.DeleteCustomGroup(id); err != nil {
+	if err := monitor.DeleteCustomGroup(id, profile); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return c.Status(404).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -190,6 +220,7 @@ func (s *APIServer) handlePolicyGroupDelete(c *fiber.Ctx) error {
 }
 
 func (s *APIServer) handlePolicyGroupPreview(c *fiber.Ctx) error {
+	profile := c.Query("profile", "ashan")
 	var def model.CustomGroupDef
 	if err := c.BodyParser(&def); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -198,7 +229,31 @@ func (s *APIServer) handlePolicyGroupPreview(c *fiber.Ctx) error {
 		return c.Status(503).JSON(fiber.Map{"error": "orchestrator unavailable"})
 	}
 	atoms := s.orchestrator.CollectAtoms()
-	matched := monitor.MatchAtoms(atoms, def.Filter)
+	isQ := strings.EqualFold(profile, "q")
+	filter := def.Filter
+	if isQ {
+		filter.IncludeResidential = false
+		filter.IncludeChain = false
+		if len(filter.Kinds) > 0 {
+			cleanKinds := []string{}
+			for _, k := range filter.Kinds {
+				if k == "transit" {
+					cleanKinds = append(cleanKinds, k)
+				}
+			}
+			filter.Kinds = cleanKinds
+		}
+	}
+	matched := monitor.MatchAtoms(atoms, filter)
+	if isQ {
+		clean := make([]model.AtomNode, 0, len(matched))
+		for _, a := range matched {
+			if a.Kind == "transit" && !strings.Contains(a.Name, "家宽") && !strings.Contains(strings.ToLower(a.Name), "resi") {
+				clean = append(clean, a)
+			}
+		}
+		matched = clean
+	}
 	nodes := make([]fiber.Map, 0, len(matched))
 	for _, a := range matched {
 		nodes = append(nodes, fiber.Map{
@@ -211,7 +266,7 @@ func (s *APIServer) handlePolicyGroupPreview(c *fiber.Ctx) error {
 			"online":     a.Online,
 		})
 	}
-	return c.JSON(fiber.Map{"status": "ok", "count": len(nodes), "nodes": nodes})
+	return c.JSON(fiber.Map{"status": "ok", "profile": profile, "count": len(nodes), "nodes": nodes})
 }
 
 func (s *APIServer) handleUpdateAtomMetadata(c *fiber.Ctx) error {

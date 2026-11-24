@@ -125,8 +125,80 @@ type FiveGroupPayload struct {
 	ChinaLeakNodes []string `json:"china_leak_nodes"`
 }
 
-// DefaultCustomGroups returns the 8 canonical baseline system policy groups.
-func DefaultCustomGroups() []CustomGroupDef {
+// DefaultCustomGroups returns canonical baseline system policy groups for ashan or q.
+func DefaultCustomGroups(profile ...string) []CustomGroupDef {
+	if len(profile) > 0 && strings.EqualFold(profile[0], "q") {
+		return []CustomGroupDef{
+			{
+				Name:        "q-transit",
+				DisplayName: "自建-线路机",
+				Enabled:     true,
+				Type:        "url-test",
+				Order:       10,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Kinds:     []string{"transit"},
+					CleanOnly: false,
+				},
+			},
+			{
+				Name:        "q-us-line",
+				DisplayName: "自建-美国线路",
+				Enabled:     true,
+				Type:        "url-test",
+				Order:       20,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Countries: []string{"US"},
+					Kinds:     []string{"transit"},
+					CleanOnly: true,
+				},
+			},
+			{
+				Name:        "q-jp-line",
+				DisplayName: "自建-日本线路",
+				Enabled:     true,
+				Type:        "url-test",
+				Order:       30,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Countries: []string{"JP"},
+					Kinds:     []string{"transit"},
+					CleanOnly: true,
+				},
+			},
+			{
+				Name:        "q-clean",
+				DisplayName: "自建-不送中",
+				Enabled:     true,
+				Type:        "url-test",
+				Order:       40,
+				AddToEntry:  true,
+				Filter: GroupFilter{
+					Mode:      "filter",
+					Kinds:     []string{"transit"},
+					CleanOnly: true,
+				},
+			},
+			{
+				Name:        "q-china-leak",
+				DisplayName: "自建-送中",
+				Enabled:     true,
+				Type:        "url-test",
+				Order:       50,
+				AddToEntry:  false,
+				Filter: GroupFilter{
+					Mode:          "filter",
+					Kinds:         []string{"transit"},
+					ChinaLeakOnly: true,
+				},
+			},
+		}
+	}
+
 	return []CustomGroupDef{
 		{
 			Name:        "ashan-transit",

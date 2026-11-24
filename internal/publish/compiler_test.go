@@ -246,11 +246,11 @@ func TestCompileScript_AppGroupCleanInject(t *testing.T) {
 	if !strings.Contains(script, "toLowerCase") {
 		t.Fatalf("expected toLowerCase case-insensitive matching in appGroupCleanInject")
 	}
-	if !strings.Contains(script, "!desired.includes(n)") {
+	if !strings.Contains(script, "!finalProxies.includes(c)") {
 		t.Fatalf("expected proxy deduplication in appGroupCleanInject")
 	}
-	if !strings.Contains(script, "[...desired, ...remaining]") {
-		t.Fatalf("expected desired proxies placed in front of remaining proxies")
+	if !strings.Contains(script, "finalProxies = ['选择代理']") {
+		t.Fatalf("expected 选择代理 placed first in finalProxies")
 	}
 }
 

@@ -202,8 +202,15 @@ func TestOrchestrationEndpoints(t *testing.T) {
 			Groups []model.CustomGroupDef `json:"groups"`
 		}
 		_ = json.NewDecoder(getResp.Body).Decode(&getBody)
-		if len(getBody.Groups) != 1 || getBody.Groups[0].Name != "ashan-us-all" {
-			t.Errorf("expected 1 group 'ashan-us-all', got %v", getBody.Groups)
+		var found bool
+		for _, g := range getBody.Groups {
+			if g.Name == "ashan-us-all" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected group 'ashan-us-all' in groups list %v", getBody.Groups)
 		}
 
 		// 删除

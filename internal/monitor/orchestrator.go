@@ -488,12 +488,57 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 	}
 }
 
+func resolveCustomGroupsPath(base string, profile string) string {
+	p := strings.ToLower(strings.TrimSpace(profile))
+	dir := filepath.Dir(base)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(filepath.Base(base), ext)
+	if p == "q" {
+		return filepath.Join(dir, stem+"_q"+ext)
+	}
+	// default is ashan
+	return filepath.Join(dir, stem+"_ashan"+ext)
+}
+
 // LoadCustomGroups fails visibly on corrupt JSON: never silently publish an empty policy.
-func LoadCustomGroups() ([]model.CustomGroupDef, error) {
-	customGroupsMu.RLock()
-	defer customGroupsMu.RUnlock()
-	b, err := os.ReadFile(customGroupsFile)
+// Optional profile parameter supports profile-isolated groups ("ashan" vs "q").
+func LoadCustomGroups(profile ...string) ([]model.CustomGroupDef, error) {
+	customGroupsMu.Lock()
+	defer customGroupsMu.Unlock()
+
+	prof := "ashan"
+	if len(profile) > 0 && strings.TrimSpace(profile[0]) != "" {
+		prof = strings.ToLower(strings.TrimSpace(profile[0]))
+	}
+	filePath := resolveCustomGroupsPath(customGroupsFile, prof)
+
+	b, err := os.ReadFile(filePath)
 	if os.IsNotExist(err) {
+		now := time.Now().UTC().Format(time.RFC3339)
+		if prof == "ashan" {
+			if legacyB, lErr := os.ReadFile(customGroupsFile); lErr == nil {
+				var legacy []model.CustomGroupDef
+				if json.Unmarshal(legacyB, &legacy) == nil && len(legacy) > 0 {
+					_ = writeAtomicJSON(filePath, legacy)
+					return legacy, nil
+				}
+			}
+			defaults := model.DefaultCustomGroups("ashan")
+			for i := range defaults {
+				defaults[i].CreatedAt = now
+				defaults[i].UpdatedAt = now
+			}
+			_ = writeAtomicJSON(filePath, defaults)
+			return defaults, nil
+		} else if prof == "q" {
+			defaults := model.DefaultCustomGroups("q")
+			for i := range defaults {
+				defaults[i].CreatedAt = now
+				defaults[i].UpdatedAt = now
+			}
+			_ = writeAtomicJSON(filePath, defaults)
+			return defaults, nil
+		}
 		return []model.CustomGroupDef{}, nil
 	}
 	if err != nil {
@@ -507,17 +552,23 @@ func LoadCustomGroups() ([]model.CustomGroupDef, error) {
 }
 
 // SaveCustomGroup is an atomic, validated upsert. Name is a stable immutable key.
-func SaveCustomGroup(def model.CustomGroupDef) error {
+func SaveCustomGroup(def model.CustomGroupDef, profile ...string) error {
 	if def.Type == "" {
 		def.Type = "select"
 	}
 	if err := def.Validate(); err != nil {
 		return err
 	}
+	prof := "ashan"
+	if len(profile) > 0 && strings.TrimSpace(profile[0]) != "" {
+		prof = strings.ToLower(strings.TrimSpace(profile[0]))
+	}
+	filePath := resolveCustomGroupsPath(customGroupsFile, prof)
+
 	customGroupsMu.Lock()
 	defer customGroupsMu.Unlock()
 	groups := []model.CustomGroupDef{}
-	if b, err := os.ReadFile(customGroupsFile); err == nil {
+	if b, err := os.ReadFile(filePath); err == nil {
 		if err = json.Unmarshal(b, &groups); err != nil {
 			return err
 		}
@@ -548,14 +599,20 @@ func SaveCustomGroup(def model.CustomGroupDef) error {
 	if !updated {
 		groups = append(groups, def)
 	}
-	return writeAtomicJSON(customGroupsFile, groups)
+	return writeAtomicJSON(filePath, groups)
 }
 
-func DeleteCustomGroup(name string) error {
+func DeleteCustomGroup(name string, profile ...string) error {
+	prof := "ashan"
+	if len(profile) > 0 && strings.TrimSpace(profile[0]) != "" {
+		prof = strings.ToLower(strings.TrimSpace(profile[0]))
+	}
+	filePath := resolveCustomGroupsPath(customGroupsFile, prof)
+
 	customGroupsMu.Lock()
 	defer customGroupsMu.Unlock()
 	groups := []model.CustomGroupDef{}
-	if b, err := os.ReadFile(customGroupsFile); err == nil {
+	if b, err := os.ReadFile(filePath); err == nil {
 		if err = json.Unmarshal(b, &groups); err != nil {
 			return err
 		}
@@ -572,16 +629,22 @@ func DeleteCustomGroup(name string) error {
 		}
 	}
 	if !found {
-		return fmt.Errorf("custom group %q not found", name)
+		return fmt.Errorf("custom group %q not found in profile %q", name, prof)
 	}
-	return writeAtomicJSON(customGroupsFile, next)
+	return writeAtomicJSON(filePath, next)
 }
 
-// SaveCustomGroupsBatch atomically validates and overwrites all custom groups.
-func SaveCustomGroupsBatch(defs []model.CustomGroupDef) error {
+// SaveCustomGroupsBatch atomically validates and overwrites all custom groups for a given profile.
+func SaveCustomGroupsBatch(defs []model.CustomGroupDef, profile ...string) error {
 	if len(defs) == 0 {
 		return fmt.Errorf("cannot save empty custom groups batch")
 	}
+	prof := "ashan"
+	if len(profile) > 0 && strings.TrimSpace(profile[0]) != "" {
+		prof = strings.ToLower(strings.TrimSpace(profile[0]))
+	}
+	filePath := resolveCustomGroupsPath(customGroupsFile, prof)
+
 	seenNames := make(map[string]bool)
 	seenDisplays := make(map[string]bool)
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -620,27 +683,46 @@ func SaveCustomGroupsBatch(defs []model.CustomGroupDef) error {
 
 	customGroupsMu.Lock()
 	defer customGroupsMu.Unlock()
-	return writeAtomicJSON(customGroupsFile, validated)
+	return writeAtomicJSON(filePath, validated)
 }
 
 // EnsureDefaultCustomGroups initializes baseline custom groups if none exist.
-func EnsureDefaultCustomGroups() error {
+func EnsureDefaultCustomGroups(profile ...string) error {
 	customGroupsMu.Lock()
 	defer customGroupsMu.Unlock()
-	b, err := os.ReadFile(customGroupsFile)
-	if err == nil {
-		var existing []model.CustomGroupDef
-		if json.Unmarshal(b, &existing) == nil && len(existing) > 0 {
-			return nil
+	profiles := []string{"ashan", "q"}
+	if len(profile) > 0 && strings.TrimSpace(profile[0]) != "" {
+		profiles = []string{strings.ToLower(strings.TrimSpace(profile[0]))}
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, p := range profiles {
+		filePath := resolveCustomGroupsPath(customGroupsFile, p)
+		b, err := os.ReadFile(filePath)
+		if err == nil {
+			var existing []model.CustomGroupDef
+			if json.Unmarshal(b, &existing) == nil && len(existing) > 0 {
+				continue
+			}
+		}
+		if strings.EqualFold(p, "ashan") {
+			if legacyB, lErr := os.ReadFile(customGroupsFile); lErr == nil {
+				var legacy []model.CustomGroupDef
+				if json.Unmarshal(legacyB, &legacy) == nil && len(legacy) > 0 {
+					_ = writeAtomicJSON(filePath, legacy)
+					continue
+				}
+			}
+		}
+		defaults := model.DefaultCustomGroups(p)
+		for i := range defaults {
+			defaults[i].CreatedAt = now
+			defaults[i].UpdatedAt = now
+		}
+		if err := writeAtomicJSON(filePath, defaults); err != nil {
+			return err
 		}
 	}
-	defaults := model.DefaultCustomGroups()
-	now := time.Now().UTC().Format(time.RFC3339)
-	for i := range defaults {
-		defaults[i].CreatedAt = now
-		defaults[i].UpdatedAt = now
-	}
-	return writeAtomicJSON(customGroupsFile, defaults)
+	return nil
 }
 
 // SyncAllCustomGroups is kept only for legacy callers and now propagates real errors.

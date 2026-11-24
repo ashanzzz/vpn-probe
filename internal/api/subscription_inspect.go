@@ -149,7 +149,11 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 	}
 
 	// Load custom groups for identifying user-defined self-hosted groups
-	customGroups, _ := monitor.LoadCustomGroups()
+	prof := "ashan"
+	if strings.EqualFold(name, "q") {
+		prof = "q"
+	}
+	customGroups, _ := monitor.LoadCustomGroups(prof)
 	customMap := make(map[string]model.CustomGroupDef)
 	for _, cg := range customGroups {
 		if cg.Name != "" {

@@ -364,26 +364,37 @@ export const api = {
     return request('/api/orchestration/categories');
   },
 
-  async createPolicyGroup(def: CustomGroupDef): Promise<{status:string;job_id:string;revision:number}> {
-    return request('/api/v1/policy-groups', {method:'POST',body:JSON.stringify(def)});
+  async createPolicyGroup(def: CustomGroupDef, profile: string = 'ashan'): Promise<{status:string;job_id:string;revision:number}> {
+    return request(`/api/v1/policy-groups?profile=${encodeURIComponent(profile)}`, {method:'POST',body:JSON.stringify(def)});
   },
-  async getPolicyGroupDefaults(): Promise<{ status: string; count: number; groups: CustomGroupDef[] }> {
-    return request('/api/v1/policy-groups/defaults');
+  async getPolicyGroups(profile: string = 'ashan'): Promise<{ status: string; count: number; groups: CustomGroupDef[] }> {
+    return request(`/api/v1/policy-groups?profile=${encodeURIComponent(profile)}`);
   },
-  async batchSavePolicyGroups(groups: CustomGroupDef[]): Promise<{ status: string; job_id: string; revision: number }> {
-    return request('/api/v1/policy-groups/batch', {
+  async getPolicyGroupDefaults(profile: string = 'ashan'): Promise<{ status: string; count: number; groups: CustomGroupDef[] }> {
+    return request(`/api/v1/policy-groups/defaults?profile=${encodeURIComponent(profile)}`);
+  },
+  async batchSavePolicyGroups(groups: CustomGroupDef[], profile: string = 'ashan'): Promise<{ status: string; job_id: string; revision: number }> {
+    return request(`/api/v1/policy-groups/batch?profile=${encodeURIComponent(profile)}`, {
       method: 'PUT',
-      body: JSON.stringify({ groups }),
+      body: JSON.stringify({ profile, groups }),
     });
   },
-  async updatePolicyGroup(id:string,def:CustomGroupDef): Promise<{status:string;job_id:string;revision:number}> {
-    return request(`/api/v1/policy-groups/${encodeURIComponent(id)}`, {method:'PUT',body:JSON.stringify(def)});
+  async updatePolicyGroup(id: string, def: CustomGroupDef, profile: string = 'ashan'): Promise<{ status: string; job_id: string; revision: number }> {
+    return request(`/api/v1/policy-groups/${encodeURIComponent(id)}?profile=${encodeURIComponent(profile)}`, {
+      method: 'PUT',
+      body: JSON.stringify(def),
+    });
   },
-  async removePolicyGroup(id:string): Promise<{status:string;job_id:string;revision:number}> {
-    return request(`/api/v1/policy-groups/${encodeURIComponent(id)}`, {method:'DELETE'});
+  async removePolicyGroup(id: string, profile: string = 'ashan'): Promise<{ status: string; job_id: string; revision: number }> {
+    return request(`/api/v1/policy-groups/${encodeURIComponent(id)}?profile=${encodeURIComponent(profile)}`, {
+      method: 'DELETE',
+    });
   },
-  async previewPolicyGroup(def:CustomGroupDef): Promise<{count:number;nodes:{id:string;name:string}[]}> {
-    return request('/api/v1/policy-groups/preview',{method:'POST',body:JSON.stringify(def)});
+  async previewPolicyGroup(def: CustomGroupDef, profile: string = 'ashan'): Promise<{ count: number; nodes: { id: string; name: string }[] }> {
+    return request(`/api/v1/policy-groups/preview?profile=${encodeURIComponent(profile)}`, {
+      method: 'POST',
+      body: JSON.stringify(def),
+    });
   },
   async latestPublishJob(): Promise<PublishJob & {status:string}> {return request('/api/v1/publish-jobs/latest');},
   async getPublishJob(id:string): Promise<PublishJob> {return request(`/api/v1/publish-jobs/${encodeURIComponent(id)}`);},

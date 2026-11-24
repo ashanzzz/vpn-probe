@@ -1139,6 +1139,9 @@ func (s *APIServer) setupRoutes() {
 
 	// 5.7 用户自定义策略组与异步发布 API (PolicyGroupStudio)
 	s.app.Patch("/api/orchestration/atoms/:id/metadata", s.handleUpdateAtomMetadata)
+	s.app.Get("/api/v1/policy-groups/defaults", s.handlePolicyGroupDefaults)
+	s.app.Put("/api/v1/policy-groups/batch", s.handlePolicyGroupBatchSave)
+	s.app.Post("/api/v1/policy-groups/batch", s.handlePolicyGroupBatchSave)
 	s.app.Get("/api/v1/policy-groups", s.handlePolicyGroupList)
 	s.app.Post("/api/v1/policy-groups", s.handlePolicyGroupUpsert)
 	s.app.Put("/api/v1/policy-groups/:id", s.handlePolicyGroupUpsert)

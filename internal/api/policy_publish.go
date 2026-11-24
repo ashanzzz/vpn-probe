@@ -107,6 +107,33 @@ func (s *APIServer) handlePolicyGroupList(c *fiber.Ctx) error {
 	return s.handleGetCustomGroups(c)
 }
 
+func (s *APIServer) handlePolicyGroupDefaults(c *fiber.Ctx) error {
+	defaults := model.DefaultCustomGroups()
+	return c.JSON(fiber.Map{
+		"status": "ok",
+		"count":  len(defaults),
+		"groups": defaults,
+	})
+}
+
+func (s *APIServer) handlePolicyGroupBatchSave(c *fiber.Ctx) error {
+	var payload struct {
+		Groups []model.CustomGroupDef `json:"groups"`
+	}
+	if err := c.BodyParser(&payload); err != nil || len(payload.Groups) == 0 {
+		var rawGroups []model.CustomGroupDef
+		if err2 := c.BodyParser(&rawGroups); err2 == nil && len(rawGroups) > 0 {
+			payload.Groups = rawGroups
+		} else if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+	}
+	if err := monitor.SaveCustomGroupsBatch(payload.Groups); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+	return s.enqueuePolicyPublish(c, true)
+}
+
 func (s *APIServer) handlePolicyGroupUpsert(c *fiber.Ctx) error {
 	var def model.CustomGroupDef
 	if err := c.BodyParser(&def); err != nil {

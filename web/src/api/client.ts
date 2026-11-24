@@ -367,6 +367,15 @@ export const api = {
   async createPolicyGroup(def: CustomGroupDef): Promise<{status:string;job_id:string;revision:number}> {
     return request('/api/v1/policy-groups', {method:'POST',body:JSON.stringify(def)});
   },
+  async getPolicyGroupDefaults(): Promise<{ status: string; count: number; groups: CustomGroupDef[] }> {
+    return request('/api/v1/policy-groups/defaults');
+  },
+  async batchSavePolicyGroups(groups: CustomGroupDef[]): Promise<{ status: string; job_id: string; revision: number }> {
+    return request('/api/v1/policy-groups/batch', {
+      method: 'PUT',
+      body: JSON.stringify({ groups }),
+    });
+  },
   async updatePolicyGroup(id:string,def:CustomGroupDef): Promise<{status:string;job_id:string;revision:number}> {
     return request(`/api/v1/policy-groups/${encodeURIComponent(id)}`, {method:'PUT',body:JSON.stringify(def)});
   },

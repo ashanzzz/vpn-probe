@@ -348,6 +348,7 @@ export interface AtomNode {
   infra_type?: InfraType;
   tags?: string[];
   china_exit: boolean;
+  china_leak?: boolean;
   latency_ms: number;
   online: boolean;
   tested_at: string;
@@ -365,6 +366,8 @@ export interface GroupFilter {
   exclude_tags?: string[];
   online_only?: boolean;
   clean_only?: boolean;
+  china_leak_only?: boolean;
+  leak_only?: boolean;
   keywords?: string[];
   exclude?: string[];
   // 兼容辅助字段

@@ -573,6 +573,49 @@ func DeleteCustomGroup(name string) error {
 	return writeAtomicJSON(customGroupsFile, next)
 }
 
+// SaveCustomGroupsBatch atomically validates and overwrites all custom groups.
+func SaveCustomGroupsBatch(defs []model.CustomGroupDef) error {
+	seenNames := make(map[string]bool)
+	seenDisplays := make(map[string]bool)
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	validated := make([]model.CustomGroupDef, len(defs))
+	for i := range defs {
+		def := defs[i]
+		if def.Name == "" {
+			return fmt.Errorf("group name is required")
+		}
+		if def.DisplayName == "" {
+			def.DisplayName = def.Name
+		}
+		if def.Type == "" {
+			def.Type = "url-test"
+		}
+		if err := def.Validate(); err != nil {
+			return fmt.Errorf("group %q invalid: %w", def.Name, err)
+		}
+		if seenNames[def.Name] {
+			return fmt.Errorf("duplicate group name %q", def.Name)
+		}
+		seenNames[def.Name] = true
+
+		if seenDisplays[def.DisplayName] {
+			return fmt.Errorf("duplicate display_name %q", def.DisplayName)
+		}
+		seenDisplays[def.DisplayName] = true
+
+		if def.CreatedAt == "" {
+			def.CreatedAt = now
+		}
+		def.UpdatedAt = now
+		validated[i] = def
+	}
+
+	customGroupsMu.Lock()
+	defer customGroupsMu.Unlock()
+	return writeAtomicJSON(customGroupsFile, validated)
+}
+
 // EnsureDefaultCustomGroups initializes baseline custom groups if none exist.
 func EnsureDefaultCustomGroups() error {
 	customGroupsMu.Lock()

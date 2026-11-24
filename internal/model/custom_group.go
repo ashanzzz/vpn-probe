@@ -125,33 +125,33 @@ type FiveGroupPayload struct {
 	ChinaLeakNodes []string `json:"china_leak_nodes"`
 }
 
-// DefaultCustomGroups returns the baseline system policy groups.
+// DefaultCustomGroups returns the 8 canonical baseline system policy groups.
 func DefaultCustomGroups() []CustomGroupDef {
 	return []CustomGroupDef{
 		{
 			Name:        "ashan-transit",
 			DisplayName: "自建-线路机",
 			Enabled:     true,
-			Type:        "select",
+			Type:        "url-test",
 			Order:       10,
 			AddToEntry:  true,
 			Filter: GroupFilter{
 				Mode:      "filter",
 				Kinds:     []string{"transit"},
-				CleanOnly: true,
+				CleanOnly: false,
 			},
 		},
 		{
 			Name:        "ashan-us-resi",
 			DisplayName: "自建-美国和美国家宽",
 			Enabled:     true,
-			Type:        "select",
+			Type:        "url-test",
 			Order:       20,
 			AddToEntry:  true,
 			Filter: GroupFilter{
 				Mode:      "filter",
 				Countries: []string{"US"},
-				Kinds:     []string{"residential", "chain"},
+				Kinds:     []string{"transit", "residential", "chain"},
 				CleanOnly: true,
 			},
 		},
@@ -159,12 +159,26 @@ func DefaultCustomGroups() []CustomGroupDef {
 			Name:        "ashan-jp-resi",
 			DisplayName: "自建-日本和日本家宽",
 			Enabled:     true,
-			Type:        "select",
+			Type:        "url-test",
 			Order:       30,
 			AddToEntry:  true,
 			Filter: GroupFilter{
 				Mode:      "filter",
 				Countries: []string{"JP"},
+				Kinds:     []string{"transit", "residential", "chain"},
+				CleanOnly: true,
+			},
+		},
+		{
+			Name:        "ashan-tw-resi",
+			DisplayName: "自建-台湾家宽分组",
+			Enabled:     true,
+			Type:        "url-test",
+			Order:       40,
+			AddToEntry:  true,
+			Filter: GroupFilter{
+				Mode:      "filter",
+				Countries: []string{"TW"},
 				Kinds:     []string{"residential", "chain"},
 				CleanOnly: true,
 			},
@@ -173,13 +187,39 @@ func DefaultCustomGroups() []CustomGroupDef {
 			Name:        "ashan-other",
 			DisplayName: "自建-其他",
 			Enabled:     true,
-			Type:        "select",
-			Order:       40,
+			Type:        "url-test",
+			Order:       50,
 			AddToEntry:  true,
 			Filter: GroupFilter{
 				Mode:      "filter",
-				Countries: []string{"SG", "HK", "TW", "KR", "UK", "DE", "OTHER"},
+				Countries: []string{"SG", "KR", "UK", "DE", "OTHER"},
 				Kinds:     []string{"residential", "chain"},
+				CleanOnly: true,
+			},
+		},
+		{
+			Name:        "ashan-residential",
+			DisplayName: "自建-家宽分组",
+			Enabled:     true,
+			Type:        "url-test",
+			Order:       60,
+			AddToEntry:  true,
+			Filter: GroupFilter{
+				Mode:      "filter",
+				Kinds:     []string{"residential", "chain"},
+				CleanOnly: true,
+			},
+		},
+		{
+			Name:        "ashan-clean",
+			DisplayName: "自建-不送中",
+			Enabled:     true,
+			Type:        "url-test",
+			Order:       70,
+			AddToEntry:  true,
+			Filter: GroupFilter{
+				Mode:      "filter",
+				Kinds:     []string{"transit", "residential", "chain"},
 				CleanOnly: true,
 			},
 		},
@@ -187,8 +227,8 @@ func DefaultCustomGroups() []CustomGroupDef {
 			Name:        "ashan-china-leak",
 			DisplayName: "自建-送中",
 			Enabled:     true,
-			Type:        "select",
-			Order:       99,
+			Type:        "url-test",
+			Order:       80,
 			AddToEntry:  false,
 			Filter: GroupFilter{
 				Mode:          "filter",

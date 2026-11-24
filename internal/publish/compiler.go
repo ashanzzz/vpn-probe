@@ -191,11 +191,43 @@ for (const spec of vpnUserGroups) {
     group.url = 'http://www.gstatic.com/generate_204';
     group.interval = 300;
   }
+  if (spec.type === 'url-test') {
+    group.tolerance = 50;
+  }
   if (spec.type === 'load-balance') {
     group.strategy = 'consistent-hashing';
   }
   vpnGroups.push(group);
 }
+
+// Inject clean user groups into application groups if present
+const appGroupCleanInject = {
+  'AI服务': ['自建-美国和美国家宽', '自建-家宽分组', '自建-线路机'],
+  'YouTube': ['自建-不送中', '不送中', '自建-线路机'],
+  '谷歌服务': ['自建-不送中', '不送中', '自建-线路机'],
+  'TikTok': ['自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组'],
+  'Netflix': ['自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组'],
+  '巴哈姆特': ['自建-台湾家宽分组'],
+  'Spotify': ['自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组'],
+  'Telegram': ['自建-不送中', '不送中', '自建-线路机'],
+  'Twitter': ['自建-不送中', '不送中', '自建-线路机']
+};
+const existingGroupNames = new Set(vpnGroups.map(g => g.name));
+for (const g of vpnGroups) {
+  if (appGroupCleanInject[g.name] && Array.isArray(g.proxies)) {
+    const toInject = appGroupCleanInject[g.name].filter(n => existingGroupNames.has(n) && !g.proxies.includes(n));
+    if (toInject.length > 0) {
+      g.proxies = [...toInject, ...g.proxies];
+    }
+  }
+}
+
+// Reorder: place all self-hosted groups strictly at the end
+const isSelfName = (n) => n.startsWith('自建-') || n.startsWith('自建·') || n === '不送中';
+const nonSelfGroups = vpnGroups.filter(g => !isSelfName(g.name));
+const selfGroups = vpnGroups.filter(g => isSelfName(g.name));
+vpnGroups.length = 0;
+vpnGroups.push(...nonSelfGroups, ...selfGroups);
 
 const vpnEntry = vpnGroups.find(g => g.name === '选择代理');
 if (vpnEntry) {

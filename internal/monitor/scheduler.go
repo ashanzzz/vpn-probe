@@ -894,7 +894,7 @@ func getHostGroupKey(res *model.NodeProbeResult) string {
 		return "JP-Tokyo-IIJ"
 	}
 	// 3. 东京软银 主机 (45.192.242.72)
-	if strings.Contains(name, "JP-Tokyo-Softbank") || strings.Contains(name, "东京软银") || host == "45.192.242.72" {
+	if strings.Contains(name, "JP-Tokyo-Softbank") || strings.Contains(name, "JP--ACCK-SB") || strings.Contains(name, "ACCK-SB") || strings.Contains(name, "东京软银") || host == "45.192.242.72" {
 		return "JP-Tokyo-Softbank"
 	}
 

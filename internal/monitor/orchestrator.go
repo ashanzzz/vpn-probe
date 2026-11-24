@@ -78,7 +78,8 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 	o.scheduler.mu.RLock()
 	defer o.scheduler.mu.RUnlock()
 
-	var transits []*model.NodeProbeResult
+	var allTransits []*model.NodeProbeResult
+	var activeTransits []*model.NodeProbeResult
 	var resis []*model.NodeProbeResult
 
 	for _, state := range o.scheduler.nodeStates {
@@ -93,22 +94,24 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 			}
 			resis = append(resis, res)
 		} else {
-			if !res.Online {
-				continue
+			allTransits = append(allTransits, res)
+			if res.Online {
+				activeTransits = append(activeTransits, res)
 			}
-			transits = append(transits, res)
 		}
 	}
 
 	// 1. 线路机原子
-	activeTransitLinks := filterActiveTransitNodes(transits)
+	activeTransitLinks := filterActiveTransitNodes(allTransits)
 	activeSet := make(map[string]bool)
 	for _, l := range activeTransitLinks {
 		activeSet[l] = true
 	}
 
-	for _, t := range transits {
-		if !activeSet[t.OriginalURL] {
+	uniqueTransits := deduplicateNodeResults(allTransits)
+	for _, t := range uniqueTransits {
+		// 待命状态的 CF 救活节点在主力直连健康时不暴露原子
+		if !activeSet[t.OriginalURL] && isCFRescueNode(t) {
 			continue
 		}
 		tID := t.ID
@@ -154,7 +157,7 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 
 	// 3. 线路拉家宽链式中继原子 (方案B通用区域池化 + 显式定制绑定)
 	if o.scheduler.healer != nil {
-		fullMesh := o.scheduler.healer.BuildFullMeshRegionalChains(transits, uniqueResis)
+		fullMesh := o.scheduler.healer.BuildFullMeshRegionalChains(activeTransits, uniqueResis)
 		chains := mergeCustomChains(fullMesh)
 
 		for _, ch := range chains {
@@ -177,29 +180,35 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 				transitPart = strings.TrimSpace(chainLabel[:arrowIdx])
 				targetPart = strings.TrimSpace(chainLabel[arrowIdx+len("➔"):])
 			}
-			country := model.ResolveCountry("", targetPart)
+			country := model.ResolveCountry("", chainLabel)
 
 			chainOnline := true
 			testedAt := time.Now()
 			chainLatency := 0
 			chainChinaExit := false
 
-			// 匹配关联中转专线延迟与送中状态
+			transitFound := false
+			// 匹配关联中转专线延迟、送中状态及存活性
 			if transitPart != "" {
-				for _, t := range transits {
+				for _, t := range allTransits {
 					if t == nil || strings.TrimSpace(t.Name) == "" {
 						continue
 					}
 					if MatchNodeName(transitPart, t.Name) {
+						transitFound = true
 						chainLatency += t.LatencyMs
 						if t.ChinaExit {
 							chainChinaExit = true
+						}
+						if !t.Online {
+							chainOnline = false
 						}
 						break
 					}
 				}
 			}
 
+			targetFound := false
 			// 匹配关联目标家宽节点的真实反向隧道状态、延迟与送中状态
 			if targetPart != "" {
 				for _, r := range uniqueResis {
@@ -207,6 +216,7 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 						continue
 					}
 					if MatchNodeName(targetPart, r.Name) {
+						targetFound = true
 						testedAt = r.TestedAt
 						if r.Diagnostic != nil && r.Diagnostic.AbroadRTTMs > 0 {
 							chainLatency += r.Diagnostic.AbroadRTTMs
@@ -225,6 +235,11 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 						break
 					}
 				}
+			}
+
+			// 如果显式指定了中转专线但未在已有中转节点中找到，或者显式指定了落地端但未在已有住宅节点中找到，判定链式离线
+			if (transitPart != "" && !transitFound) || (targetPart != "" && !targetFound) {
+				chainOnline = false
 			}
 
 			atoms = append(atoms, model.AtomNode{

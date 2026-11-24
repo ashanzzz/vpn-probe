@@ -872,3 +872,218 @@ func TestGetCategoriesSummary_CustomGroupsConsistency(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_CollectAtoms_RetainsOfflineTransitAsOfflineAtom(t *testing.T) {
+	tmpChains := filepath.Join(t.TempDir(), "custom_chains_offline_transit.json")
+	defer SetCustomChainsFileForTest(tmpChains)()
+
+	sch := &Scheduler{
+		healer:     healer.NewHealer(nil, nil),
+		nodeStates: make(map[string]*NodeState),
+	}
+
+	// 1. 在线直连线路机
+	sch.nodeStates["online-transit"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "transit-online",
+			Name:        "JP-Tokyo-Online",
+			OriginalURL: "vless://u1@1.1.1.1:443#JP-Tokyo-Online",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "transit",
+			LatencyMs:   50,
+			TestedAt:    time.Now(),
+		},
+	}
+	// 2. 离线直连线路机 (主力专线掉线)
+	sch.nodeStates["offline-transit"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "transit-offline",
+			Name:        "US-LAX-Offline",
+			OriginalURL: "vless://u2@2.2.2.2:443#US-LAX-Offline",
+			ExitCountry: "US",
+			Online:      false,
+			NodeType:    "transit",
+			LatencyMs:   0,
+			TestedAt:    time.Now(),
+		},
+	}
+
+	orc := NewOrchestrator(sch)
+	atoms := orc.CollectAtoms()
+
+	var foundOnline, foundOffline *model.AtomNode
+	for i := range atoms {
+		if atoms[i].ID == "transit-online" {
+			foundOnline = &atoms[i]
+		}
+		if atoms[i].ID == "transit-offline" {
+			foundOffline = &atoms[i]
+		}
+	}
+
+	if foundOnline == nil || !foundOnline.Online {
+		t.Fatalf("expected online transit atom to be present with Online=true, got %+v", foundOnline)
+	}
+	if foundOffline == nil {
+		t.Fatalf("expected offline transit atom to be retained in atom inventory")
+	}
+	if foundOffline.Online {
+		t.Errorf("expected offline transit atom to have Online=false, got %+v", foundOffline)
+	}
+}
+
+func TestOrchestrator_ChainLiveness_OfflineOrMissingRelay(t *testing.T) {
+	tmpChains := filepath.Join(t.TempDir(), "custom_chains_liveness.json")
+	defer SetCustomChainsFileForTest(tmpChains)()
+
+	sch := &Scheduler{
+		healer:     healer.NewHealer(nil, nil),
+		nodeStates: make(map[string]*NodeState),
+	}
+
+	sch.nodeStates["online-transit"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "t-online",
+			Name:        "JP-Tokyo-Online",
+			OriginalURL: "vless://u1@1.1.1.1:443#JP-Tokyo-Online",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "transit",
+			LatencyMs:   50,
+		},
+	}
+	sch.nodeStates["offline-transit"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "t-offline",
+			Name:        "US-LAX-Offline",
+			OriginalURL: "vless://u2@2.2.2.2:443#US-LAX-Offline",
+			ExitCountry: "US",
+			Online:      false,
+			NodeType:    "transit",
+			LatencyMs:   0,
+		},
+	}
+	sch.nodeStates["online-resi"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "r-online",
+			Name:        "LZ-US-Pavlov-家宽",
+			OriginalURL: "socks5://u3:p@3.3.3.3:10001#LZ-US-Pavlov-家宽",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "residential",
+			LatencyMs:   120,
+		},
+	}
+
+	customChains := []CustomChainBind{
+		{
+			ID:              "chain-with-offline-transit",
+			TransitName:     "US-LAX-Offline",
+			ResidentialName: "LZ-US-Pavlov-家宽",
+			ChainName:       "链式|US-LAX-Offline ➔ LZ-US-Pavlov-家宽",
+			ChainURL:        "socks5://u3:p@3.3.3.3:10001?dialerProxy=US-LAX-Offline#链式|US-LAX-Offline ➔ LZ-US-Pavlov-家宽",
+		},
+		{
+			ID:              "chain-with-unknown-transit",
+			TransitName:     "Unknown-Transit-X",
+			ResidentialName: "LZ-US-Pavlov-家宽",
+			ChainName:       "链式|Unknown-Transit-X ➔ LZ-US-Pavlov-家宽",
+			ChainURL:        "socks5://u3:p@3.3.3.3:10001?dialerProxy=Unknown-Transit-X#链式|Unknown-Transit-X ➔ LZ-US-Pavlov-家宽",
+		},
+		{
+			ID:              "chain-with-unknown-target",
+			TransitName:     "JP-Tokyo-Online",
+			ResidentialName: "Non-Existent-Resi",
+			ChainName:       "链式|JP-Tokyo-Online ➔ Non-Existent-Resi",
+			ChainURL:        "socks5://u4:p@4.4.4.4:10001?dialerProxy=JP-Tokyo-Online#链式|JP-Tokyo-Online ➔ Non-Existent-Resi",
+		},
+	}
+	if err := SaveCustomChains(customChains); err != nil {
+		t.Fatalf("failed to save custom chains: %v", err)
+	}
+
+	orc := NewOrchestrator(sch)
+	atoms := orc.CollectAtoms()
+
+	atomMap := make(map[string]model.AtomNode)
+	for _, a := range atoms {
+		atomMap[a.Name] = a
+	}
+
+	// 1. 中转专线掉线的链式代理必须判定为离线
+	if c1, ok := atomMap["链式|US-LAX-Offline ➔ LZ-US-Pavlov-家宽"]; !ok || c1.Online {
+		t.Errorf("expected chain with offline transit relay to be Online=false, got: %+v", c1)
+	}
+
+	// 2. 中转专线完全不存在的链式代理必须判定为离线
+	if c2, ok := atomMap["链式|Unknown-Transit-X ➔ LZ-US-Pavlov-家宽"]; !ok || c2.Online {
+		t.Errorf("expected chain with unknown transit relay to be Online=false, got: %+v", c2)
+	}
+
+	// 3. 落地家宽完全不存在的链式代理必须判定为离线
+	if c3, ok := atomMap["链式|JP-Tokyo-Online ➔ Non-Existent-Resi"]; !ok || c3.Online {
+		t.Errorf("expected chain with non-existent target to be Online=false, got: %+v", c3)
+	}
+}
+
+func TestOrchestrator_ChainCountry_TransitFallbackWhenTargetHasNoCountry(t *testing.T) {
+	tmpChains := filepath.Join(t.TempDir(), "custom_chains_fallback.json")
+	defer SetCustomChainsFileForTest(tmpChains)()
+
+	sch := &Scheduler{
+		healer:     healer.NewHealer(nil, nil),
+		nodeStates: make(map[string]*NodeState),
+	}
+	sch.nodeStates["jp-transit"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "jp-t",
+			Name:        "东京软银-专线",
+			OriginalURL: "vless://u1@1.1.1.1:443#东京软银-专线",
+			ExitCountry: "JP",
+			Online:      true,
+			NodeType:    "transit",
+		},
+	}
+	sch.nodeStates["resi-no-country"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "resi-1",
+			Name:        "原生家宽-01",
+			OriginalURL: "socks5://u2:p@2.2.2.2:10001#原生家宽-01",
+			ExitCountry: "",
+			Online:      true,
+			NodeType:    "residential",
+		},
+	}
+
+	customChains := []CustomChainBind{
+		{
+			ID:              "fallback-chain",
+			TransitName:     "东京软银-专线",
+			ResidentialName: "原生家宽-01",
+			ChainName:       "链式|东京软银-专线 ➔ 原生家宽-01",
+			ChainURL:        "socks5://u2:p@2.2.2.2:10001?dialerProxy=东京软银-专线#链式|东京软银-专线 ➔ 原生家宽-01",
+		},
+	}
+	if err := SaveCustomChains(customChains); err != nil {
+		t.Fatalf("failed to save custom chains: %v", err)
+	}
+
+	orc := NewOrchestrator(sch)
+	atoms := orc.CollectAtoms()
+
+	var fallbackAtom *model.AtomNode
+	for i := range atoms {
+		if atoms[i].Name == "链式|东京软银-专线 ➔ 原生家宽-01" {
+			fallbackAtom = &atoms[i]
+			break
+		}
+	}
+
+	if fallbackAtom == nil {
+		t.Fatalf("expected chain atom to be present")
+	}
+	if fallbackAtom.Country != "JP" {
+		t.Errorf("expected chain country to fallback to JP from transit, got %q", fallbackAtom.Country)
+	}
+}
+

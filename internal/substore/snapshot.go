@@ -439,6 +439,7 @@ func (sm *SnapshotManager) fetchRenderedYAML(ctx context.Context, fileName strin
 		if len(body) > 0 {
 			return body, nil
 		}
+		lastErr = fmt.Errorf("empty body received from %s", endpoint)
 	}
 
 	return nil, fmt.Errorf("fetch rendered file '%s' failed on all endpoints: %w", fileName, lastErr)

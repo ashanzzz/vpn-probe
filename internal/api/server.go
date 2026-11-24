@@ -966,6 +966,9 @@ func (s *APIServer) setupRoutes() {
 		itemName := c.Params("name")
 
 		if err := s.substoreClient.DeleteItem(c.Context(), itemType, itemName); err != nil {
+			if strings.Contains(err.Error(), "invalid item type") {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+			}
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
 

@@ -22,6 +22,15 @@ func TestDetectRegionFromName(t *testing.T) {
 		{"Frankfurt", "DE-Frankfurt-Direct", "DE"},
 		{"London", "UK-London-Direct", "UK"},
 		{"Unknown fallback", "Random-Node", "FALLBACK"},
+		{"Business node not SG", "BUSINESS-NODE-01", "FALLBACK"},
+		{"Projekt node not KR", "DE-PROJEKT-01", "DE"},
+		{"Infra node not DE", "INFRA-US-01", "US"},
+		{"Galaxy node not US", "GALAXY-NODE", "FALLBACK"},
+		{"Singapore Airport Token", "SG-SIN-01", "SG"},
+		{"Singapore Airport Digit Suffix", "SG-SIN01", "SG"},
+		{"Korea Telecom Token", "LZ-KR-KT-家宽", "KR"},
+		{"Frankfurt Airport Token", "DE-FRA01-Direct", "DE"},
+		{"LAX Token", "US-LAX02", "US"},
 	}
 
 	for _, tt := range tests {

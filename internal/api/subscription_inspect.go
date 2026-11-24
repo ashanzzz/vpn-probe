@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"vpn-probe/internal/model"
 	"vpn-probe/internal/monitor"
+	"vpn-probe/internal/probe"
 	"vpn-probe/internal/publish"
 )
 
@@ -323,6 +324,9 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 			}
 			if psum.Type == "" {
 				psum.Type = rawProxyTypeMap[pName]
+			}
+			if psum.Country == "" {
+				psum.Country = probe.DetectRegionFromName(pName, "")
 			}
 			proxiesOut = append(proxiesOut, psum)
 		}

@@ -140,28 +140,57 @@ type BatchProbeResponse struct {
 	SubStoreMessage string        `json:"substore_message,omitempty"`
 }
 
-func matchCountryToken(s, code string) bool {
-	return strings.HasPrefix(s, code+"-") ||
-		strings.Contains(s, "-"+code+"-") ||
-		strings.HasSuffix(s, "-"+code) ||
-		s == code
+// HasRegionToken 判断节点名称中是否包含作为独立词元出现的区域代号 (避免 "NODE" 误判为 "DE", "BUSINESS" 误判为 "US"/"SG", "PROJEKT" 误判为 "KR", "INFRA" 误判为 "DE")
+func HasRegionToken(upper, code string) bool {
+	tokens := strings.FieldsFunc(upper, func(r rune) bool {
+		return r == '-' || r == '_' || r == ' ' || r == '[' || r == ']' ||
+			r == '(' || r == ')' || r == '/' || r == '|' || r == '➔' ||
+			r == ':' || r == '.' || r == ','
+	})
+	for _, t := range tokens {
+		if t == code || strings.HasPrefix(t, code+"-") || strings.HasPrefix(t, code+"_") || strings.TrimRight(t, "0123456789") == code {
+			return true
+		}
+	}
+	return false
 }
 
-// ResolveCountry 通用解析节点的所属国家/地区 ISO 二位大写代码 (如 US, JP, HK, SG, DE)
+// ResolveCountry 通用解析节点的所属国家/地区 ISO/区域代码 (如 US, JP, HK, SG, TW, KR, DE, UK...)
 // 严禁绑定具体机房名或运营商名 (4837 仅为美区线路机举例，非硬编码标识)，严格依据真实探测出口或规范国别标签
 func ResolveCountry(exitCountry, nodeName string) string {
 	c := strings.ToUpper(strings.TrimSpace(exitCountry))
 	if c != "" && len(c) == 2 {
+		if c == "GB" {
+			return "UK"
+		}
 		return c
 	}
 
-	// 若为链式中继 (如 "链式|线路机 ➔ 家宽机")，其出口国家必须以落地的目标家宽机为准
+	// 若为链式中继 (如 "链式|线路机 ➔ 家宽机")，其出口国家优先以落地的目标家宽机为准
+	targetSide := nodeName
 	if idx := strings.LastIndex(nodeName, "➔"); idx != -1 {
-		nodeName = nodeName[idx+len("➔"):]
+		targetSide = nodeName[idx+len("➔"):]
 	} else if idx := strings.LastIndex(nodeName, "%E2%9E%94"); idx != -1 {
-		nodeName = nodeName[idx+len("%E2%9E%94"):]
+		targetSide = nodeName[idx+len("%E2%9E%94"):]
 	}
 
+	reg := resolveRegionText(targetSide)
+	if reg != "OTHER" {
+		return reg
+	}
+
+	// 若落地端未包含明确区域标识 (例如 "未知家宽01")，回退尝试从前置中继或全标签解析
+	if targetSide != nodeName {
+		regFull := resolveRegionText(nodeName)
+		if regFull != "OTHER" {
+			return regFull
+		}
+	}
+
+	return "OTHER"
+}
+
+func resolveRegionText(nodeName string) string {
 	upper := strings.ToUpper(nodeName)
 
 	// 针对紧凑型链式代理命名 [前置]-[落地区域]-[运营商] (如 SB-美宽-Pavlov, LAX-日宽-SoftBank, SB-台宽-HiNet)，
@@ -183,22 +212,22 @@ func ResolveCountry(exitCountry, nodeName string) string {
 	}
 
 	switch {
-	case matchCountryToken(upper, "US") || strings.Contains(upper, "美国") || strings.Contains(upper, "美西") || strings.Contains(upper, "美东") || strings.Contains(upper, "USA") || strings.Contains(upper, "UNITED STATES"):
-		return "US"
-	case matchCountryToken(upper, "JP") || strings.Contains(upper, "日本") || strings.Contains(upper, "东京") || strings.Contains(upper, "大阪") || strings.Contains(upper, "JAPAN"):
+	case HasRegionToken(upper, "JP") || strings.Contains(upper, "东京") || strings.Contains(upper, "大阪") || strings.Contains(upper, "日本") || HasRegionToken(upper, "NRT") || HasRegionToken(upper, "HND"):
 		return "JP"
-	case matchCountryToken(upper, "HK") || strings.Contains(upper, "香港") || strings.Contains(upper, "HONG KONG"):
+	case HasRegionToken(upper, "US") || strings.Contains(upper, "美西") || strings.Contains(upper, "美东") || strings.Contains(upper, "洛杉矶") || strings.Contains(upper, "美国") || strings.Contains(upper, "4837") || HasRegionToken(upper, "LAX") || HasRegionToken(upper, "SJC") || strings.Contains(upper, "PAVLOV") || strings.Contains(upper, "FRONTIER") || strings.Contains(upper, "VERIZON") || HasRegionToken(upper, "USA") || strings.Contains(upper, "UNITED STATES"):
+		return "US"
+	case HasRegionToken(upper, "HK") || strings.Contains(upper, "香港") || HasRegionToken(upper, "HKG"):
 		return "HK"
-	case matchCountryToken(upper, "SG") || strings.Contains(upper, "新加坡") || strings.Contains(upper, "SINGAPORE"):
-		return "SG"
-	case matchCountryToken(upper, "TW") || strings.Contains(upper, "台湾") || strings.Contains(upper, "TAIWAN"):
+	case HasRegionToken(upper, "TW") || strings.Contains(upper, "台湾") || strings.Contains(upper, "台北") || strings.Contains(upper, "HINET") || HasRegionToken(upper, "TPE"):
 		return "TW"
-	case matchCountryToken(upper, "KR") || strings.Contains(upper, "韩国") || strings.Contains(upper, "首尔") || strings.Contains(upper, "KOREA"):
+	case HasRegionToken(upper, "SG") || strings.Contains(upper, "新加坡") || strings.Contains(upper, "狮城") || strings.Contains(upper, "STARHUB") || HasRegionToken(upper, "SIN"):
+		return "SG"
+	case HasRegionToken(upper, "KR") || strings.Contains(upper, "韩国") || strings.Contains(upper, "首尔") || HasRegionToken(upper, "ICN") || HasRegionToken(upper, "KT"):
 		return "KR"
-	case matchCountryToken(upper, "DE") || strings.Contains(upper, "德国") || strings.Contains(upper, "GERMANY") || strings.Contains(upper, "法兰克福"):
+	case HasRegionToken(upper, "DE") || strings.Contains(upper, "德国") || strings.Contains(upper, "法兰克福") || HasRegionToken(upper, "FRA"):
 		return "DE"
-	case matchCountryToken(upper, "GB") || matchCountryToken(upper, "UK") || strings.Contains(upper, "英国") || strings.Contains(upper, "伦敦"):
-		return "GB"
+	case HasRegionToken(upper, "UK") || HasRegionToken(upper, "GB") || strings.Contains(upper, "英国") || strings.Contains(upper, "伦敦") || HasRegionToken(upper, "LHR"):
+		return "UK"
 	default:
 		return "OTHER"
 	}

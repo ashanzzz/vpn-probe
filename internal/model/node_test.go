@@ -65,6 +65,72 @@ func TestResolveCountry(t *testing.T) {
 			nodeName:    "JP-Tokyo-Softbank-Reality-Vision",
 			expected:    "JP",
 		},
+		{
+			name:        "Explicit GB ExitCountry normalizes to UK",
+			exitCountry: "GB",
+			nodeName:    "Some-Random-Name",
+			expected:    "UK",
+		},
+		{
+			name:        "UK node with London",
+			exitCountry: "",
+			nodeName:    "UK-London-Direct",
+			expected:    "UK",
+		},
+		{
+			name:        "Airport code LAX with digit suffix",
+			exitCountry: "",
+			nodeName:    "US-LAX02",
+			expected:    "US",
+		},
+		{
+			name:        "Airport code FRA with digit suffix",
+			exitCountry: "",
+			nodeName:    "DE-FRA01-Direct",
+			expected:    "DE",
+		},
+		{
+			name:        "Airport code SIN with digit suffix",
+			exitCountry: "",
+			nodeName:    "SG-SIN01",
+			expected:    "SG",
+		},
+		{
+			name:        "Underscore delimiter",
+			exitCountry: "",
+			nodeName:    "US_LAX_01",
+			expected:    "US",
+		},
+		{
+			name:        "Bracket delimiter",
+			exitCountry: "",
+			nodeName:    "[US] Direct-01",
+			expected:    "US",
+		},
+		{
+			name:        "Space delimiter",
+			exitCountry: "",
+			nodeName:    "US Direct 01",
+			expected:    "US",
+		},
+		{
+			name:        "Collision prevention BUSINESS",
+			exitCountry: "",
+			nodeName:    "BUSINESS-NODE-01",
+			expected:    "OTHER",
+		},
+		{
+			name:        "Collision prevention GALAXY",
+			exitCountry: "",
+			nodeName:    "GALAXY-NODE-01",
+			expected:    "OTHER",
+		},
+		{
+			name:        "Collision prevention PROJEKT",
+			exitCountry: "",
+			nodeName:    "DE-PROJEKT-01",
+			expected:    "DE",
+		},
 	}
 
 	for _, tc := range tests {

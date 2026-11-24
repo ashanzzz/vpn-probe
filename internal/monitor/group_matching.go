@@ -15,6 +15,20 @@ func matchesString(items []string, value string) bool {
 	return false
 }
 
+func matchesCountry(filterCountries []string, nodeCountry string) bool {
+	for _, fc := range filterCountries {
+		fcUpper := strings.ToUpper(strings.TrimSpace(fc))
+		ncUpper := strings.ToUpper(strings.TrimSpace(nodeCountry))
+		if fcUpper == ncUpper {
+			return true
+		}
+		if (fcUpper == "UK" && ncUpper == "GB") || (fcUpper == "GB" && ncUpper == "UK") {
+			return true
+		}
+	}
+	return false
+}
+
 // MatchAtoms uses one canonical matcher for previews, publishing and manual selections.
 // The old include_* flags are accepted only when kinds is absent for compatibility.
 func MatchAtoms(atoms []model.AtomNode, f model.GroupFilter) []model.AtomNode {
@@ -30,7 +44,7 @@ func MatchAtoms(atoms []model.AtomNode, f model.GroupFilter) []model.AtomNode {
 				continue
 			}
 		} else {
-			if len(f.Countries) > 0 && !matchesString(f.Countries, a.Country) {
+			if len(f.Countries) > 0 && !matchesCountry(f.Countries, a.Country) {
 				continue
 			}
 			kinds := f.Kinds

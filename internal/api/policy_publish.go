@@ -105,12 +105,12 @@ func (s *APIServer) applyPolicyGroups(ctx context.Context, step func(string)) er
 		scriptBusiness,
 		func(fileName string, yaml []byte) error {
 			if strings.EqualFold(fileName, "q") {
-				return publish.ValidateYAMLWithMembers(yaml, expectedQ, requiredQ, true)
+				return publish.ValidateYAMLWithProfile(yaml, expectedQ, requiredQ, "q")
 			}
 			if strings.EqualFold(fileName, "business") {
-				return publish.ValidateYAMLWithMembers(yaml, expectedBusiness, requiredBusiness, false)
+				return publish.ValidateYAMLWithProfile(yaml, expectedBusiness, requiredBusiness, "business")
 			}
-			return publish.ValidateYAMLWithMembers(yaml, expectedAshan, requiredAshan, false)
+			return publish.ValidateYAMLWithProfile(yaml, expectedAshan, requiredAshan, "ashan")
 		},
 		step,
 	)

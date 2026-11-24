@@ -270,7 +270,21 @@ func ValidateYAML(body []byte, wanted []string) error {
 	return ValidateYAMLWithMembers(body, wanted, nil)
 }
 
+var commercialAirportKeywords = []string{
+	"amy", "tag", "flower", "泡泡", "速鹰", "云速", "paopao",
+	"flowercloud", "tagvpn", "nexitally", "dler", "rix", "ikuuu",
+}
+
 func ValidateYAMLWithMembers(body []byte, wanted []string, required map[string][]string, isQFile ...bool) error {
+	profile := "ashan"
+	if len(isQFile) > 0 && isQFile[0] {
+		profile = "q"
+	}
+	return ValidateYAMLWithProfile(body, wanted, required, profile)
+}
+
+// ValidateYAMLWithProfile checks final output with explicit profile rules ("ashan", "q", "business")
+func ValidateYAMLWithProfile(body []byte, wanted []string, required map[string][]string, profile string) error {
 	var cfg struct {
 		Proxies []struct {
 			Name string `yaml:"name"`
@@ -310,13 +324,27 @@ func ValidateYAMLWithMembers(body []byte, wanted []string, required map[string][
 		}
 	}
 
-	isQ := len(isQFile) > 0 && isQFile[0]
+	prof := strings.ToLower(strings.TrimSpace(profile))
+	isQ := prof == "q"
+	isBusiness := prof == "business"
 
 	// Q Strict verification: NO residential proxies allowed
 	if isQ {
 		for _, p := range cfg.Proxies {
 			if strings.Contains(p.Name, "家宽") || strings.Contains(strings.ToLower(p.Name), "resi") {
 				return fmt.Errorf("Q file violates dual-standard: contains residential proxy %q", p.Name)
+			}
+		}
+	}
+
+	// Business Strict verification: NO external commercial airport proxies allowed (pure self-built only)
+	if isBusiness {
+		for _, p := range cfg.Proxies {
+			lowerName := strings.ToLower(p.Name)
+			for _, kw := range commercialAirportKeywords {
+				if strings.Contains(lowerName, kw) {
+					return fmt.Errorf("business profile illegally contains commercial airport node %q (keyword: %s)", p.Name, kw)
+				}
 			}
 		}
 	}

@@ -157,3 +157,76 @@ func TestPatchFile_PurgesLegacyPollutedOperators(t *testing.T) {
 		t.Fatalf("expected second operator to be %s, got %v", managedOperator, ops[1])
 	}
 }
+
+func TestValidateYAMLWithProfile_BusinessCommercialAirportGuard(t *testing.T) {
+	// Case 1: Business profile with commercial airport node (should fail)
+	airportYAML := []byte(`
+proxies:
+  - name: "TAG-香港01-IEPL"
+    type: "vless"
+  - name: "US-LAX-ACCK-4837-Reality"
+    type: "vless"
+proxy-groups:
+  - name: "选择代理"
+    proxies: ["US-LAX-ACCK-4837-Reality", "TAG-香港01-IEPL"]
+`)
+	err := ValidateYAMLWithProfile(airportYAML, nil, nil, "business")
+	if err == nil {
+		t.Fatalf("expected business profile to reject commercial airport node, got nil")
+	}
+	if !strings.Contains(err.Error(), "illegally contains commercial airport node") {
+		t.Fatalf("expected 'illegally contains commercial airport node' in error, got: %v", err)
+	}
+
+	// Case 2: Business profile with pure self-built nodes (should pass)
+	pureBizYAML := []byte(`
+proxies:
+  - name: "US-LAX-ACCK-4837-Reality"
+    type: "vless"
+  - name: "JP-Tokyo-IIJ-Reality"
+    type: "vless"
+  - name: "LZ-US-Pavlov-家宽"
+    type: "vless"
+proxy-groups:
+  - name: "自建-线路机"
+    proxies: ["US-LAX-ACCK-4837-Reality", "JP-Tokyo-IIJ-Reality"]
+  - name: "自建-美国家宽"
+    proxies: ["LZ-US-Pavlov-家宽"]
+  - name: "选择代理"
+    proxies: ["自建-线路机", "自建-美国家宽"]
+`)
+	err = ValidateYAMLWithProfile(pureBizYAML, []string{"自建-线路机", "自建-美国家宽", "选择代理"}, nil, "business")
+	if err != nil {
+		t.Fatalf("expected pure self-built nodes to pass in business profile, got: %v", err)
+	}
+}
+
+func TestValidateYAMLWithProfile_AshanAndQProfile(t *testing.T) {
+	// Case 1: Q profile rejects residential
+	resiYAML := []byte(`
+proxies:
+  - name: "LZ-US-Pavlov-家宽"
+    type: "vless"
+proxy-groups:
+  - name: "选择代理"
+    proxies: ["LZ-US-Pavlov-家宽"]
+`)
+	if err := ValidateYAMLWithProfile(resiYAML, nil, nil, "q"); err == nil {
+		t.Fatalf("expected Q profile to reject residential, got nil")
+	}
+
+	// Case 2: Ashan profile accepts residential and airport
+	mixedYAML := []byte(`
+proxies:
+  - name: "TAG-香港01"
+    type: "vless"
+  - name: "LZ-US-Pavlov-家宽"
+    type: "vless"
+proxy-groups:
+  - name: "选择代理"
+    proxies: ["TAG-香港01", "LZ-US-Pavlov-家宽"]
+`)
+	if err := ValidateYAMLWithProfile(mixedYAML, []string{"选择代理"}, nil, "ashan"); err != nil {
+		t.Fatalf("expected ashan profile to accept mixed nodes, got: %v", err)
+	}
+}

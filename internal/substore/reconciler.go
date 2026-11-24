@@ -489,6 +489,36 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 		}
 	}
 
+	// 2.2 检查 business 集合 (col-business) 是否名实相符 (纯自建商务合集：纯自建骨干 + 原生家宽，0 外部商业机场)
+	if bizSummary, exists := audit.Collections["col-business"]; exists {
+		hasAirport := false
+		hasTransit := false
+		hasResi := false
+		for _, s := range bizSummary {
+			if c.isExternalAirport(s, extSet) {
+				hasAirport = true
+			}
+			if s == "ashan-transit" {
+				hasTransit = true
+			}
+			if strings.Contains(s, "resi") {
+				hasResi = true
+			}
+		}
+		if hasAirport {
+			audit.Healthy = false
+			msg := "集合 'col-business' (标称纯自建商务合集) 混入了外部商业机场订阅，破坏了 0 商业机场规范"
+			audit.Discrepancies = append(audit.Discrepancies, msg)
+			audit.RecommendedFixes = append(audit.RecommendedFixes, "将 'col-business' 净化为仅引用自建纯净分组 [\"ashan-transit\", \"ashan-us-resi\", \"ashan-jp-resi\", \"ashan-other\", \"ashan-china-leak\"] (0 外部机场)")
+		}
+		if !hasTransit || !hasResi {
+			audit.Healthy = false
+			msg := "集合 'col-business' 缺少骨干专线或家宽节点订阅，未达到纯自建商务全景标准"
+			audit.Discrepancies = append(audit.Discrepancies, msg)
+			audit.RecommendedFixes = append(audit.RecommendedFixes, "为 'col-business' 补齐 [\"ashan-transit\", \"ashan-us-resi\", \"ashan-jp-resi\", \"ashan-other\", \"ashan-china-leak\"]")
+		}
+	}
+
 	// 3. 检查孤儿订阅
 	for _, s := range audit.Subscriptions {
 		if !referencedSubs[s] {
@@ -514,22 +544,47 @@ func (c *Client) AuditTopology(ctx context.Context) (*TopologyAudit, error) {
 	}
 	businessTarget := "col-business"
 
+	hasAshanFile := false
+	hasQFile := false
+	hasBusinessFile := false
+
 	for _, f := range files {
 		if f.Name == "ashan" || f.Name == "Ashan" {
+			hasAshanFile = true
 			if f.SourceName != ashanTarget && f.SourceName != "col-ashan" && f.SourceName != "ashan-master" {
 				audit.Healthy = false
 				audit.Discrepancies = append(audit.Discrepancies, fmt.Sprintf("文件 '%s' 未绑定至全量全家桶集合 '%s' (当前: '%s')", f.Name, ashanTarget, f.SourceName))
 			}
 		} else if f.Name == "Q" || f.Name == "q" {
+			hasQFile = true
 			if f.SourceName != qTarget && f.SourceName != "col-q" && f.SourceName != "Q-汇总" {
 				audit.Healthy = false
 				audit.Discrepancies = append(audit.Discrepancies, fmt.Sprintf("文件 '%s' 未绑定至骨干轻量集合 '%s' (当前: '%s')", f.Name, qTarget, f.SourceName))
 			}
 		} else if f.Name == "business" || f.Name == "Business" {
+			hasBusinessFile = true
 			if f.SourceName != businessTarget {
 				audit.Healthy = false
 				audit.Discrepancies = append(audit.Discrepancies, fmt.Sprintf("文件 '%s' 未绑定至纯自建商务集合 '%s' (当前: '%s')", f.Name, businessTarget, f.SourceName))
 			}
+		}
+	}
+
+	if len(files) > 0 {
+		if !hasAshanFile && (audit.Collections["col-ashan"] != nil || audit.Collections["ashan-master"] != nil) {
+			audit.Healthy = false
+			audit.Discrepancies = append(audit.Discrepancies, "缺少核心全量订阅文件 'ashan' (或 'Ashan')")
+			audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("创建核心全量订阅文件 'ashan' 并绑定至集合 '%s'", ashanTarget))
+		}
+		if !hasQFile && (audit.Collections["col-q"] != nil || audit.Collections["Q-汇总"] != nil) {
+			audit.Healthy = false
+			audit.Discrepancies = append(audit.Discrepancies, "缺少核心骨干订阅文件 'Q' (或 'q')")
+			audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("创建核心骨干订阅文件 'Q' 并绑定至集合 '%s'", qTarget))
+		}
+		if !hasBusinessFile && audit.Collections["col-business"] != nil {
+			audit.Healthy = false
+			audit.Discrepancies = append(audit.Discrepancies, "缺少核心纯自建商务订阅文件 'business' (或 'Business')")
+			audit.RecommendedFixes = append(audit.RecommendedFixes, fmt.Sprintf("创建核心商务订阅文件 'business' 并绑定至集合 '%s'", businessTarget))
 		}
 	}
 

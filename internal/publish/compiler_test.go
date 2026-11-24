@@ -253,3 +253,16 @@ func TestCompileScript_AppGroupCleanInject(t *testing.T) {
 		t.Fatalf("expected desired proxies placed in front of remaining proxies")
 	}
 }
+
+func TestCompileScript_VpnEntryAndGroupsDefensiveFallback(t *testing.T) {
+	script, err := CompileScript(model.DefaultCustomGroups(), nil)
+	if err != nil {
+		t.Fatalf("CompileScript: %v", err)
+	}
+	if !strings.Contains(script, "!Array.isArray(vpnEntry.proxies) || vpnEntry.proxies.length === 0") {
+		t.Fatalf("expected defensive fallback for vpnEntry.proxies")
+	}
+	if !strings.Contains(script, "!Array.isArray(g.proxies) || g.proxies.length === 0") {
+		t.Fatalf("expected final defensive loop over all groups")
+	}
+}

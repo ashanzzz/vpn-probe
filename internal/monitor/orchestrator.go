@@ -444,13 +444,17 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 	customGroups, _ := LoadCustomGroups()
 	var customSummary []map[string]any
 	for _, cg := range customGroups {
-		matched := o.EvaluateGroup(cg.Filter)
+		matchedAtoms := MatchAtoms(atoms, cg.Filter)
+		seenLinks := make(map[string]bool, len(matchedAtoms))
+		for _, a := range matchedAtoms {
+			seenLinks[a.URL] = true
+		}
 		customSummary = append(customSummary, map[string]any{
 			"name":         cg.Name,
 			"display_name": cg.DisplayName,
 			"enabled":      cg.Enabled,
 			"filter":       cg.Filter,
-			"count":        len(matched),
+			"count":        len(seenLinks),
 			"created_at":   cg.CreatedAt,
 			"updated_at":   cg.UpdatedAt,
 		})
@@ -843,6 +847,32 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 	return bind, nil
 }
 
+// matchesChainTarget 精确判断目标是否指向该链式绑定，杜绝宽松子串碰撞误删无关绑定
+func matchesChainTarget(c CustomChainBind, target string) bool {
+	if c.ID == target {
+		return true
+	}
+	if c.ChainName == target || strings.EqualFold(c.ChainName, target) {
+		return true
+	}
+	if c.ResidentialName == target || MatchNodeName(c.ResidentialName, target) {
+		return true
+	}
+	// 支持按 "中继 ➔ 落地" 组合精确解绑
+	if strings.Contains(target, "➔") {
+		parts := strings.SplitN(target, "➔", 2)
+		transit := strings.TrimSpace(parts[0])
+		if pipeIdx := strings.Index(transit, "|"); pipeIdx != -1 {
+			transit = strings.TrimSpace(transit[pipeIdx+1:])
+		}
+		resi := strings.TrimSpace(parts[1])
+		if MatchNodeName(c.TransitName, transit) && MatchNodeName(c.ResidentialName, resi) {
+			return true
+		}
+	}
+	return false
+}
+
 // UnbindExplicitChain 移除某条指定的显式中继或指定家宽的旧连接
 func (o *Orchestrator) UnbindExplicitChain(target string) error {
 	target = strings.TrimSpace(target)
@@ -861,7 +891,7 @@ func (o *Orchestrator) UnbindExplicitChain(target string) error {
 	var newChains []CustomChainBind
 	found := false
 	for _, c := range chains {
-		if c.ID == target || c.ChainName == target || c.ResidentialName == target || strings.Contains(c.ChainName, target) {
+		if matchesChainTarget(c, target) {
 			found = true
 			continue
 		}

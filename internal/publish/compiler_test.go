@@ -234,28 +234,19 @@ func TestCompileScript_PreservesUserGroupsInOtherProxyGroups(t *testing.T) {
 	}
 }
 
-func TestCompileScript_AppGroupCleanInject(t *testing.T) {
+func TestCompileScript_CleanExternalAndNodePools(t *testing.T) {
 	script, err := CompileScript(model.DefaultCustomGroups(), nil)
 	if err != nil {
 		t.Fatalf("CompileScript: %v", err)
 	}
-	if !strings.Contains(script, "appGroupCleanInject") {
-		t.Fatalf("expected appGroupCleanInject in script")
+	if !strings.Contains(script, "isNodePool") {
+		t.Fatalf("expected isNodePool check in script")
 	}
-	if !strings.Contains(script, "'Youtube'") || !strings.Contains(script, "'YouTube'") {
-		t.Fatalf("expected both 'Youtube' and 'YouTube' keys in appGroupCleanInject")
+	if !strings.Contains(script, "!isSelfName(p)") {
+		t.Fatalf("expected !isSelfName(p) check in script to purge self groups from external pools")
 	}
-	if !strings.Contains(script, "toLowerCase") {
-		t.Fatalf("expected toLowerCase case-insensitive matching in appGroupCleanInject")
-	}
-	if !strings.Contains(script, "!finalProxies.includes(c)") {
-		t.Fatalf("expected proxy deduplication in appGroupCleanInject")
-	}
-	if !strings.Contains(script, "finalProxies = ['选择代理']") {
-		t.Fatalf("expected 选择代理 placed first in finalProxies")
-	}
-	if !strings.Contains(script, "'外部分组'") || !strings.Contains(script, "entryMembers.has(g.name)") {
-		t.Fatalf("expected nonAppGroupNames and entryMembers check to prevent circular proxy-group loops")
+	if !strings.Contains(script, "topNames = ['选择代理', '自动选择'") {
+		t.Fatalf("expected topNames to place 选择代理 and 自动选择 at topmost")
 	}
 }
 
@@ -289,13 +280,16 @@ func TestNodeProcessConfigAcyclic(t *testing.T) {
 			map[string]any{"name": "🇺🇸 US-LAX-ACCK-4837-Reality"},
 			map[string]any{"name": "🇯🇵 JP-Tokyo-IIJ-Reality"},
 			map[string]any{"name": "ExternalNode1"},
+			map[string]any{"name": "UK-Node-1"},
 		},
 		"proxy-groups": []any{
-			map[string]any{"name": "选择代理", "proxies": []any{"自动选择", "外部分组", "自建-线路机"}},
+			map[string]any{"name": "选择代理", "proxies": []any{"外部分组", "自建-线路机"}},
 			map[string]any{"name": "手动选择", "proxies": []any{"自动选择", "外部分组", "自建-线路机"}},
 			map[string]any{"name": "外部分组", "proxies": []any{"ExternalNode1"}},
-			map[string]any{"name": "AI服务", "proxies": []any{"选择代理", "自建-线路机"}},
-			map[string]any{"name": "金融服务", "proxies": []any{"选择代理", "自建-线路机"}},
+			map[string]any{"name": "自动选择", "proxies": []any{"ExternalNode1", "UK-Node-1"}},
+			map[string]any{"name": "英国节点", "proxies": []any{"自建-线路机", "自建-美国和美国家宽", "UK-Node-1"}},
+			map[string]any{"name": "AI服务", "proxies": []any{"自建-线路机", "自建-美国和美国家宽", "ExternalNode1"}},
+			map[string]any{"name": "TikTok", "proxies": []any{"自建-线路机", "ExternalNode1"}},
 		},
 	}
 	cfgBytes, _ := json.Marshal(mockCfg)
@@ -319,6 +313,68 @@ console.log(JSON.stringify(processed));
 	}
 	if err := json.Unmarshal(out, &processed); err != nil {
 		t.Fatalf("unmarshal processed: %v", err)
+	}
+
+	// 1. Check topmost groups
+	if len(processed.Groups) < 2 || processed.Groups[0].Name != "选择代理" || processed.Groups[1].Name != "自动选择" {
+		t.Fatalf("expected 选择代理 and 自动选择 at index 0 and 1, got [0]=%s, [1]=%s", processed.Groups[0].Name, processed.Groups[1].Name)
+	}
+
+	// 2. Check 选择代理 inner proxies: 自动选择 first, self groups strictly trailing
+	entryGroup := processed.Groups[0]
+	if len(entryGroup.Proxies) == 0 || entryGroup.Proxies[0] != "自动选择" {
+		t.Fatalf("expected '选择代理' first proxy to be '自动选择', got %v", entryGroup.Proxies)
+	}
+
+	// 3. Check 英国节点 (pure region pool): MUST NOT contain any self groups
+	var ukGroupFound bool
+	for _, g := range processed.Groups {
+		if g.Name == "英国节点" {
+			ukGroupFound = true
+			for _, p := range g.Proxies {
+				if strings.HasPrefix(p, "自建-") || p == "不送中" {
+					t.Fatalf("CRITICAL BUG: '英国节点' node pool still contains self group '%s'!", p)
+				}
+			}
+			if len(g.Proxies) != 1 || g.Proxies[0] != "UK-Node-1" {
+				t.Fatalf("expected 英国节点 to only contain UK-Node-1, got: %v", g.Proxies)
+			}
+		}
+	}
+	if !ukGroupFound {
+		t.Fatalf("expected 英国节点 group in processed groups")
+	}
+
+	// 4. Check external app groups (AI服务, TikTok):
+	// Unified layout: ['自动选择', '选择代理', ...external members, ...self-built groups at tail]
+	for _, g := range processed.Groups {
+		if g.Name == "TikTok" || g.Name == "AI服务" {
+			if len(g.Proxies) < 3 {
+				t.Fatalf("expected external app group '%s' to have at least 3 proxies, got: %v", g.Name, g.Proxies)
+			}
+			if g.Proxies[0] != "自动选择" {
+				t.Fatalf("expected '%s' first proxy to be '自动选择', got: %v", g.Name, g.Proxies[0])
+			}
+			if g.Proxies[1] != "选择代理" {
+				t.Fatalf("expected '%s' second proxy to be '选择代理', got: %v", g.Name, g.Proxies[1])
+			}
+			// Verify that self-built groups are at the tail
+			lastProxy := g.Proxies[len(g.Proxies)-1]
+			if !strings.HasPrefix(lastProxy, "自建-") && lastProxy != "不送中" {
+				t.Fatalf("expected '%s' tail proxy to be self group, got: %s (all: %v)", g.Name, lastProxy, g.Proxies)
+			}
+		}
+	}
+
+	// 5. Check self groups strictly at bottom
+	var seenSelf bool
+	for _, g := range processed.Groups {
+		isSelf := strings.HasPrefix(g.Name, "自建-") || g.Name == "不送中"
+		if isSelf {
+			seenSelf = true
+		} else if seenSelf {
+			t.Fatalf("CRITICAL BUG: non-self group '%s' found AFTER self group! Self groups must be strictly at the end.", g.Name)
+		}
 	}
 
 	for _, g := range processed.Groups {

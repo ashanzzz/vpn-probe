@@ -14,6 +14,18 @@ import (
 
 const managedOperator = "vpn-probe:user-policy-groups"
 
+func isLegacyPollutedOperator(item map[string]any) bool {
+	id, _ := item["id"].(string)
+	name, _ := item["customName"].(string)
+	if id == "ashan_patch_v150" || id == "classify_songzhong_v1" {
+		return true
+	}
+	if strings.Contains(name, "送中与不送中双轨分类") || strings.Contains(name, "送中与不送中") {
+		return true
+	}
+	return false
+}
+
 // Publisher patches a file-level Script Operator LAST, preserving existing
 // conversion/MLKEM operators. It supports differentiated scripts for Q vs ashan.
 type Publisher struct {
@@ -32,13 +44,13 @@ func patchFile(original map[string]any, script string) map[string]any {
 	operations := []map[string]any{}
 	if ops, ok := original["process"].([]any); ok {
 		for _, raw := range ops {
-			if item, ok := raw.(map[string]any); ok && item["customName"] != managedOperator {
+			if item, ok := raw.(map[string]any); ok && item["customName"] != managedOperator && !isLegacyPollutedOperator(item) {
 				operations = append(operations, item)
 			}
 		}
 	} else if ops, ok := original["process"].([]map[string]any); ok {
 		for _, item := range ops {
-			if item["customName"] != managedOperator {
+			if item["customName"] != managedOperator && !isLegacyPollutedOperator(item) {
 				operations = append(operations, item)
 			}
 		}

@@ -83,3 +83,32 @@ proxy-groups:
 		t.Fatalf("expected 'contains residential proxy' in error, got: %v", err)
 	}
 }
+
+func TestPatchFile_PurgesLegacyPollutedOperators(t *testing.T) {
+	mockFile := map[string]any{
+		"name": "Ashan",
+		"process": []any{
+			map[string]any{"id": "conv-1", "customName": "覆写规则与自动分组"},
+			map[string]any{"id": "ashan_patch_v150", "customName": "送中与不送中双轨分类"},
+			map[string]any{"id": "classify_songzhong_v1", "customName": "送中与不送中双轨分类"},
+			map[string]any{"id": "Script Operator", "customName": managedOperator},
+		},
+	}
+
+	patched := patchFile(mockFile, "// new script")
+	ops, ok := patched["process"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected []map[string]any, got %T", patched["process"])
+	}
+
+	if len(ops) != 2 {
+		t.Fatalf("expected exactly 2 operators after purging legacy ops, got %d: %v", len(ops), ops)
+	}
+
+	if ops[0]["customName"] != "覆写规则与自动分组" {
+		t.Fatalf("expected first operator to be 覆写规则与自动分组, got %v", ops[0])
+	}
+	if ops[1]["customName"] != managedOperator {
+		t.Fatalf("expected second operator to be %s, got %v", managedOperator, ops[1])
+	}
+}

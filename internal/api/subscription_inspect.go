@@ -201,29 +201,19 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 		category := "external_default"
 		tags := []string{}
 
-		// Check if it's a self-hosted custom group or 5-group baseline
+		// Check if it's a self-hosted custom group or baseline self group
 		cg, isCustom := customMap[gName]
-		if isCustom {
-			isExt = false
-			category = "self_custom"
-			tags = append(tags, "自建·可配置")
-			if cg.Filter.Countries != nil && len(cg.Filter.Countries) > 0 {
-				tags = append(tags, strings.Join(cg.Filter.Countries, "/"))
-			}
-			if cg.Filter.CleanOnly {
-				tags = append(tags, "干净出口")
-			}
-		} else if strings.HasPrefix(gName, "自建-") || strings.HasPrefix(gName, "自建·") || gName == "不送中" {
+		if strings.HasPrefix(gName, "自建-") || strings.HasPrefix(gName, "自建·") || gName == "不送中" {
 			isExt = false
 			if strings.Contains(gName, "线路") {
 				category = "self_backbone"
 				tags = append(tags, "自建·纯骨干")
-			} else if strings.Contains(gName, "家宽") {
-				category = "self_resi"
-				tags = append(tags, "自建·家宽全家桶")
 			} else if strings.Contains(gName, "其他") {
 				category = "self_resi"
 				tags = append(tags, "自建·其他家宽")
+			} else if strings.Contains(gName, "家宽") {
+				category = "self_resi"
+				tags = append(tags, "自建·家宽全家桶")
 			} else if strings.Contains(gName, "送中") && gName != "不送中" {
 				category = "self_china_leak"
 				tags = append(tags, "自建·送中隔离")
@@ -233,6 +223,24 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 			} else {
 				category = "self_custom"
 				tags = append(tags, "自建·内部组")
+			}
+			if isCustom {
+				if cg.Filter.Countries != nil && len(cg.Filter.Countries) > 0 {
+					tags = append(tags, strings.Join(cg.Filter.Countries, "/"))
+				}
+				if cg.Filter.CleanOnly {
+					tags = append(tags, "干净出口")
+				}
+			}
+		} else if isCustom {
+			isExt = false
+			category = "self_custom"
+			tags = append(tags, "自建·可配置")
+			if cg.Filter.Countries != nil && len(cg.Filter.Countries) > 0 {
+				tags = append(tags, strings.Join(cg.Filter.Countries, "/"))
+			}
+			if cg.Filter.CleanOnly {
+				tags = append(tags, "干净出口")
 			}
 		} else {
 			// External groups

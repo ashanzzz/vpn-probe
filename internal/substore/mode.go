@@ -617,6 +617,11 @@ func (c *Client) AuditFileGroups(ctx context.Context, fileName string) (*GroupAu
 		return nil, fmt.Errorf("failed to fetch file: %w", lastErr)
 	}
 
+	return AuditFileYAML(bodyBytes, fileName)
+}
+
+// AuditFileYAML parses Clash YAML bytes and audits policy groups for dangling references
+func AuditFileYAML(bodyBytes []byte, fileName string) (*GroupAuditResult, error) {
 	var parsed struct {
 		Proxies []map[string]any `yaml:"proxies"`
 		Groups  []struct {

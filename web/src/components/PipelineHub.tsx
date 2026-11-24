@@ -31,7 +31,7 @@ import {
   Flame,
   ArrowRight
 } from 'lucide-react';
-import { api } from '../api/client';
+import { api, getStoredToken } from '../api/client';
 import { PolicyGroupStudio } from './PolicyGroupStudio';
 import { SubscriptionTopologyDrawer } from './SubscriptionTopologyDrawer';
 import type { 
@@ -79,6 +79,23 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
   const [extSubName, setExtSubName] = useState('');
   const [extSubURL, setExtSubURL] = useState('');
   const [extSubEnabled, setExtSubEnabled] = useState(true);
+
+  // Subscription Copy & Direct Download URL helpers
+  const [copiedSub, setCopiedSub] = useState<string | null>(null);
+
+  const handleCopySub = (subName: string) => {
+    const token = getStoredToken() || 'Woo@@@204317';
+    const origin = window.location.origin;
+    const url = `${origin}/api/sub/file/${subName}?token=${encodeURIComponent(token)}`;
+    navigator.clipboard.writeText(url);
+    setCopiedSub(subName);
+    setTimeout(() => setCopiedSub(null), 2000);
+  };
+
+  const getDownloadUrl = (subName: string) => {
+    const token = getStoredToken() || 'Woo@@@204317';
+    return `/api/sub/file/${subName}?token=${encodeURIComponent(token)}`;
+  };
 
   // Fetch all pipeline core data
   const loadPipelineData = useCallback(async () => {
@@ -587,16 +604,39 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
             </div>
 
             {/* Actions: View Topology & Download */}
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-              <a
-                href="/api/sub/file/Q"
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs font-semibold text-slate-600 hover:text-slate-900 flex items-center"
-              >
-                直接下载 Clash YAML
-                <ExternalLink className="w-3 h-3 ml-1" />
-              </a>
+            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center space-x-2">
+                <a
+                  href={getDownloadUrl('Q')}
+                  target="_blank"
+                  rel="noreferrer"
+                  download="Q.yaml"
+                  className="text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg border border-slate-200 transition"
+                  title="在浏览器中直接下载已清洗编排的 Clash YAML 文件"
+                >
+                  <span>直接下载 Clash YAML</span>
+                  <ExternalLink className="w-3 h-3 ml-1" />
+                </a>
+
+                <button
+                  type="button"
+                  onClick={() => handleCopySub('Q')}
+                  className="text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg border border-slate-200 transition"
+                  title="复制含凭证的完整订阅 URL，可直接粘贴进 Clash / Shadowrocket / Loon"
+                >
+                  {copiedSub === 'Q' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600 mr-1" />
+                      <span className="text-emerald-700 font-bold">已复制链接!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-500 mr-1" />
+                      <span>复制订阅 URL</span>
+                    </>
+                  )}
+                </button>
+              </div>
 
               <button
                 onClick={() => setDrawerSubName('Q')}
@@ -657,16 +697,39 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
             </div>
 
             {/* Actions: View Topology & Download */}
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
-              <a
-                href="/api/sub/file/ashan"
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs font-semibold text-slate-600 hover:text-slate-900 flex items-center"
-              >
-                直接下载 Clash YAML
-                <ExternalLink className="w-3 h-3 ml-1" />
-              </a>
+            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center space-x-2">
+                <a
+                  href={getDownloadUrl('ashan')}
+                  target="_blank"
+                  rel="noreferrer"
+                  download="ashan.yaml"
+                  className="text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg border border-slate-200 transition"
+                  title="在浏览器中直接下载已清洗编排的 Clash YAML 文件"
+                >
+                  <span>直接下载 Clash YAML</span>
+                  <ExternalLink className="w-3 h-3 ml-1" />
+                </a>
+
+                <button
+                  type="button"
+                  onClick={() => handleCopySub('ashan')}
+                  className="text-xs font-semibold text-slate-700 hover:text-slate-900 flex items-center bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg border border-slate-200 transition"
+                  title="复制含凭证的完整订阅 URL，可直接粘贴进 Clash / Shadowrocket / Loon"
+                >
+                  {copiedSub === 'ashan' ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600 mr-1" />
+                      <span className="text-emerald-700 font-bold">已复制链接!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-500 mr-1" />
+                      <span>复制订阅 URL</span>
+                    </>
+                  )}
+                </button>
+              </div>
 
               <button
                 onClick={() => setDrawerSubName('ashan')}

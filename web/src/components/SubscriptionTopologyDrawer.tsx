@@ -53,6 +53,7 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
   const [verifyData, setVerifyData] = useState<VerifySubscriptionResponse | null>(null);
   const [atoms, setAtoms] = useState<AtomNode[]>([]);
   const [loading, setLoading] = useState(false);
+  const [verifyLoading, setVerifyLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Active Tab: 'groups' | 'verify' | 'rules'
@@ -91,22 +92,34 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
     setLoading(true);
     setError(null);
     try {
-      const [res, atomsRes, vRes] = await Promise.all([
+      // 1. 并发请求内存快照拓扑与原子节点库 (瞬时返回，<250ms)
+      const [res, atomsRes] = await Promise.all([
         api.getSubscriptionInspect(name),
         api.getAtoms({}).catch(() => ({ atoms: [], count: 0, status: '' })),
-        api.verifySubscription(name).catch(() => null),
       ]);
       setData(res);
       setAtoms(atomsRes.atoms || []);
-      if (vRes) setVerifyData(vRes);
       // Auto-expand the first self-hosted group if present
       const firstSelf = res.groups.find(g => !g.is_external);
       if (firstSelf) {
         setExpandedGroups(new Set([firstSelf.name]));
       }
+      setLoading(false); // 立即解锁 UI，展示策略分组矩阵！
+
+      // 2. 异步在后台发起双域名与质量验证 (不阻塞抽屉拓扑展示)
+      setVerifyLoading(true);
+      api.verifySubscription(name)
+        .then(vRes => {
+          if (vRes) setVerifyData(vRes);
+        })
+        .catch(err => {
+          console.warn('verifySubscription in background failed:', err);
+        })
+        .finally(() => {
+          setVerifyLoading(false);
+        });
     } catch (err: any) {
       setError(err.message || '加载订阅拓扑失败');
-    } finally {
       setLoading(false);
     }
   }, []);
@@ -374,13 +387,15 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
           >
             <ShieldCheck className="w-4 h-4" />
             <span>双域名与质量验证 (Verify Report)</span>
-            {verifyData && (
+            {verifyLoading ? (
+              <RefreshCw className="w-3 h-3 animate-spin text-indigo-500 ml-1" />
+            ) : verifyData ? (
               <span className={`text-2xs px-1.5 py-0.5 rounded-full font-bold ${
                 verifyData.all_domains_reachable ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'
               }`}>
                 {verifyData.all_domains_reachable ? '双绿灯' : '连通异常'}
               </span>
-            )}
+            ) : null}
           </button>
 
           <button

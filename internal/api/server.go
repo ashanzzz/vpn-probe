@@ -1597,8 +1597,17 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 
 	ctx := c.Context()
 
-	// 1. 订阅策略组与节点引用深度审计 (统计究竟有多少个分组，每个分组有几个连接)
-	audit, err := s.substoreClient.AuditFileGroups(ctx, fileName)
+	// 1. 订阅策略组与节点引用深度审计 (优先从本地内存快照解析，毫秒级直出；缺失时调用远端 SubStore)
+	var audit *substore.GroupAuditResult
+	var err error
+	if s.snapshotMgr != nil {
+		if raw, _, exists := s.snapshotMgr.GetSnapshot(fileName); exists && len(raw) > 0 {
+			audit, err = substore.AuditFileYAML(raw, fileName)
+		}
+	}
+	if audit == nil && s.substoreClient != nil {
+		audit, err = s.substoreClient.AuditFileGroups(ctx, fileName)
+	}
 	if audit == nil {
 		auditErrMsg := "unknown error"
 		if err != nil {

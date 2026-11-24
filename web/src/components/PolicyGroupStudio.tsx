@@ -18,7 +18,10 @@ import {
   ExternalLink,
   ChevronDown,
   ChevronUp,
-  Info
+  Info,
+  Copy,
+  FileCode,
+  Terminal
 } from 'lucide-react';
 import { api } from '../api/client';
 import type { CustomGroupDef, GroupFilter, AtomNode, PublishJob } from '../types';
@@ -106,6 +109,17 @@ export const PolicyGroupStudio: React.FC = () => {
   // 是否展开外置策略联动卡片
   const [showExtMatrix, setShowExtMatrix] = useState(false);
 
+  // 是否展开底层驱动脚本与外部策略面板
+  const [showScriptHub, setShowScriptHub] = useState(false);
+  const [copiedScriptKey, setCopiedScriptKey] = useState<string | null>(null);
+  const [manifest, setManifest] = useState<any>(null);
+
+  const handleCopy = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedScriptKey(key);
+    setTimeout(() => setCopiedScriptKey(null), 2000);
+  };
+
   // 节点元数据打标状态
   const [metadataNode, setMetadataNode] = useState<AtomNode | null>(null);
   const [metadataType, setMetadataType] = useState('');
@@ -113,15 +127,17 @@ export const PolicyGroupStudio: React.FC = () => {
 
   const load = useCallback(async () => {
     try {
-      const [g, a, j] = await Promise.all([
+      const [g, a, j, m] = await Promise.all([
         api.getCustomGroups(),
         api.getAtoms({}).catch(() => ({ atoms: [], count: 0, status: '' })),
         api.latestPublishJob().catch(() => null),
+        api.getSubStoreManifest().catch(() => null),
       ]);
       setGroups(g.groups || []);
       setAtoms(a.atoms || []);
       setIsDirty(false);
       if (j && j.id) setJob(j);
+      if (m) setManifest(m);
     } catch (e: any) { 
       setError(e.message || '读取失败'); 
     }
@@ -370,14 +386,198 @@ export const PolicyGroupStudio: React.FC = () => {
           </div>
         </div>
 
-        <button
-          onClick={() => setShowExtMatrix(!showExtMatrix)}
-          className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold flex items-center space-x-1"
-        >
-          <span>查看外置应用分流注入规则</span>
-          {showExtMatrix ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setShowScriptHub(!showScriptHub)}
+            className={`text-xs font-semibold flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border transition ${
+              showScriptHub
+                ? 'bg-blue-50 text-blue-700 border-blue-300 shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 border-slate-200 bg-white'
+            }`}
+            title="查看驱动 Sub-Store 的外部策略覆写脚本与内部双轨编排算子直链"
+          >
+            <FileCode size={14} className="text-blue-600" />
+            <span>底层脚本与外部策略直通</span>
+            {showScriptHub ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+
+          <button
+            onClick={() => setShowExtMatrix(!showExtMatrix)}
+            className={`text-xs font-semibold flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border transition ${
+              showExtMatrix
+                ? 'bg-indigo-50 text-indigo-700 border-indigo-300 shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 border-slate-200 bg-white'
+            }`}
+          >
+            <Zap size={14} className="text-indigo-600" />
+            <span>查看外置应用分流注入规则</span>
+            {showExtMatrix ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+        </div>
       </div>
+
+      {/* 2.5 Bottom Pipeline Scripts & External Strategy Hub */}
+      {showScriptHub && (
+        <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white rounded-2xl p-5 border border-slate-700 shadow-sm space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/80 pb-3">
+            <div className="flex items-center space-x-2.5">
+              <Terminal className="w-5 h-5 text-emerald-400" />
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>Sub-Store 底层策略驱动脚本与外部策略直通看板</span>
+                  <span className="text-2xs font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    生产实时在线
+                  </span>
+                </h4>
+                <p className="text-2xs text-slate-400 mt-0.5">
+                  透明暴露 Sub-Store 运行的外部策略覆写脚本、自建防送中动态编排算子与双轨生产订阅直链
+                </p>
+              </div>
+            </div>
+            <div className="text-2xs font-mono text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded-lg border border-slate-700">
+              中枢节点: free.1992004.xyz (156.231.113.91)
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {/* Card 1: 外部策略与商业分流覆写脚本 */}
+            <div className="bg-slate-800/70 rounded-xl p-3.5 border border-slate-700/80 flex flex-col justify-between space-y-3">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-2xs font-semibold px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                    外部策略源 · 规则覆写
+                  </span>
+                  <span className="text-2xs font-mono text-slate-400">v121</span>
+                </div>
+                <div className="font-bold text-xs text-white">convert_openclash_v2.js</div>
+                <p className="text-2xs text-slate-300 leading-relaxed">
+                  驱动外部商业机场节点清洗、OpenClash / Mihomo 规则覆写、全球国别分流与标准业务组自动构建。
+                </p>
+                <div className="bg-slate-900/80 rounded-lg p-2 border border-slate-800 font-mono text-2xs text-slate-300 break-all select-all">
+                  https://free.1992004.xyz/convert_openclash_v2.js
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-700/60">
+                <button
+                  type="button"
+                  onClick={() => handleCopy('https://free.1992004.xyz/convert_openclash_v2.js?v=121#grouptype=0&threshold=1&full=true', 'ext_script')}
+                  className="px-2.5 py-1 text-2xs font-semibold rounded bg-blue-600 hover:bg-blue-700 text-white transition flex items-center space-x-1"
+                >
+                  {copiedScriptKey === 'ext_script' ? (
+                    <>
+                      <Check size={12} className="text-white" />
+                      <span>已复制带参直链!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={12} />
+                      <span>复制带参直链</span>
+                    </>
+                  )}
+                </button>
+                <a
+                  href="https://free.1992004.xyz/convert_openclash_v2.js"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-2xs text-slate-400 hover:text-white flex items-center space-x-1 underline"
+                >
+                  <span>查看脚本</span>
+                  <ExternalLink size={11} />
+                </a>
+              </div>
+            </div>
+
+            {/* Card 2: 内部双轨自建编排与防送中算子 */}
+            <div className="bg-slate-800/70 rounded-xl p-3.5 border border-slate-700/80 flex flex-col justify-between space-y-3">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-2xs font-semibold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    自建策略源 · 动态编排
+                  </span>
+                  <span className="text-2xs font-mono text-slate-400">v3.0</span>
+                </div>
+                <div className="font-bold text-xs text-white">classify_songzhong.js (编排算子)</div>
+                <p className="text-2xs text-slate-300 leading-relaxed">
+                  驱动 Google 出口防送中研判、自有骨干+懒猫家宽网状链式中继、自建 8 大组置底与外部业务组纯净注入。
+                </p>
+                <div className="bg-slate-900/80 rounded-lg p-2 border border-slate-800 font-mono text-2xs text-slate-300 break-all select-all">
+                  https://free.1992004.xyz/classify_songzhong.js
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-700/60">
+                <button
+                  type="button"
+                  onClick={() => handleCopy('https://free.1992004.xyz/classify_songzhong.js', 'int_script')}
+                  className="px-2.5 py-1 text-2xs font-semibold rounded bg-emerald-600 hover:bg-emerald-700 text-white transition flex items-center space-x-1"
+                >
+                  {copiedScriptKey === 'int_script' ? (
+                    <>
+                      <Check size={12} className="text-white" />
+                      <span>已复制脚本 URL!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={12} />
+                      <span>复制脚本 URL</span>
+                    </>
+                  )}
+                </button>
+                <a
+                  href="https://free.1992004.xyz/classify_songzhong.js"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-2xs text-slate-400 hover:text-white flex items-center space-x-1 underline"
+                >
+                  <span>查看脚本</span>
+                  <ExternalLink size={11} />
+                </a>
+              </div>
+            </div>
+
+            {/* Card 3: 双轨核心生产订阅直链 */}
+            <div className="bg-slate-800/70 rounded-xl p-3.5 border border-slate-700/80 flex flex-col justify-between space-y-3">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-2xs font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                    双轨订阅输出 · 高防分发
+                  </span>
+                  <span className="text-2xs font-mono text-slate-400">Clash YAML</span>
+                </div>
+                <div className="font-bold text-xs text-white">Q 极速轻量 vs ashan 全栈旗舰</div>
+                <div className="space-y-1.5 text-2xs">
+                  <div className="flex items-center justify-between bg-slate-900/60 p-1.5 rounded border border-slate-800">
+                    <span className="font-mono text-blue-300 font-semibold">Q (0 住宅骨干):</span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy('https://free.1992004.xyz/share/file/Q?token=13602004317', 'sub_q')}
+                      className="text-2xs font-mono text-slate-400 hover:text-white underline ml-2"
+                    >
+                      {copiedScriptKey === 'sub_q' ? '已复制 Q 链接' : '复制 Q 订阅'}
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between bg-slate-900/60 p-1.5 rounded border border-slate-800">
+                    <span className="font-mono text-purple-300 font-semibold">ashan (全家桶):</span>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy('https://free.1992004.xyz/share/file/ashan?token=13602004317', 'sub_ashan')}
+                      className="text-2xs font-mono text-slate-400 hover:text-white underline ml-2"
+                    >
+                      {copiedScriptKey === 'sub_ashan' ? '已复制 ashan 链接' : '复制 ashan 订阅'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-700/60 text-2xs text-slate-400">
+                <span>支持直接粘贴至 Clash / Loon / Stash</span>
+                <span className="font-mono text-emerald-400">已就绪</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Notice Banner */}
       {notice && (

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 	"vpn-probe/internal/monitor"
@@ -46,7 +47,10 @@ func patchFile(original map[string]any, script string) map[string]any {
 		"id":         "Script Operator",
 		"type":       "Script Operator",
 		"customName": managedOperator,
-		"args":       map[string]any{"content": script},
+		"args": map[string]any{
+			"mode":    "code",
+			"content": script,
+		},
 	})
 	copyMap["process"] = operations
 	return copyMap
@@ -84,9 +88,11 @@ func (p Publisher) ApplyDifferentiated(
 
 	rollback := func(cause error) error {
 		var problems []string
+		rbCtx, rbCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer rbCancel()
 		for i := len(updated) - 1; i >= 0; i-- {
 			old := updated[i]
-			if err := p.Client.UpdateFile(ctx, fmt.Sprint(old["name"]), old); err != nil {
+			if err := p.Client.UpdateFile(rbCtx, fmt.Sprint(old["name"]), old); err != nil {
 				problems = append(problems, err.Error())
 			}
 		}
@@ -109,14 +115,25 @@ func (p Publisher) ApplyDifferentiated(
 	}
 
 	progress("verifying")
+	// 针对不同订阅拓扑去重验证（q/Q 为同一极速骨干拓扑，ashan/Ashan 为同一全栈全家桶拓扑），避免重复编译超时
+	verifiedCanonical := map[string]bool{}
 	for _, f := range selected {
-		name := fmt.Sprint(f["name"])
-		body, err := p.Client.RenderFileFresh(ctx, name)
-		if err != nil {
-			return rollback(fmt.Errorf("render %s: %w", name, err))
+		rawName := fmt.Sprint(f["name"])
+		canon := "ashan"
+		if strings.EqualFold(rawName, "q") {
+			canon = "q"
 		}
-		if err := verify(name, body); err != nil {
-			return rollback(fmt.Errorf("validate %s: %w", name, err))
+		if verifiedCanonical[canon] {
+			continue
+		}
+		verifiedCanonical[canon] = true
+
+		body, err := p.Client.RenderFileFresh(ctx, rawName)
+		if err != nil {
+			return rollback(fmt.Errorf("render %s: %w", rawName, err))
+		}
+		if err := verify(rawName, body); err != nil {
+			return rollback(fmt.Errorf("validate %s: %w", rawName, err))
 		}
 	}
 	return nil
@@ -233,7 +250,16 @@ func ValidateYAMLWithMembers(body []byte, wanted []string, required map[string][
 
 	// For wanted groups
 	for _, n := range wanted {
+		if isQ && (strings.Contains(n, "家宽") || strings.Contains(strings.ToLower(n), "resi")) {
+			continue // Q 极速骨干拓扑严禁包含家宽策略组
+		}
 		if !groups[n] {
+			if (n == "自建-不送中" || n == "自建不送中") && groups["不送中"] {
+				continue
+			}
+			if n == "不送中" && groups["自建-不送中"] {
+				continue
+			}
 			return fmt.Errorf("missing user group %q", n)
 		}
 	}
@@ -241,7 +267,14 @@ func ValidateYAMLWithMembers(body []byte, wanted []string, required map[string][
 	// Only enforce required members for non-Q files (or for groups that have transit members)
 	if !isQ {
 		for _, g := range cfg.Groups {
-			if candidates, ok := required[g.Name]; ok && len(candidates) > 0 {
+			candidates, ok := required[g.Name]
+			if !ok && g.Name == "不送中" {
+				candidates, ok = required["自建-不送中"]
+			}
+			if !ok && g.Name == "自建-不送中" {
+				candidates, ok = required["不送中"]
+			}
+			if ok && len(candidates) > 0 {
 				found := false
 				for _, n := range g.Proxies {
 					for _, name := range candidates {

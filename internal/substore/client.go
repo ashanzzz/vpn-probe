@@ -28,7 +28,7 @@ func NewClient(cfg *config.SubStoreConfig) *Client {
 	return &Client{
 		cfg: cfg,
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: 90 * time.Second,
 		},
 	}
 }

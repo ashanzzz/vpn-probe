@@ -231,7 +231,7 @@ func (m *Manager) run() {
 				default:
 				}
 				m.set(selected.ID, "running", "", attempt)
-				ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 				done := make(chan struct{})
 				go func() {
 					select {

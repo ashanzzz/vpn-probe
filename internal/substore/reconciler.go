@@ -236,8 +236,10 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 	if cfg == nil || cfg.URL == "" {
 		return fmt.Errorf("substore URL is empty")
 	}
-	baseURL := strings.TrimRight(cfg.URL, "/")
-	endpoint := fmt.Sprintf("%s/api/file/%s", baseURL, url.PathEscape(name))
+	bases := c.candidateBaseURLs()
+	if len(bases) == 0 {
+		bases = []string{strings.TrimRight(cfg.URL, "/")}
+	}
 
 	bodyBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -246,28 +248,36 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 
 	var resp *http.Response
 	var lastErr error
-	for attempt := 1; attempt <= 2; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(bodyBytes))
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		c.setAuth(req)
+	var activeBase string
 
-		resp, lastErr = c.httpClient.Do(req)
-		if lastErr == nil {
-			break
-		}
-		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
-		}
-		if attempt < 2 {
-			logger.Warnf("[SUBSTORE] UpdateFile '%s' attempt %d failed: %v, retrying in 2s...", name, attempt, lastErr)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(2 * time.Second):
+	for _, baseURL := range bases {
+		activeBase = baseURL
+		endpoint := fmt.Sprintf("%s/api/file/%s", baseURL, url.PathEscape(name))
+		for attempt := 1; attempt <= 2; attempt++ {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPatch, endpoint, bytes.NewReader(bodyBytes))
+			if err != nil {
+				return err
 			}
+			req.Header.Set("Content-Type", "application/json")
+			c.setAuth(req)
+
+			resp, lastErr = c.httpClient.Do(req)
+			if lastErr == nil && resp != nil && resp.StatusCode < 500 {
+				break
+			}
+			if resp != nil && resp.Body != nil {
+				resp.Body.Close()
+			}
+			if attempt < 2 {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(1 * time.Second):
+				}
+			}
+		}
+		if lastErr == nil && resp != nil && resp.StatusCode < 500 {
+			break
 		}
 	}
 	if lastErr != nil {
@@ -277,7 +287,7 @@ func (c *Client) UpdateFile(ctx context.Context, name string, payload map[string
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
 		resp.Body.Close()
 		// 文件配置不存在，调用 POST /api/files 创建
-		createEndpoint := fmt.Sprintf("%s/api/files", baseURL)
+		createEndpoint := fmt.Sprintf("%s/api/files", activeBase)
 		postReq, postReqErr := http.NewRequestWithContext(ctx, http.MethodPost, createEndpoint, bytes.NewReader(bodyBytes))
 		if postReqErr != nil {
 			return postReqErr

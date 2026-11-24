@@ -500,6 +500,11 @@ func TestClient_UpdateSubscription_RetryOn5xx(t *testing.T) {
 	var mu sync.Mutex
 
 	retryServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "test-retry-sub") {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
 		mu.Lock()
 		attempts++
 		current := attempts

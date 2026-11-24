@@ -1034,7 +1034,7 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 			continue
 		}
 
-		country := model.ResolveCountry("", targetPart)
+		country := model.ResolveCountry("", chainLabel)
 		switch country {
 		case "US":
 			payload.USResiNodes = append(payload.USResiNodes, ch)

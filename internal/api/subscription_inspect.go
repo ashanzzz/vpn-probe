@@ -308,15 +308,15 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 					if strings.Contains(pName, "链式") || strings.Contains(pName, "➔") {
 						psum.Kind = "chain"
 						psum.IsSelfHosted = true
-						psum.Online = true
+						psum.Online = false
 					} else if strings.Contains(pName, "家宽") {
 						psum.Kind = "residential"
 						psum.IsSelfHosted = true
-						psum.Online = true
+						psum.Online = false
 					} else if strings.Contains(pName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(pName, "Softbank") || strings.Contains(pName, "SoftBank") || strings.Contains(pName, "4837") || strings.Contains(pName, "LAX") || strings.Contains(pName, "洛杉矶") || strings.Contains(pName, "美西") || strings.Contains(pName, "ACCK") || strings.Contains(pName, "-SB") || strings.Contains(pName, "SB-") {
 						psum.Kind = "transit"
 						psum.IsSelfHosted = true
-						psum.Online = true
+						psum.Online = false
 					} else {
 						psum.Kind = "airport"
 					}

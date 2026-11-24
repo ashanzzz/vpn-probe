@@ -81,6 +81,13 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 	result.Name = parsed.Tag
 	logger.Probe("[%s] Starting probe (protocol: %s, is_self: %v)...", parsed.Tag, parsed.Protocol, isSelf)
 
+	var serverHost string
+	var serverPort int
+	if parsed.RawOutbound != nil {
+		serverHost, _ = parsed.RawOutbound["server"].(string)
+		serverPort, _ = parsed.RawOutbound["server_port"].(int)
+	}
+
 	// 2. 启动临时 sing-box 沙箱
 	sandboxCtx, cancel := context.WithTimeout(ctx, timeout+5*time.Second)
 	defer cancel()
@@ -89,8 +96,17 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 	if err != nil {
 		result.Online = false
 		result.OfflineReason = "probe_engine_error"
+		result.StatusText = "【引擎异常】启动沙箱失败"
 		result.ErrorMsg = fmt.Sprintf("launch proxy sandbox failed: %v", err)
 		result.Category = classifier.Classify(isSelf, false, false)
+		result.Diagnostic = &model.DiagnosticInfo{
+			FaultType:       model.FaultProbeEngineError,
+			StatusText:      result.StatusText,
+			TargetIP:        serverHost,
+			TargetPort:      serverPort,
+			ActionType:      "RETRY_PROBE",
+			TroubleshootTip: result.ErrorMsg,
+		}
 		logger.Errorf("[%s] Sandbox launch failed: %v", parsed.Tag, err)
 		return result
 	}
@@ -106,9 +122,6 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 	result.Online = online
 	result.LatencyMs = latency
 
-	serverHost, _ := parsed.RawOutbound["server"].(string)
-	serverPort, _ := parsed.RawOutbound["server_port"].(int)
-
 	if !online {
 		// 校验是否属于本地临时沙箱进程/端口连接被拒 (探针引擎内部故障，而非远端节点故障)
 		// 严格校验是否针对本地环回端口自身的 dial 握手失败，排除远端节点经由 SOCKS 返回的连接拒绝 (如 "unknown error connection refused")
@@ -122,6 +135,14 @@ func (e *Engine) ProbeOne(ctx context.Context, link string, isSelf bool, checkSp
 				result.Category = classifier.Classify(isSelf, false, false)
 				result.StatusText = "【引擎异常】本地沙箱端口连接被拒"
 				result.ErrorMsg = fmt.Sprintf("local sandbox connection refused: %v", err)
+				result.Diagnostic = &model.DiagnosticInfo{
+					FaultType:       model.FaultProbeEngineError,
+					StatusText:      result.StatusText,
+					TargetIP:        serverHost,
+					TargetPort:      serverPort,
+					ActionType:      "RETRY_PROBE",
+					TroubleshootTip: result.ErrorMsg,
+				}
 				logger.Errorf("[%s] Local sandbox loopback connection failed on 127.0.0.1:%d: %v", parsed.Tag, inst.Port, err)
 				return result
 			}

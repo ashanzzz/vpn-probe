@@ -31,6 +31,7 @@ const (
 	FaultTransitRelayDown          FaultType = "transit_relay_down"          // 家宽中转宿主机宕机/网络中断 (Issue #26)
 	FaultResidentialDirectBlocked  FaultType = "residential_direct_blocked"  // 家宽国内直连受阻(境外隧道正常，需中继) (Issue #26)
 	FaultNetworkCongestion         FaultType = "network_congestion"          // 网络拥塞/链路抖动超时 (国内外TCP握手成功但应用层握手超时)
+	FaultProbeEngineError          FaultType = "probe_engine_error"          // 本地探针引擎异常 (本地沙箱启动或端口连接失败)
 )
 
 // DiagnosticInfo 深度故障与被墙诊断信息

@@ -119,7 +119,7 @@ func TestMaskNodeURL(t *testing.T) {
 			omits: []string{"aGVsbG93b3JsZHNlY3JldA=="},
 		},
 		{
-			name:  "Snell with user, psk query and auth",
+			name:  "Snell with user and psk",
 			input: "snell://snellUser:snellSecretPass@1.2.3.4:1234?psk=superSecretPsk123#snell-node",
 			contains: []string{
 				"snell://snellUser:******@1.2.3.4:1234",
@@ -127,6 +127,27 @@ func TestMaskNodeURL(t *testing.T) {
 				"#snell-node",
 			},
 			omits: []string{"snellSecretPass", "superSecretPsk123"},
+		},
+		{
+			name:  "Trojan with Reality pbk and sid",
+			input: "trojan://trojanSecretPassword@45.192.242.72:443?security=reality&sni=aws.amazon.com&pbk=EQeH_abcdefgh123456789&sid=1234abcd#Trojan-Reality",
+			contains: []string{
+				"trojan://******@45.192.242.72:443",
+				"pbk=EQeH****",
+				"sid=****",
+				"#Trojan-Reality",
+			},
+			omits: []string{"trojanSecretPassword", "abcdefgh123456789", "1234abcd"},
+		},
+		{
+			name:  "Hysteria2 with obfs-password",
+			input: "hysteria2://myHy2Password@38.175.222.44:36565?obfs=salamander&obfs-password=myObfsSecretKey#Hy2-Obfs",
+			contains: []string{
+				"hysteria2://******@38.175.222.44:36565",
+				"obfs-password=******",
+				"#Hy2-Obfs",
+			},
+			omits: []string{"myHy2Password", "myObfsSecretKey"},
 		},
 	}
 

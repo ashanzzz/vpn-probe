@@ -385,37 +385,49 @@ func main() {
 		}
 	}
 
-	// 2. 检查自定分组是否存在
-	var requiredCustomGroups []string
+	// 2. 检查自定分组是否存在 (支持最新规范与向后兼容别名)
+	type groupSpec struct {
+		primary string
+		aliases []string
+	}
+	var requiredSpecs []groupSpec
 	if isQ {
 		// Q 订阅遵循 0 住宅硬隔离，仅保留自建骨干与送中隔离箱
-		requiredCustomGroups = []string{
-			"自建-线路机",
-			"自建-送中",
+		requiredSpecs = []groupSpec{
+			{"自建-线路机", []string{"自建-线路分组"}},
+			{"自建-送中", []string{"自建-送中分组"}},
 		}
 		// 严苛验证: Q 订阅绝不允许出现任何家宽策略组
-		for _, forbidden := range []string{"自建-美国和美国家宽", "自建-日本和日本家宽", "自建-其他", "自建-台湾家宽分组", "自建-家宽分组"} {
+		for _, forbidden := range []string{"自建-美国家宽", "自建-美国和美国家宽", "自建-日本家宽", "自建-日本和日本家宽", "自建-其他", "自建-台湾家宽", "自建-台湾家宽分组", "自建-家宽分组"} {
 			if groupNameSet[forbidden] {
 				report.Fail(fmt.Sprintf("Q 订阅违背 0 住宅硬隔离规范: 包含家宽分组【%s】", forbidden))
 			}
 		}
 	} else {
-		requiredCustomGroups = []string{
-			"自建-线路机",
-			"自建-美国和美国家宽",
-			"自建-日本和日本家宽",
-			"自建-其他",
-			"自建-台湾家宽分组",
-			"自建-家宽分组",
-			"自建-送中",
+		requiredSpecs = []groupSpec{
+			{"自建-线路机", []string{"自建-线路分组"}},
+			{"自建-美国家宽", []string{"自建-美国和美国家宽", "自建-美国家宽分组"}},
+			{"自建-日本家宽", []string{"自建-日本和日本家宽", "自建-日本家宽分组"}},
+			{"自建-其他", []string{"自建-其他分组"}},
+			{"自建-台湾家宽", []string{"自建-台湾家宽分组"}},
+			{"自建-家宽分组", []string{"自建-家宽"}},
+			{"自建-送中", []string{"自建-送中分组"}},
 		}
 	}
+
 	missingCustom := 0
-	for _, c := range requiredCustomGroups {
-		if groupNameSet[c] {
-			report.Pass(fmt.Sprintf("自定核心落地分组存在: 【%s】 (池内节点: %d 个)", c, len(groupMap[c].Proxies)))
+	for _, spec := range requiredSpecs {
+		foundName := ""
+		for _, candidate := range append([]string{spec.primary}, spec.aliases...) {
+			if groupNameSet[candidate] {
+				foundName = candidate
+				break
+			}
+		}
+		if foundName != "" {
+			report.Pass(fmt.Sprintf("自定核心落地分组存在: 【%s】 (池内节点: %d 个)", foundName, len(groupMap[foundName].Proxies)))
 		} else {
-			report.Fail(fmt.Sprintf("缺少必须自定落地分组: 【%s】", c))
+			report.Fail(fmt.Sprintf("缺少必须自定落地分组: 【%s】", spec.primary))
 			missingCustom++
 		}
 	}
@@ -430,13 +442,13 @@ func main() {
 		if p == "自建-线路机" || p == "自建-线路分组" {
 			hasTransitInSelect = true
 		}
-		if p == "自建-美国和美国家宽" || p == "自建-美国家宽分组" {
+		if p == "自建-美国家宽" || p == "自建-美国和美国家宽" || p == "自建-美国家宽分组" {
 			hasUSInSelect = true
 		}
-		if p == "自建-日本和日本家宽" || p == "自建-日本家宽分组" {
+		if p == "自建-日本家宽" || p == "自建-日本和日本家宽" || p == "自建-日本家宽分组" {
 			hasJPInSelect = true
 		}
-		if p == "自建-台湾家宽分组" {
+		if p == "自建-台湾家宽" || p == "自建-台湾家宽分组" {
 			hasTWInSelect = true
 		}
 	}
@@ -457,7 +469,7 @@ func main() {
 	aiGroup := groupMap["AI服务"]
 	hasUSInAI := false
 	for _, p := range aiGroup.Proxies {
-		if p == "自建-美国和美国家宽" || p == "自建-美国家宽分组" || (isQ && (p == "自建-美国线路" || p == "自建-线路机")) {
+		if p == "自建-美国家宽" || p == "自建-美国和美国家宽" || p == "自建-美国家宽分组" || (isQ && (p == "自建-美国线路" || p == "自建-线路机")) {
 			hasUSInAI = true
 			break
 		}
@@ -493,7 +505,7 @@ func main() {
 	bahaGroup := groupMap["巴哈姆特"]
 	hasTWInBaha := false
 	for _, p := range bahaGroup.Proxies {
-		if p == "自建-台湾家宽分组" || p == "自建-其他" || p == "自建-其他家宽分组" {
+		if p == "自建-台湾家宽" || p == "自建-台湾家宽分组" || p == "自建-其他" || p == "自建-其他家宽分组" {
 			hasTWInBaha = true
 			break
 		}
@@ -530,72 +542,92 @@ func main() {
 
 	if !isQ {
 		// 2. 全量家宽总池校验
-		allResiGroup := groupMap["自建-家宽分组"]
-		if len(allResiGroup.Proxies) >= 30 {
-			report.Pass(fmt.Sprintf("【自建-家宽分组】全网状中继总池丰满 (共包含 %d 个直连与链式中继节点)", len(allResiGroup.Proxies)))
-		} else if len(allResiGroup.Proxies) > 0 {
-			report.Warn(fmt.Sprintf("【自建-家宽分组】节点数较少 (%d 个), 建议保持全网状中继覆盖", len(allResiGroup.Proxies)))
+		allResiName := "自建-家宽分组"
+		if _, ok := groupMap[allResiName]; !ok {
+			allResiName = "自建-家宽"
+		}
+		if allResiGroup, ok := groupMap[allResiName]; ok {
+			if len(allResiGroup.Proxies) >= 30 {
+				report.Pass(fmt.Sprintf("【自建-家宽分组】全网状中继总池丰满 (共包含 %d 个直连与链式中继节点)", len(allResiGroup.Proxies)))
+			} else if len(allResiGroup.Proxies) > 0 {
+				report.Warn(fmt.Sprintf("【自建-家宽分组】节点数较少 (%d 个), 建议保持全网状中继覆盖", len(allResiGroup.Proxies)))
+			} else {
+				report.Fail("【自建-家宽分组】为空")
+			}
 		} else {
-			report.Fail("【自建-家宽分组】为空")
+			report.Fail("【自建-家宽分组】缺失")
 		}
 
 		// 3. 美区家宽落地纯净度校验 (绝不能混入其他国家)
-		usGroupName := "自建-美国和美国家宽"
+		usGroupName := "自建-美国家宽"
 		if _, ok := groupMap[usGroupName]; !ok {
-			usGroupName = "自建-美国家宽分组"
-		}
-		usGroup := groupMap[usGroupName]
-		wrongInUS := 0
-		for _, p := range usGroup.Proxies {
-			if p == "DIRECT" {
-				continue
-			}
-			cc := getLandingCountry(p)
-			if cc != "US" {
-				wrongInUS++
-				report.Fail(fmt.Sprintf("【%s】混入非美区落地节点: %s (判定落地: %s)", usGroupName, p, cc))
+			usGroupName = "自建-美国和美国家宽"
+			if _, ok2 := groupMap[usGroupName]; !ok2 {
+				usGroupName = "自建-美国家宽分组"
 			}
 		}
-		if wrongInUS == 0 && len(usGroup.Proxies) > 0 {
-			report.Pass(fmt.Sprintf("【%s】100%% 纯净美区落地 (共 %d 个美区节点, 零跨国污染)", usGroupName, len(usGroup.Proxies)))
+		if usGroup, ok := groupMap[usGroupName]; ok {
+			wrongInUS := 0
+			for _, p := range usGroup.Proxies {
+				if p == "DIRECT" {
+					continue
+				}
+				cc := getLandingCountry(p)
+				if cc != "US" {
+					wrongInUS++
+					report.Fail(fmt.Sprintf("【%s】混入非美区落地节点: %s (判定落地: %s)", usGroupName, p, cc))
+				}
+			}
+			if wrongInUS == 0 && len(usGroup.Proxies) > 0 {
+				report.Pass(fmt.Sprintf("【%s】100%% 纯净美区落地 (共 %d 个美区节点, 零跨国污染)", usGroupName, len(usGroup.Proxies)))
+			}
 		}
 
 		// 4. 日区家宽落地纯净度校验 (重点排查历史 BUG: 东京拉美国家宽错配)
-		jpGroupName := "自建-日本和日本家宽"
+		jpGroupName := "自建-日本家宽"
 		if _, ok := groupMap[jpGroupName]; !ok {
-			jpGroupName = "自建-日本家宽分组"
-		}
-		jpGroup := groupMap[jpGroupName]
-		wrongInJP := 0
-		for _, p := range jpGroup.Proxies {
-			if p == "DIRECT" {
-				continue
-			}
-			cc := getLandingCountry(p)
-			if cc != "JP" {
-				wrongInJP++
-				report.Fail(fmt.Sprintf("【%s】混入非日区落地节点: %s (判定落地: %s)", jpGroupName, p, cc))
+			jpGroupName = "自建-日本和日本家宽"
+			if _, ok2 := groupMap[jpGroupName]; !ok2 {
+				jpGroupName = "自建-日本家宽分组"
 			}
 		}
-		if wrongInJP == 0 && len(jpGroup.Proxies) > 0 {
-			report.Pass(fmt.Sprintf("【%s】100%% 纯净日区落地 (共 %d 个日区节点, 历史东京拉美家宽错配已彻底根除!)", jpGroupName, len(jpGroup.Proxies)))
+		if jpGroup, ok := groupMap[jpGroupName]; ok {
+			wrongInJP := 0
+			for _, p := range jpGroup.Proxies {
+				if p == "DIRECT" {
+					continue
+				}
+				cc := getLandingCountry(p)
+				if cc != "JP" {
+					wrongInJP++
+					report.Fail(fmt.Sprintf("【%s】混入非日区落地节点: %s (判定落地: %s)", jpGroupName, p, cc))
+				}
+			}
+			if wrongInJP == 0 && len(jpGroup.Proxies) > 0 {
+				report.Pass(fmt.Sprintf("【%s】100%% 纯净日区落地 (共 %d 个日区节点, 历史东京拉美家宽错配已彻底根除!)", jpGroupName, len(jpGroup.Proxies)))
+			}
 		}
 
 		// 5. 台湾家宽落地纯净度校验
-		twGroup := groupMap["自建-台湾家宽分组"]
-		wrongInTW := 0
-		for _, p := range twGroup.Proxies {
-			if p == "DIRECT" {
-				continue
-			}
-			cc := getLandingCountry(p)
-			if cc != "TW" {
-				wrongInTW++
-				report.Fail(fmt.Sprintf("【自建-台湾家宽分组】混入非台区落地节点: %s", p))
-			}
+		twGroupName := "自建-台湾家宽"
+		if _, ok := groupMap[twGroupName]; !ok {
+			twGroupName = "自建-台湾家宽分组"
 		}
-		if wrongInTW == 0 && len(twGroup.Proxies) > 0 {
-			report.Pass(fmt.Sprintf("【自建-台湾家宽分组】100%% 纯净台湾落地 (包含台湾直连与多专线拉台家宽中继: %d 个节点)", len(twGroup.Proxies)))
+		if twGroup, ok := groupMap[twGroupName]; ok {
+			wrongInTW := 0
+			for _, p := range twGroup.Proxies {
+				if p == "DIRECT" {
+					continue
+				}
+				cc := getLandingCountry(p)
+				if cc != "TW" {
+					wrongInTW++
+					report.Fail(fmt.Sprintf("【%s】混入非台区落地节点: %s", twGroupName, p))
+				}
+			}
+			if wrongInTW == 0 && len(twGroup.Proxies) > 0 {
+				report.Pass(fmt.Sprintf("【%s】100%% 纯净台湾落地 (包含台湾直连与多专线拉台家宽中继: %d 个节点)", twGroupName, len(twGroup.Proxies)))
+			}
 		}
 	} else {
 		// Q 订阅 0 住宅硬隔离核验

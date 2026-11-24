@@ -372,9 +372,9 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 
 	transitStat := &CategoryStat{DisplayName: "自建-线路机"}
 	allResiStat := &CategoryStat{DisplayName: "自建-家宽分组"}
-	usStat := &CategoryStat{Country: "US", DisplayName: "自建-美国和美国家宽"}
-	jpStat := &CategoryStat{Country: "JP", DisplayName: "自建-日本和日本家宽"}
-	twStat := &CategoryStat{Country: "TW", DisplayName: "自建-台湾家宽分组"}
+	usStat := &CategoryStat{Country: "US", DisplayName: "自建-美国家宽"}
+	jpStat := &CategoryStat{Country: "JP", DisplayName: "自建-日本家宽"}
+	twStat := &CategoryStat{Country: "TW", DisplayName: "自建-台湾家宽"}
 	otherStat := &CategoryStat{Country: "OTHER", DisplayName: "自建-其他"}
 	var chinaLeaks []model.AtomNode
 
@@ -467,9 +467,9 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 			"external":       externalStat, // 外部分组
 			"residential":    allResiStat,  // 自建-家宽分组 (全量自建家宽池)
 			"transit":        transitStat,  // 自建-线路机
-			"us_resi":        usStat,       // 自建-美国和美国家宽
-			"jp_resi":        jpStat,       // 自建-日本和日本家宽
-			"tw_resi":        twStat,       // 自建-台湾家宽分组
+			"us_resi":        usStat,       // 自建-美国家宽
+			"jp_resi":        jpStat,       // 自建-日本家宽
+			"tw_resi":        twStat,       // 自建-台湾家宽
 			"other_resi":     otherStat,    // 自建-其他
 			"china_leaks":    chinaLeaks,   // 自建-送中
 			// 规范干净组命名与兼容旧字段

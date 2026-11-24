@@ -944,7 +944,7 @@ export const SubStoreHub: React.FC = () => {
             {categories && (
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div className="p-3 bg-blue-50/50 border border-blue-200 rounded-lg">
-                  <div className="text-2xs font-bold text-blue-800">🇺🇸 美国与美国家宽 (ashan-us-resi)</div>
+                  <div className="text-2xs font-bold text-blue-800">🇺🇸 自建-美国家宽 (ashan-us-resi)</div>
                   <div className="text-lg font-black text-blue-900 mt-1">
                     {categories.categories.us?.total_clean_count || 0}
                     <span className="text-2xs font-normal text-blue-700 ml-1">干净节点</span>
@@ -957,7 +957,7 @@ export const SubStoreHub: React.FC = () => {
                 </div>
 
                 <div className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-lg">
-                  <div className="text-2xs font-bold text-emerald-800">🇯🇵 日本与日本家宽 (ashan-jp-resi)</div>
+                  <div className="text-2xs font-bold text-emerald-800">🇯🇵 自建-日本家宽 (ashan-jp-resi)</div>
                   <div className="text-lg font-black text-emerald-900 mt-1">
                     {categories.categories.jp?.total_clean_count || 0}
                     <span className="text-2xs font-normal text-emerald-700 ml-1">干净节点</span>
@@ -1012,8 +1012,8 @@ export const SubStoreHub: React.FC = () => {
                   className="px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono font-semibold bg-white text-slate-800 focus:ring-2 focus:ring-blue-600 focus:outline-none"
                 >
                   <option value="ashan-transit">ashan-transit (自建-高速骨干线路机)</option>
-                  <option value="ashan-us-resi">ashan-us-resi (自建-美国和美国家宽)</option>
-                  <option value="ashan-jp-resi">ashan-jp-resi (自建-日本和日本家宽)</option>
+                  <option value="ashan-us-resi">ashan-us-resi (自建-美国家宽)</option>
+                  <option value="ashan-jp-resi">ashan-jp-resi (自建-日本家宽)</option>
                   <option value="ashan-other">ashan-other (自建-其他区域)</option>
                   <option value="ashan-china-leak">ashan-china-leak (自建-送中隔离节点)</option>
                   <option value="ashan-master">ashan-master (全量全家桶总集合)</option>

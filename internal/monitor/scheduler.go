@@ -971,7 +971,7 @@ func ClassifyIntoFiveGroups(transits []*model.NodeProbeResult, resis []*model.No
 		}
 	}
 
-	// 4.2 家宽直连归类 (自建-美国和美国家宽 / 自建-日本和日本家宽)
+	// 4.2 家宽直连归类 (自建-美国家宽 / 自建-日本家宽)
 	uniqueResis := deduplicateNodeResults(resis)
 	for _, r := range uniqueResis {
 		if r == nil || leakURLs[r.OriginalURL] {

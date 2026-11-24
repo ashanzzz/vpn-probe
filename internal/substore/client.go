@@ -427,8 +427,8 @@ func (c *Client) SyncFiveGroups(ctx context.Context, payload model.FiveGroupPayl
 		Nodes       []string
 	}{
 		{"ashan-transit", "自建-线路机", payload.TransitNodes},
-		{"ashan-us-resi", "自建-美国和美国家宽", payload.USResiNodes},
-		{"ashan-jp-resi", "自建-日本和日本家宽", payload.JPResiNodes},
+		{"ashan-us-resi", "自建-美国家宽", payload.USResiNodes},
+		{"ashan-jp-resi", "自建-日本家宽", payload.JPResiNodes},
 		{"ashan-other", "自建-其他", payload.OtherNodes},
 		{"ashan-china-leak", "自建-送中", payload.ChinaLeakNodes},
 	}

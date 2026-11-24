@@ -48,8 +48,11 @@ const asText = (s?: string[]) => (s || []).join(', ');
 // 内置核心基准组的标准名称清单 (包含 ashan 8 大组与 Q 纯骨干组)
 const BASELINE_GROUP_NAMES = new Set([
   '自建-线路机',
+  '自建-美国家宽',
   '自建-美国和美国家宽',
+  '自建-日本家宽',
   '自建-日本和日本家宽',
+  '自建-台湾家宽',
   '自建-台湾家宽分组',
   '自建-其他',
   '自建-家宽分组',
@@ -64,12 +67,12 @@ const BASELINE_GROUP_NAMES = new Set([
 const EXTERNAL_APP_INJECTIONS = [
   {
     app: 'AI服务 (OpenAI / Claude / Copilot)',
-    preferred: ['自建-美国和美国家宽', '自建-家宽分组', '自建-线路机'],
+    preferred: ['自建-美国家宽', '自建-家宽分组', '自建-线路机'],
     desc: '高防风控业务：优先调度美国家宽纯净出口，保障 ChatGPT 4o / Claude 3.7 解锁',
   },
   {
     app: 'TikTok (国际版抖音)',
-    preferred: ['自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组'],
+    preferred: ['自建-美国家宽', '自建-日本家宽', '自建-台湾家宽'],
     desc: '强风控业务：按地区智能选用日/美/台原生家宽，避免被标记或封锁',
   },
   {
@@ -79,17 +82,17 @@ const EXTERNAL_APP_INJECTIONS = [
   },
   {
     app: 'Netflix / Disney+ / HBO',
-    preferred: ['自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组', '自建-家宽分组'],
+    preferred: ['自建-美国家宽', '自建-日本家宽', '自建-台湾家宽', '自建-家宽分组'],
     desc: '流媒体解锁：优先全量日美原生住宅家宽，享受最高清无拦截串流',
   },
   {
     app: '巴哈姆特 (动画疯)',
-    preferred: ['自建-台湾家宽分组'],
+    preferred: ['自建-台湾家宽'],
     desc: '台区专享：仅限自建台湾中华电信 HiNet 家宽直连或专线链式',
   },
   {
     app: 'Spotify / 音乐串流',
-    preferred: ['自建-美国和美国家宽', '自建-日本和日本家宽', '自建-台湾家宽分组'],
+    preferred: ['自建-美国家宽', '自建-日本家宽', '自建-台湾家宽'],
     desc: '跨区聆听：纯净原生 IP 锁定，避免频繁弹登录风控',
   },
 ];
@@ -837,7 +840,7 @@ export const PolicyGroupStudio: React.FC = () => {
                 className={inputClass} 
                 value={form.display_name} 
                 onChange={e => setForm({ ...form, display_name: e.target.value })} 
-                placeholder="例如: 自建-美国和美国家宽" 
+                placeholder="例如: 自建-美国家宽" 
               />
             </label>
 

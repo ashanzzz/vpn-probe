@@ -215,7 +215,7 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 		},
 		{
 			Name:        "ashan-us-resi",
-			DisplayName: "自建-美国和美国家宽",
+			DisplayName: "自建-美国家宽",
 			Enabled:     true,
 			Type:        "url-test",
 			Order:       20,
@@ -223,13 +223,13 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 			Filter: GroupFilter{
 				Mode:      "filter",
 				Countries: []string{"US"},
-				Kinds:     []string{"transit", "residential", "chain"},
+				Kinds:     []string{"residential", "chain"},
 				CleanOnly: true,
 			},
 		},
 		{
 			Name:        "ashan-jp-resi",
-			DisplayName: "自建-日本和日本家宽",
+			DisplayName: "自建-日本家宽",
 			Enabled:     true,
 			Type:        "url-test",
 			Order:       30,
@@ -237,13 +237,13 @@ func DefaultCustomGroups(profile ...string) []CustomGroupDef {
 			Filter: GroupFilter{
 				Mode:      "filter",
 				Countries: []string{"JP"},
-				Kinds:     []string{"transit", "residential", "chain"},
+				Kinds:     []string{"residential", "chain"},
 				CleanOnly: true,
 			},
 		},
 		{
 			Name:        "ashan-tw-resi",
-			DisplayName: "自建-台湾家宽分组",
+			DisplayName: "自建-台湾家宽",
 			Enabled:     true,
 			Type:        "url-test",
 			Order:       40,

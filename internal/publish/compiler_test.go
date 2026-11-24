@@ -216,7 +216,7 @@ func TestCompileScript_PreservesUserGroupsInOtherProxyGroups(t *testing.T) {
 	script, err := CompileScript([]model.CustomGroupDef{
 		{
 			Name:        "ashan-tw-resi",
-			DisplayName: "自建-台湾家宽分组",
+			DisplayName: "自建-台湾家宽",
 			Enabled:     true,
 			Type:        "select",
 			AddToEntry:  true,
@@ -287,8 +287,8 @@ func TestNodeProcessConfigAcyclic(t *testing.T) {
 			map[string]any{"name": "手动选择", "proxies": []any{"自动选择", "外部分组", "自建-线路机"}},
 			map[string]any{"name": "外部分组", "proxies": []any{"ExternalNode1"}},
 			map[string]any{"name": "自动选择", "proxies": []any{"ExternalNode1", "UK-Node-1"}},
-			map[string]any{"name": "英国节点", "proxies": []any{"自建-线路机", "自建-美国和美国家宽", "UK-Node-1"}},
-			map[string]any{"name": "AI服务", "proxies": []any{"自建-线路机", "自建-美国和美国家宽", "ExternalNode1"}},
+			map[string]any{"name": "英国节点", "proxies": []any{"自建-线路机", "自建-美国家宽", "UK-Node-1"}},
+			map[string]any{"name": "AI服务", "proxies": []any{"自建-线路机", "自建-美国家宽", "ExternalNode1"}},
 			map[string]any{"name": "TikTok", "proxies": []any{"自建-线路机", "ExternalNode1"}},
 		},
 	}

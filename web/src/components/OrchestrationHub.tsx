@@ -528,7 +528,7 @@ export const OrchestrationHub: React.FC<OrchestrationHubProps> = ({ onRefreshGlo
             </div>
           )}
 
-          {/* E. 台湾家宽分组 */}
+          {/* E. 台湾家宽 */}
           {summary?.categories?.tw_resi && (
             <div className="bg-white border border-slate-200/90 rounded-xl p-4 shadow-2xs hover:border-slate-300 transition flex flex-col justify-between">
               <div>

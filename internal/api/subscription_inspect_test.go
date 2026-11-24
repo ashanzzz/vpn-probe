@@ -45,8 +45,8 @@ proxies:
 proxy-groups:
   - name: "选择代理"
     type: select
-    proxies: ["自建-美国和美国家宽", "外部-节点"]
-  - name: "自建-美国和美国家宽"
+    proxies: ["自建-美国家宽", "外部-节点"]
+  - name: "自建-美国家宽"
     type: select
     proxies: ["LZ-US-Pavlov-家宽", "美西 ACCK 洛杉矶 4837 — VLESS Reality", "LAX-US-Pavlov-家宽", "链式|东京软银 ➔ 未知家宽01"]
   - name: "自建-其他"
@@ -57,8 +57,8 @@ proxy-groups:
     proxies: ["蜂窝云-美区01"]
 
 rules:
-  - GEOSITE,youtube,自建-美国和美国家宽
-  - GEOIP,US,自建-美国和美国家宽
+  - GEOSITE,youtube,自建-美国家宽
+  - GEOIP,US,自建-美国家宽
   - MATCH,选择代理
 
 rule-providers:
@@ -177,13 +177,13 @@ rule-providers:
 				t.Errorf("expected 自建-其他 to have tag '自建·其他家宽', got %v", g.Tags)
 			}
 		}
-		if g.Name == "自建-美国和美国家宽" {
+		if g.Name == "自建-美国家宽" {
 			foundSelf = true
 			if g.IsExternal {
-				t.Errorf("expected 自建-美国和美国家宽 to have IsExternal=false")
+				t.Errorf("expected 自建-美国家宽 to have IsExternal=false")
 			}
 			if g.RuleCount != 2 {
-				t.Errorf("expected 2 rules targeting 自建-美国和美国家宽, got %d", g.RuleCount)
+				t.Errorf("expected 2 rules targeting 自建-美国家宽, got %d", g.RuleCount)
 			}
 			// Verify alias matching for chain node LAX-US-Pavlov-家宽
 			for _, p := range g.Proxies {

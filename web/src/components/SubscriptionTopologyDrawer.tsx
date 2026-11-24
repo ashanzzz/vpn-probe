@@ -963,13 +963,13 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
                   <div className="p-3 bg-purple-50/50 border border-purple-200 rounded-xl space-y-1">
                     <span className="text-2xs font-bold text-purple-800">🤖 AI 服务分流</span>
                     <div className="text-xs font-medium text-slate-800">ChatGPT / Claude</div>
-                    <div className="text-2xs text-purple-600 font-mono mt-1">➔ 自建-美国和美国家宽</div>
+                    <div className="text-2xs text-purple-600 font-mono mt-1">➔ 自建-美国家宽</div>
                   </div>
 
                   <div className="p-3 bg-rose-50/50 border border-rose-200 rounded-xl space-y-1">
                     <span className="text-2xs font-bold text-rose-800">🎬 国际流媒体</span>
                     <div className="text-xs font-medium text-slate-800">YouTube / Netflix</div>
-                    <div className="text-2xs text-rose-600 font-mono mt-1">➔ 自建-日本和日本家宽</div>
+                    <div className="text-2xs text-rose-600 font-mono mt-1">➔ 自建-日本家宽</div>
                   </div>
 
                   <div className="p-3 bg-blue-50/50 border border-blue-200 rounded-xl space-y-1">

@@ -128,6 +128,9 @@ func (s *APIServer) handlePolicyGroupBatchSave(c *fiber.Ctx) error {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 	}
+	if len(payload.Groups) == 0 {
+		return c.Status(400).JSON(fiber.Map{"error": "empty or invalid policy groups batch payload"})
+	}
 	if err := monitor.SaveCustomGroupsBatch(payload.Groups); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}

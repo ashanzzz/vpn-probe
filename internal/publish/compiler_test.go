@@ -231,3 +231,25 @@ func TestCompileScript_PreservesUserGroupsInOtherProxyGroups(t *testing.T) {
 		t.Fatalf("expected script to contain allowedAdditions logic for entry group")
 	}
 }
+
+func TestCompileScript_AppGroupCleanInject(t *testing.T) {
+	script, err := CompileScript(model.DefaultCustomGroups(), nil)
+	if err != nil {
+		t.Fatalf("CompileScript: %v", err)
+	}
+	if !strings.Contains(script, "appGroupCleanInject") {
+		t.Fatalf("expected appGroupCleanInject in script")
+	}
+	if !strings.Contains(script, "'Youtube'") || !strings.Contains(script, "'YouTube'") {
+		t.Fatalf("expected both 'Youtube' and 'YouTube' keys in appGroupCleanInject")
+	}
+	if !strings.Contains(script, "toLowerCase") {
+		t.Fatalf("expected toLowerCase case-insensitive matching in appGroupCleanInject")
+	}
+	if !strings.Contains(script, "!desired.includes(n)") {
+		t.Fatalf("expected proxy deduplication in appGroupCleanInject")
+	}
+	if !strings.Contains(script, "[...desired, ...remaining]") {
+		t.Fatalf("expected desired proxies placed in front of remaining proxies")
+	}
+}

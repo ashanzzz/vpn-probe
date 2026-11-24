@@ -432,3 +432,202 @@ func TestChainAtomsHealthAndLatencyAccuracy(t *testing.T) {
 		t.Errorf("expected to find direct-blocked chain in atoms")
 	}
 }
+
+func TestPolicyGroupBatchAndDefaultsEndpoints(t *testing.T) {
+	ResetAuthTracker()
+	tmpDir := t.TempDir()
+	customFile := filepath.Join(tmpDir, "custom_groups.json")
+	publishFile := filepath.Join(tmpDir, "publish_jobs.json")
+	cleanupCustom := monitor.SetCustomGroupsFileForTest(customFile)
+	defer cleanupCustom()
+
+	t.Setenv("VPN_PROBE_PUBLISH_JOBS", publishFile)
+
+	mockSubStore := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success"})
+	}))
+	defer mockSubStore.Close()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			AuthToken: "admin-token-123",
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     mockSubStore.URL,
+		},
+	}
+
+	sc := substore.NewClient(&cfg.SubStore)
+	sch := monitor.NewScheduler(cfg, nil, nil, sc)
+	server := NewAPIServer(cfg, nil, nil, sc, nil, sch, nil)
+
+	// 1. GET /api/v1/policy-groups/defaults
+	t.Run("GetDefaults", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/policy-groups/defaults", nil)
+		req.Header.Set("Authorization", "Bearer admin-token-123")
+		resp, err := server.app.Test(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		var body struct {
+			Status string                 `json:"status"`
+			Count  int                    `json:"count"`
+			Groups []model.CustomGroupDef `json:"groups"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if body.Count != 8 || len(body.Groups) != 8 {
+			t.Errorf("expected 8 canonical default groups, got count=%d, len=%d", body.Count, len(body.Groups))
+		}
+	})
+
+	// 2. PUT /api/v1/policy-groups/batch with empty payload
+	t.Run("BatchSave_EmptyPayload_Rejected", func(t *testing.T) {
+		emptyCases := []string{
+			`{}`,
+			`{"groups": []}`,
+			`[]`,
+		}
+		for _, rawJSON := range emptyCases {
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/policy-groups/batch", bytes.NewBufferString(rawJSON))
+			req.Header.Set("Authorization", "Bearer admin-token-123")
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := server.app.Test(req)
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("payload %q: expected 400 Bad Request, got %d", rawJSON, resp.StatusCode)
+			}
+		}
+	})
+
+	// 2b. PUT /api/v1/policy-groups/batch with malformed payload
+	t.Run("BatchSave_MalformedPayload_Rejected", func(t *testing.T) {
+		malformedCases := []string{
+			`not a valid json`,
+			`{"groups": "not-an-array"}`,
+			`[{"name": ""}]`,
+			`[{"name": "valid", "type": "invalid-type"}]`,
+		}
+		for _, rawJSON := range malformedCases {
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/policy-groups/batch", bytes.NewBufferString(rawJSON))
+			req.Header.Set("Authorization", "Bearer admin-token-123")
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := server.app.Test(req)
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("payload %q: expected 400 Bad Request, got %d", rawJSON, resp.StatusCode)
+			}
+		}
+	})
+
+	// 3. PUT /api/v1/policy-groups/batch with duplicate names
+	t.Run("BatchSave_DuplicateNames_Rejected", func(t *testing.T) {
+		dupJSON := `{"groups": [
+			{"name": "group_a", "display_name": "Group A", "enabled": true, "type": "url-test"},
+			{"name": "group_a", "display_name": "Group B", "enabled": true, "type": "url-test"}
+		]}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/policy-groups/batch", bytes.NewBufferString(dupJSON))
+		req.Header.Set("Authorization", "Bearer admin-token-123")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := server.app.Test(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400 for duplicate names, got %d", resp.StatusCode)
+		}
+	})
+
+	// 4. PUT /api/v1/policy-groups/batch with duplicate display names
+	t.Run("BatchSave_DuplicateDisplayNames_Rejected", func(t *testing.T) {
+		dupJSON := `{"groups": [
+			{"name": "group_a", "display_name": "Same Name", "enabled": true, "type": "url-test"},
+			{"name": "group_b", "display_name": "Same Name", "enabled": true, "type": "url-test"}
+		]}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/policy-groups/batch", bytes.NewBufferString(dupJSON))
+		req.Header.Set("Authorization", "Bearer admin-token-123")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := server.app.Test(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("expected 400 for duplicate display names, got %d", resp.StatusCode)
+		}
+	})
+
+	// 5. PUT /api/v1/policy-groups/batch valid save via wrapped object
+	t.Run("BatchSave_ValidWrapped_Success", func(t *testing.T) {
+		validJSON := `{"groups": [
+			{"name": "group_1", "display_name": "Group One", "enabled": true, "type": "url-test", "order": 10},
+			{"name": "group_2", "display_name": "Group Two", "enabled": true, "type": "select", "order": 20}
+		]}`
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/policy-groups/batch", bytes.NewBufferString(validJSON))
+		req.Header.Set("Authorization", "Bearer admin-token-123")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := server.app.Test(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 202/200, got %d", resp.StatusCode)
+		}
+
+		// Verify saved in file
+		loaded, err := monitor.LoadCustomGroups()
+		if err != nil {
+			t.Fatalf("LoadCustomGroups: %v", err)
+		}
+		if len(loaded) != 2 {
+			t.Fatalf("expected 2 groups saved, got %d", len(loaded))
+		}
+		if loaded[0].Name != "group_1" || loaded[1].Name != "group_2" {
+			t.Errorf("unexpected saved groups: %+v", loaded)
+		}
+	})
+
+	// 6. POST /api/v1/policy-groups/batch valid save via raw array
+	t.Run("BatchSave_ValidRawArray_Success", func(t *testing.T) {
+		rawArrayJSON := `[
+			{"name": "group_x", "display_name": "Group X", "enabled": true, "type": "url-test", "order": 5}
+		]`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/policy-groups/batch", bytes.NewBufferString(rawArrayJSON))
+		req.Header.Set("Authorization", "Bearer admin-token-123")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := server.app.Test(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		if resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 202/200, got %d", resp.StatusCode)
+		}
+
+		loaded, err := monitor.LoadCustomGroups()
+		if err != nil {
+			t.Fatalf("LoadCustomGroups: %v", err)
+		}
+		if len(loaded) != 1 || loaded[0].Name != "group_x" {
+			t.Fatalf("expected 1 group saved with name group_x, got %+v", loaded)
+		}
+	})
+
+	// 7. Unit test monitor.SaveCustomGroupsBatch empty slice check
+	t.Run("SaveCustomGroupsBatch_EmptyCheck", func(t *testing.T) {
+		if err := monitor.SaveCustomGroupsBatch(nil); err == nil {
+			t.Errorf("expected error when saving nil batch, got nil")
+		}
+		if err := monitor.SaveCustomGroupsBatch([]model.CustomGroupDef{}); err == nil {
+			t.Errorf("expected error when saving empty slice, got nil")
+		}
+	})
+}

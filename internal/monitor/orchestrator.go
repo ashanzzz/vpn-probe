@@ -575,6 +575,9 @@ func DeleteCustomGroup(name string) error {
 
 // SaveCustomGroupsBatch atomically validates and overwrites all custom groups.
 func SaveCustomGroupsBatch(defs []model.CustomGroupDef) error {
+	if len(defs) == 0 {
+		return fmt.Errorf("cannot save empty custom groups batch")
+	}
 	seenNames := make(map[string]bool)
 	seenDisplays := make(map[string]bool)
 	now := time.Now().UTC().Format(time.RFC3339)

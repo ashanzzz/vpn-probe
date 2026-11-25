@@ -226,6 +226,15 @@ func MatchMemberName(expected string, actual string) bool {
 }
 
 func matchChainAlias(full string, alias string) bool {
+	// 1. 若两端均能通过 ParseChainParts 解析为链式代理 (长格式 ➔ 或紧凑别名 [前置]-[落地区域]-[运营商])
+	t1, r1, is1 := monitor.ParseChainParts(full)
+	t2, r2, is2 := monitor.ParseChainParts(alias)
+	if is1 && is2 {
+		if monitor.MatchTransitCandidate(t1, t2) && monitor.MatchResidentialCandidate(r1, r2) {
+			return true
+		}
+	}
+
 	if strings.Contains(full, "➔") {
 		raw := full
 		if idx := strings.Index(raw, "|"); idx != -1 {
@@ -256,7 +265,9 @@ func matchChainAlias(full string, alias string) bool {
 				aliasLower := strings.ToLower(alias)
 				prefixLower := strings.ToLower(prefix)
 				suffixLower := strings.ToLower(suffix)
-				if (strings.HasPrefix(aliasLower, prefixLower) || strings.Contains(aliasLower, prefixLower)) && strings.Contains(aliasLower, suffixLower) {
+				if (strings.HasPrefix(aliasLower, prefixLower) || strings.Contains(aliasLower, prefixLower) ||
+					(prefixLower == "lax-" && (strings.Contains(aliasLower, "4837") || strings.Contains(aliasLower, "acck")))) &&
+					strings.Contains(aliasLower, suffixLower) {
 					return true
 				}
 			}

@@ -144,6 +144,30 @@ func TestMatchMemberName_UnicodePrefixAndChineseTransit(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "Chinese West US transit name with 4837 alias",
+			raw:      "链式|美西 ACCK 洛杉矶 4837 — VLESS Reality ➔ LZ-US-Pavlov-家宽01",
+			alias:    "4837-美宽-Pavlov",
+			expected: true,
+		},
+		{
+			name:     "Chinese West US transit name with ACCK alias",
+			raw:      "链式|美西 ACCK 洛杉矶 4837 — VLESS Reality ➔ LZ-US-Pavlov-家宽01",
+			alias:    "ACCK-美宽-Pavlov",
+			expected: true,
+		},
+		{
+			name:     "Dual compact chain aliases symmetric match",
+			raw:      "IIJ-美宽-Frontier",
+			alias:    "IIJ-美宽-Frontier-家宽",
+			expected: true,
+		},
+		{
+			name:     "Compact chain alias vs ACCK-SB Taiwan chain",
+			raw:      "链式|JP--ACCK-SB ➔ LZ-TW-HiNet-家宽",
+			alias:    "SB-台宽-HiNet",
+			expected: true,
+		},
+		{
 			name:     "Direct node with flag emoji vs plain",
 			raw:      "🇯🇵 JP-Tokyo-Softbank-Reality-Vision",
 			alias:    "JP-Tokyo-Softbank-Reality-Vision",

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"vpn-probe/internal/healer"
 	"vpn-probe/internal/logger"
 	"vpn-probe/internal/model"
 )
@@ -375,19 +376,20 @@ func (o *Orchestrator) EvaluateGroupAtoms(filter model.GroupFilter) []model.Atom
 	return MatchAtoms(o.CollectAtoms(), filter)
 }
 
+// CategoryStat 结构化单分类节点统计
+type CategoryStat struct {
+	Country          string           `json:"country,omitempty"`
+	DisplayName      string           `json:"display_name"`
+	TransitCount     int              `json:"transit_count"`
+	ResidentialCount int              `json:"residential_count"`
+	ChainCount       int              `json:"chain_count"`
+	TotalCleanCount  int              `json:"total_clean_count"`
+	Nodes            []model.AtomNode `json:"nodes"`
+}
+
 // GetCategoriesSummary 结构化输出当前全局分类大盘
 func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 	atoms := o.CollectAtoms()
-
-	type CategoryStat struct {
-		Country          string           `json:"country,omitempty"`
-		DisplayName      string           `json:"display_name"`
-		TransitCount     int              `json:"transit_count"`
-		ResidentialCount int              `json:"residential_count"`
-		ChainCount       int              `json:"chain_count"`
-		TotalCleanCount  int              `json:"total_clean_count"`
-		Nodes            []model.AtomNode `json:"nodes"`
-	}
 
 	transitStat := &CategoryStat{DisplayName: "自建-线路机"}
 	allResiStat := &CategoryStat{DisplayName: "自建-家宽分组"}
@@ -433,30 +435,28 @@ func (o *Orchestrator) GetCategoriesSummary() map[string]any {
 				allResiStat.ChainCount++
 			}
 			allResiStat.Nodes = append(allResiStat.Nodes, a)
-		}
 
-		var target *CategoryStat
-		switch a.Country {
-		case "US":
-			target = usStat
-		case "JP":
-			target = jpStat
-		case "TW":
-			target = twStat
-		default:
-			target = otherStat
-		}
+			var target *CategoryStat
+			switch a.Country {
+			case "US":
+				target = usStat
+			case "JP":
+				target = jpStat
+			case "TW":
+				target = twStat
+			default:
+				target = otherStat
+			}
 
-		target.TotalCleanCount++
-		switch a.Kind {
-		case "transit":
-			target.TransitCount++
-		case "residential":
-			target.ResidentialCount++
-		case "chain":
-			target.ChainCount++
+			target.TotalCleanCount++
+			switch a.Kind {
+			case "residential":
+				target.ResidentialCount++
+			case "chain":
+				target.ChainCount++
+			}
+			target.Nodes = append(target.Nodes, a)
 		}
-		target.Nodes = append(target.Nodes, a)
 	}
 
 	// 动态自定义分组加载
@@ -837,23 +837,38 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 	var transitNode *model.NodeProbeResult
 	var resiNode *model.NodeProbeResult
 
-	for _, s := range o.scheduler.nodeStates {
-		if s.LastResult == nil {
+	for key, s := range o.scheduler.nodeStates {
+		if s == nil || s.LastResult == nil {
 			continue
 		}
 		res := s.LastResult
+		cfgName := s.Config.Name
+
+		// 匹配线路机 (精确优先，别名/类型对齐保底)
 		if transitNode == nil || !strings.EqualFold(transitNode.Name, transitName) {
-			if strings.EqualFold(res.Name, transitName) || strings.EqualFold(res.ID, transitName) {
+			isTransitType := res.NodeType == "transit" || (!model.IsResidentialNode(res.Name, "", "") && !strings.Contains(res.Name, "家宽"))
+			if strings.EqualFold(res.Name, transitName) || strings.EqualFold(res.ID, transitName) || strings.EqualFold(cfgName, transitName) || strings.EqualFold(key, transitName) {
 				transitNode = res
-			} else if transitNode == nil && strings.Contains(strings.ToLower(res.Name), strings.ToLower(transitName)) {
-				transitNode = res
+			} else if transitNode == nil && isTransitType {
+				if MatchTransitCandidate(res.Name, transitName) || MatchTransitCandidate(cfgName, transitName) || MatchTransitCandidate(key, transitName) {
+					transitNode = res
+				} else if strings.Contains(strings.ToLower(res.Name), strings.ToLower(transitName)) || strings.Contains(strings.ToLower(cfgName), strings.ToLower(transitName)) || strings.Contains(strings.ToLower(key), strings.ToLower(transitName)) {
+					transitNode = res
+				}
 			}
 		}
+
+		// 匹配住宅家宽机 (精确优先，别名/类型对齐保底)
 		if resiNode == nil || !strings.EqualFold(resiNode.Name, resiName) {
-			if strings.EqualFold(res.Name, resiName) || strings.EqualFold(res.ID, resiName) {
+			isResiType := res.NodeType == "residential" || model.IsResidentialNode(res.Name, "", "") || strings.Contains(res.Name, "家宽")
+			if strings.EqualFold(res.Name, resiName) || strings.EqualFold(res.ID, resiName) || strings.EqualFold(cfgName, resiName) || strings.EqualFold(key, resiName) {
 				resiNode = res
-			} else if resiNode == nil && strings.Contains(strings.ToLower(res.Name), strings.ToLower(resiName)) {
-				resiNode = res
+			} else if resiNode == nil && isResiType {
+				if MatchResidentialCandidate(res.Name, resiName) || MatchResidentialCandidate(cfgName, resiName) || MatchResidentialCandidate(key, resiName) {
+					resiNode = res
+				} else if strings.Contains(strings.ToLower(res.Name), strings.ToLower(resiName)) || strings.Contains(strings.ToLower(cfgName), strings.ToLower(resiName)) || strings.Contains(strings.ToLower(key), strings.ToLower(resiName)) {
+					resiNode = res
+				}
 			}
 		}
 	}
@@ -912,6 +927,7 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 		base = origURL[:hashIdx]
 		resiLabel = origURL[hashIdx+1:]
 	}
+	base = healer.CleanDialerProxyParam(base)
 
 	separator := "?"
 	if strings.Contains(base, "?") {
@@ -961,7 +977,14 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 
 // matchesChainTarget 精确判断目标是否指向该链式绑定，杜绝宽松子串碰撞误删无关绑定
 func matchesChainTarget(c CustomChainBind, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
 	if c.ID == target {
+		return true
+	}
+	if c.ChainURL == target {
 		return true
 	}
 	if c.ChainName == target || strings.EqualFold(c.ChainName, target) {
@@ -970,8 +993,23 @@ func matchesChainTarget(c CustomChainBind, target string) bool {
 	if c.ResidentialName == target || MatchNodeName(c.ResidentialName, target) {
 		return true
 	}
-	// 支持按 "中继 ➔ 落地" 组合或紧凑命名 "[前置]-[落地区域]-[运营商]" 精确解绑
-	transit, resi, isChain := ParseChainParts(target)
+	// 支持携带 URL 或 hash 锚点的 target 解析
+	cleanTarget := target
+	if hashIdx := strings.Index(cleanTarget, "#"); hashIdx != -1 {
+		cleanTarget = cleanTarget[hashIdx+1:]
+	}
+	if uTarget, err := url.QueryUnescape(cleanTarget); err == nil && uTarget != "" {
+		cleanTarget = uTarget
+	}
+	cleanTarget = strings.TrimSpace(cleanTarget)
+	if c.ChainName == cleanTarget || strings.EqualFold(c.ChainName, cleanTarget) {
+		return true
+	}
+	if c.ResidentialName == cleanTarget || MatchNodeName(c.ResidentialName, cleanTarget) {
+		return true
+	}
+	// 支持按 "中继 ➔ 落地" 组合或紧凑命名 "[前置]-[落地区域]-[运营商]" 精确解绑 (两端必须同时明确存在)
+	transit, resi, isChain := ParseChainParts(cleanTarget)
 	if isChain && transit != "" && resi != "" {
 		if MatchTransitCandidate(c.TransitName, transit) && MatchResidentialCandidate(c.ResidentialName, resi) {
 			return true

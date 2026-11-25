@@ -1280,3 +1280,179 @@ func TestOrchestrator_CompactChain_Unbind(t *testing.T) {
 	}
 }
 
+func TestBindExplicitChain_RealWorldNamesAndAliases(t *testing.T) {
+	tmpDir := t.TempDir()
+	customPath := tmpDir + "/custom_chains_real.json"
+	revert := SetCustomChainsFileForTest(customPath)
+	defer revert()
+
+	sch := &Scheduler{
+		nodeStates: make(map[string]*NodeState),
+	}
+	sch.nodeStates["东京软银 — VLESS Reality Vision"] = &NodeState{
+		Config: config.MonitoredNode{Name: "东京软银 — VLESS Reality Vision"},
+		LastResult: &model.NodeProbeResult{
+			ID:          "JP--ACCK-SB",
+			Name:        "JP--ACCK-SB",
+			OriginalURL: "vless://u1@45.192.242.72:24444#JP--ACCK-SB",
+			NodeType:    "transit",
+			Online:      true,
+		},
+	}
+	sch.nodeStates["美西 ACCK 洛杉矶 4837 — VLESS Reality"] = &NodeState{
+		Config: config.MonitoredNode{Name: "美西 ACCK 洛杉矶 4837 — VLESS Reality"},
+		LastResult: &model.NodeProbeResult{
+			ID:          "US-LAX-ACCK-4837-Reality",
+			Name:        "US-LAX-ACCK-4837-Reality",
+			OriginalURL: "vless://u2@38.175.222.44:36564#US-LAX-ACCK-4837-Reality",
+			NodeType:    "transit",
+			Online:      true,
+		},
+	}
+	sch.nodeStates["LZ-US-Frontier-家宽"] = &NodeState{
+		Config: config.MonitoredNode{Name: "LZ-US-Frontier-家宽"},
+		LastResult: &model.NodeProbeResult{
+			ID:          "LZ-US-Frontier-家宽",
+			Name:        "LZ-US-Frontier-家宽",
+			OriginalURL: "vless://u3@167.104.167.151:41360?dialerProxy=OldTransit#LZ-US-Frontier-家宽",
+			NodeType:    "residential",
+			Online:      true,
+		},
+	}
+
+	orc := NewOrchestrator(sch)
+
+	// 1. 测试用 Config Name 绑定
+	bind1, err := orc.BindExplicitChain("东京软银 — VLESS Reality Vision", "LZ-US-Frontier-家宽")
+	if err != nil {
+		t.Fatalf("Bind with Config Name failed: %v", err)
+	}
+	if bind1.TransitName != "JP--ACCK-SB" {
+		t.Errorf("expected TransitName JP--ACCK-SB, got %s", bind1.TransitName)
+	}
+	// 验证 dialerProxy 重复参数已被剥除
+	if strings.Count(bind1.ChainURL, "dialerProxy=") != 1 {
+		t.Errorf("expected exactly 1 dialerProxy parameter in chain URL, got %s", bind1.ChainURL)
+	}
+	if strings.Contains(bind1.ChainURL, "OldTransit") {
+		t.Errorf("expected OldTransit to be stripped from chain URL, got %s", bind1.ChainURL)
+	}
+
+	// 2. 测试用候选别名 软银 / Frontier 绑定
+	bind2, err := orc.BindExplicitChain("东京软银", "Frontier")
+	if err != nil {
+		t.Fatalf("Bind with alias '东京软银' / 'Frontier' failed: %v", err)
+	}
+	if bind2.TransitName != "JP--ACCK-SB" || bind2.ResidentialName != "LZ-US-Frontier-家宽" {
+		t.Errorf("unexpected bind targets: transit=%s resi=%s", bind2.TransitName, bind2.ResidentialName)
+	}
+
+	// 3. 测试用 4837 别名绑定
+	bind3, err := orc.BindExplicitChain("4837", "LZ-US-Frontier-家宽")
+	if err != nil {
+		t.Fatalf("Bind with alias '4837' failed: %v", err)
+	}
+	if bind3.TransitName != "US-LAX-ACCK-4837-Reality" {
+		t.Errorf("expected 4837 to match US-LAX-ACCK-4837-Reality, got %s", bind3.TransitName)
+	}
+}
+
+func TestMatchesChainTarget_Comprehensive(t *testing.T) {
+	c := CustomChainBind{
+		ID:              "bind-us-test",
+		TransitName:     "US-LAX-ACCK-4837-Reality",
+		ResidentialName: "LZ-US-Pavlov-家宽",
+		ChainName:       "链式|US-LAX-ACCK-4837-Reality ➔ LZ-US-Pavlov-家宽",
+		ChainURL:        "vless://u@167.104.167.151:49040?dialerProxy=US-LAX-ACCK-4837-Reality#链式|US-LAX-ACCK-4837-Reality ➔ LZ-US-Pavlov-家宽",
+	}
+
+	// 1. 精确 ID
+	if !matchesChainTarget(c, "bind-us-test") {
+		t.Errorf("expected match by ID")
+	}
+	// 2. 精确 ChainURL
+	if !matchesChainTarget(c, c.ChainURL) {
+		t.Errorf("expected match by ChainURL")
+	}
+	// 3. 精确 ChainName
+	if !matchesChainTarget(c, c.ChainName) {
+		t.Errorf("expected match by ChainName")
+	}
+	// 4. 精确 ResidentialName
+	if !matchesChainTarget(c, "LZ-US-Pavlov-家宽") {
+		t.Errorf("expected match by ResidentialName")
+	}
+	// 5. 紧凑别名解绑
+	if !matchesChainTarget(c, "4837-美宽-Pavlov") {
+		t.Errorf("expected match by compact alias 4837-美宽-Pavlov")
+	}
+	if !matchesChainTarget(c, "LAX-美宽-Pavlov") {
+		t.Errorf("expected match by compact alias LAX-美宽-Pavlov")
+	}
+	// 6. 带 # 锚点解绑
+	if !matchesChainTarget(c, "#链式|US-LAX-ACCK-4837-Reality ➔ LZ-US-Pavlov-家宽") {
+		t.Errorf("expected match with # anchor")
+	}
+	// 7. 通用泛子串绝不误删
+	for _, risky := range []string{"US", "4837", "LAX", "Pavlov", "家宽", "Reality", "➔"} {
+		if matchesChainTarget(c, risky) {
+			t.Errorf("risky substring %q should NOT match chain target", risky)
+		}
+	}
+}
+
+func TestGetCategoriesSummary_TransitIsolationFromResidentialCategories(t *testing.T) {
+	sch := &Scheduler{
+		nodeStates: make(map[string]*NodeState),
+	}
+	// 注入 1 个美区骨干专线
+	sch.nodeStates["lax-4837"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "lax-4837",
+			Name:        "US-LAX-ACCK-4837-Reality",
+			OriginalURL: "vless://u1@38.175.222.44:36564#US-LAX-ACCK-4837-Reality",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "transit",
+			LatencyMs:   150,
+			TestedAt:    time.Now(),
+		},
+	}
+	// 注入 1 个美区家宽
+	sch.nodeStates["us-resi"] = &NodeState{
+		LastResult: &model.NodeProbeResult{
+			ID:          "us-resi-1",
+			Name:        "LZ-US-Pavlov-家宽",
+			OriginalURL: "vless://u2@167.104.167.151:49040#LZ-US-Pavlov-家宽",
+			ExitCountry: "US",
+			Online:      true,
+			NodeType:    "residential",
+			LatencyMs:   200,
+			TestedAt:    time.Now(),
+		},
+	}
+
+	orc := NewOrchestrator(sch)
+	summary := orc.GetCategoriesSummary()
+	cats := summary["categories"].(map[string]any)
+
+	transitCat := cats["transit"].(*CategoryStat)
+	usResiCat := cats["us_resi"].(*CategoryStat)
+
+	// 验证自建线路机统计
+	if transitCat.TotalCleanCount != 1 || transitCat.TransitCount != 1 {
+		t.Errorf("expected 1 clean transit node, got total=%d transit=%d", transitCat.TotalCleanCount, transitCat.TransitCount)
+	}
+
+	// 验证美国家宽统计：绝不能混入美区骨干专线机
+	if usResiCat.TotalCleanCount != 1 || usResiCat.ResidentialCount != 1 || usResiCat.TransitCount != 0 {
+		t.Errorf("expected us_resi to have 1 residential node and 0 transit nodes, got total=%d resi=%d transit=%d",
+			usResiCat.TotalCleanCount, usResiCat.ResidentialCount, usResiCat.TransitCount)
+	}
+	for _, n := range usResiCat.Nodes {
+		if n.Kind == "transit" {
+			t.Errorf("transit node %q leaked into us_resi category!", n.Name)
+		}
+	}
+}
+

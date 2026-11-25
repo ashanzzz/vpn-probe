@@ -84,17 +84,21 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
   const [copiedSub, setCopiedSub] = useState<string | null>(null);
 
   const handleCopySub = (subName: string) => {
-    const token = getStoredToken() || 'Woo@@@204317';
+    const token = getStoredToken();
     const origin = window.location.origin;
-    const url = `${origin}/api/sub/file/${subName}?token=${encodeURIComponent(token)}`;
+    const url = token
+      ? `${origin}/api/sub/file/${subName}?token=${encodeURIComponent(token)}`
+      : `${origin}/api/sub/file/${subName}`;
     navigator.clipboard.writeText(url);
     setCopiedSub(subName);
     setTimeout(() => setCopiedSub(null), 2000);
   };
 
   const getDownloadUrl = (subName: string) => {
-    const token = getStoredToken() || 'Woo@@@204317';
-    return `/api/sub/file/${subName}?token=${encodeURIComponent(token)}`;
+    const token = getStoredToken();
+    return token
+      ? `/api/sub/file/${subName}?token=${encodeURIComponent(token)}`
+      : `/api/sub/file/${subName}`;
   };
 
   // Fetch all pipeline core data
@@ -132,7 +136,7 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
     if (selectedScript && showAdvancedOps) {
       api.getScriptContent(selectedScript)
         .then(setScriptContent)
-        .catch(() => setScriptContent('// 无法加载脚本内容或脚本不存在'));
+        .catch((err: any) => setScriptContent(`// 无法加载脚本内容: ${err?.message || '请求失败'}`));
     }
   }, [selectedScript, showAdvancedOps]);
 
@@ -569,7 +573,9 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
                   </div>
                 </div>
                 <span className="text-2xs font-mono px-2 py-0.5 rounded bg-blue-50 text-blue-700 font-semibold border border-blue-200">
-                  85 节点 · 0 家宽
+                  {snapshotStatus?.snapshots?.['Q']?.proxy_count || snapshotStatus?.snapshots?.['q']?.proxy_count
+                    ? `${snapshotStatus?.snapshots?.['Q']?.proxy_count || snapshotStatus?.snapshots?.['q']?.proxy_count} 节点 · 0 家宽`
+                    : `${atoms.filter(a => a.kind === 'transit').length} 骨干 · 0 家宽`}
                 </span>
               </div>
 
@@ -577,11 +583,11 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
               <div className="grid grid-cols-3 gap-2 text-center py-2 bg-slate-50 rounded-xl border border-slate-200 font-mono text-2xs">
                 <div>
                   <div className="text-slate-400">自建专线</div>
-                  <div className="font-bold text-slate-900 text-sm mt-0.5">纯骨干线路</div>
+                  <div className="font-bold text-slate-900 text-sm mt-0.5">{atoms.filter(a => a.kind === 'transit').length} 条骨干</div>
                 </div>
                 <div>
                   <div className="text-slate-400">外部商业</div>
-                  <div className="font-bold text-emerald-700 text-sm mt-0.5">商业机场池</div>
+                  <div className="font-bold text-emerald-700 text-sm mt-0.5">{externalSubs.filter(s => s.enabled).length} 机场池</div>
                 </div>
                 <div>
                   <div className="text-slate-400">住宅家宽</div>
@@ -591,15 +597,17 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
 
               {/* Domain & Fast Snapshot Badges */}
               <div className="flex flex-wrap items-center gap-2 pt-1 text-2xs font-mono">
-                <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-600" />
-                  free.1992004.xyz 双域名正常
+                <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                  {manifest?.domains?.length ? `${manifest.domains[0]} · 需点击校验测活` : '已挂载 SubStore 分发'}
                 </span>
-                {snapshotStatus?.snapshots?.['Q'] && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
-                    快照: {snapshotStatus.snapshots['Q'].sha256?.substring(0, 7)} ({snapshotStatus.snapshots['Q'].duration_ms}ms)
-                  </span>
-                )}
+                {(snapshotStatus?.snapshots?.['Q'] || snapshotStatus?.snapshots?.['q']) && (() => {
+                  const s = snapshotStatus.snapshots['Q'] || snapshotStatus.snapshots['q'];
+                  return (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                      快照: {s.sha256?.substring(0, 7)} ({s.duration_ms}ms)
+                    </span>
+                  );
+                })()}
               </div>
             </div>
 
@@ -662,7 +670,9 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
                   </div>
                 </div>
                 <span className="text-2xs font-mono px-2 py-0.5 rounded bg-purple-50 text-purple-700 font-semibold border border-purple-200">
-                  125 节点 · 40 家宽
+                  {snapshotStatus?.snapshots?.['ashan']?.proxy_count || snapshotStatus?.snapshots?.['Ashan']?.proxy_count
+                    ? `${snapshotStatus?.snapshots?.['ashan']?.proxy_count || snapshotStatus?.snapshots?.['Ashan']?.proxy_count} 节点 · ${atoms.filter(a => a.kind === 'residential' || a.kind === 'chain').length} 家宽/链`
+                    : `${atoms.length} 自建原子`}
                 </span>
               </div>
 
@@ -670,29 +680,31 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
               <div className="grid grid-cols-3 gap-2 text-center py-2 bg-slate-50 rounded-xl border border-slate-200 font-mono text-2xs">
                 <div>
                   <div className="text-slate-400">自建专线</div>
-                  <div className="font-bold text-slate-900 text-sm mt-0.5">骨干 + 中转</div>
+                  <div className="font-bold text-slate-900 text-sm mt-0.5">{atoms.filter(a => a.kind === 'transit').length} 条骨干</div>
                 </div>
                 <div>
                   <div className="text-slate-400">原生家宽</div>
-                  <div className="font-bold text-purple-700 text-sm mt-0.5">全量美/日家宽</div>
+                  <div className="font-bold text-purple-700 text-sm mt-0.5">{atoms.filter(a => a.kind === 'residential').length} 家宽</div>
                 </div>
                 <div>
                   <div className="text-slate-400">网状中继</div>
-                  <div className="font-bold text-emerald-700 text-sm mt-0.5">智能降阻链路</div>
+                  <div className="font-bold text-emerald-700 text-sm mt-0.5">{customChains.length} 条链路</div>
                 </div>
               </div>
 
               {/* Domain & Fast Snapshot Badges */}
               <div className="flex flex-wrap items-center gap-2 pt-1 text-2xs font-mono">
-                <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-600" />
-                  sub.ashanzzz.com 双域名正常
+                <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                  {manifest?.domains?.length ? `${manifest.domains[manifest.domains.length - 1]} · 需点击校验测活` : '已挂载 SubStore 分发'}
                 </span>
-                {snapshotStatus?.snapshots?.['ashan'] && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">
-                    快照: {snapshotStatus.snapshots['ashan'].sha256?.substring(0, 7)} ({snapshotStatus.snapshots['ashan'].duration_ms}ms)
-                  </span>
-                )}
+                {(snapshotStatus?.snapshots?.['ashan'] || snapshotStatus?.snapshots?.['Ashan']) && (() => {
+                  const s = snapshotStatus.snapshots['ashan'] || snapshotStatus.snapshots['Ashan'];
+                  return (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200">
+                      快照: {s.sha256?.substring(0, 7)} ({s.duration_ms}ms)
+                    </span>
+                  );
+                })()}
               </div>
             </div>
 
@@ -755,7 +767,9 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
                   </div>
                 </div>
                 <span className="text-2xs font-mono px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
-                  纯自建 · 40 家宽 + 骨干
+                  {snapshotStatus?.snapshots?.['business']?.proxy_count || snapshotStatus?.snapshots?.['Business']?.proxy_count
+                    ? `${snapshotStatus?.snapshots?.['business']?.proxy_count || snapshotStatus?.snapshots?.['Business']?.proxy_count} 纯自建节点`
+                    : `纯自建 · ${atoms.length} 原子`}
                 </span>
               </div>
 
@@ -763,29 +777,31 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
               <div className="grid grid-cols-3 gap-2 text-center py-2 bg-slate-50 rounded-xl border border-slate-200 font-mono text-2xs">
                 <div>
                   <div className="text-slate-400">自建专线</div>
-                  <div className="font-bold text-slate-900 text-sm mt-0.5">纯骨干线路</div>
+                  <div className="font-bold text-slate-900 text-sm mt-0.5">{atoms.filter(a => a.kind === 'transit').length} 条骨干</div>
                 </div>
                 <div>
                   <div className="text-slate-400">外部商业</div>
                   <div className="font-bold text-slate-400 text-sm mt-0.5">0 外部机场</div>
                 </div>
                 <div>
-                  <div className="text-slate-400">原生家宽</div>
-                  <div className="font-bold text-emerald-700 text-sm mt-0.5">全量美/日家宽</div>
+                  <div className="text-slate-400">原生家宽+链</div>
+                  <div className="font-bold text-emerald-700 text-sm mt-0.5">{atoms.filter(a => a.kind === 'residential' || a.kind === 'chain').length} 个节点</div>
                 </div>
               </div>
 
               {/* Domain & Fast Snapshot Badges */}
               <div className="flex flex-wrap items-center gap-2 pt-1 text-2xs font-mono">
-                <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  <CheckCircle2 className="w-3 h-3 mr-1 text-emerald-600" />
-                  free.1992004.xyz 双域名正常
+                <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                  {manifest?.domains?.length ? `${manifest.domains[0]} · 需点击校验测活` : '已挂载 SubStore 分发'}
                 </span>
-                {snapshotStatus?.snapshots?.['business'] && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    快照: {snapshotStatus.snapshots['business'].sha256?.substring(0, 7)} ({snapshotStatus.snapshots['business'].duration_ms}ms)
-                  </span>
-                )}
+                {(snapshotStatus?.snapshots?.['business'] || snapshotStatus?.snapshots?.['Business']) && (() => {
+                  const s = snapshotStatus.snapshots['business'] || snapshotStatus.snapshots['Business'];
+                  return (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      快照: {s.sha256?.substring(0, 7)} ({s.duration_ms}ms)
+                    </span>
+                  );
+                })()}
               </div>
             </div>
 

@@ -42,15 +42,15 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
   const [restoringSnapshotId, setRestoringSnapshotId] = useState<string | null>(null);
   const [creatingBackup, setCreatingBackup] = useState(false);
 
-  const fetchData = async () => {
+  const fetchData = async (forceRefresh: boolean = false) => {
     setLoading(true);
     try {
       const [vpsData, analysisData] = await Promise.all([
-        api.getVPSManagement().catch(() => ({ count: 0, instances: [] })),
-        api.getBlockedAnalysis().catch(() => ({ count: 0, results: [] })),
+        api.getVPSManagement(forceRefresh).catch(() => ({ total: 0, instances: [] })),
+        api.getBlockedAnalysis().catch(() => ({ analysis: [], results: [] })),
       ]);
       setInstances(vpsData.instances || []);
-      setBlockedAnalysis((analysisData as any).analysis || analysisData.results || []);
+      setBlockedAnalysis(analysisData.analysis || analysisData.results || []);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || '获取 VPS 运维数据失败' });
     } finally {
@@ -183,7 +183,7 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
         </div>
 
         <button
-          onClick={fetchData}
+          onClick={() => fetchData(true)}
           disabled={loading}
           className="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-lg text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 transition shadow-2xs"
         >

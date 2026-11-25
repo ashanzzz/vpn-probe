@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	DefaultVPS10MURL = "http://45.192.242.72:28745/s/default/speedtest-10m.bin"
-	DefaultVPS30MURL = "http://45.192.242.72:28745/s/default/speedtest-30m.bin"
+	DefaultVPS10MURL = ""
+	DefaultVPS30MURL = ""
 )
 
 var (
@@ -86,6 +86,9 @@ func TestVPS10M(ctx context.Context, port int, targetURL string, latencyMs int) 
 		speedURLMu.RLock()
 		targetURL = customSpeedURL10M
 		speedURLMu.RUnlock()
+	}
+	if targetURL == "" {
+		return nil, fmt.Errorf("%w: 10M 测速 URL 未配置", ErrSelfSpeedSourceUnreachable)
 	}
 
 	client, err := MakeProxyHTTPClient(port, 30*time.Second)
@@ -171,6 +174,9 @@ func TestVPS30M(ctx context.Context, port int, targetURL string, latencyMs int) 
 		speedURLMu.RLock()
 		targetURL = customSpeedURL30M
 		speedURLMu.RUnlock()
+	}
+	if targetURL == "" {
+		return nil, fmt.Errorf("%w: 30M 测速 URL 未配置", ErrSelfSpeedSourceUnreachable)
 	}
 
 	client, err := MakeProxyHTTPClient(port, 45*time.Second)

@@ -301,9 +301,12 @@ export interface SubStoreScriptInfo {
 }
 
 export interface SubStoreManifest {
+  status?: string;
   substore_url: string;
-  share_links: SubStoreShareLink[];
-  scripts: SubStoreScriptInfo[];
+  share_token?: string;
+  domains?: string[];
+  share_links: any[];
+  scripts: Record<string, any> | SubStoreScriptInfo[];
 }
 
 export interface SoftwareInfo {
@@ -483,6 +486,7 @@ export interface CustomGroupDef {
   type?: 'select' | 'url-test' | 'fallback' | 'load-balance' | string;
   order?: number;
   add_to_entry?: boolean;
+  tags?: string[];
   filter: GroupFilter;
   created_at?: string;
   updated_at?: string;
@@ -598,35 +602,33 @@ export interface DomainCheckResult {
 }
 
 export interface VerifySubscriptionResponse {
-  status: string;
+  status?: string;
   file_name: string;
   valid: boolean;
-  audit?: {
-    file_name: string;
-    valid: boolean;
-    group_counts?: Record<string, number>;
-    dangling_references?: Record<string, string[]>;
-  };
+  total_proxies?: number;
+  total_groups?: number;
+  group_counts?: Record<string, number>;
+  dangling_references?: Record<string, string[]>;
   domains_check?: DomainCheckResult[];
   all_domains_reachable?: boolean;
   self_nodes_count?: number;
-  self_nodes_online_count?: number;
+  self_nodes_online?: number;
+  self_nodes_residential_chained?: number;
   self_nodes_healthy?: boolean;
-  self_nodes_report?: Array<{
+  self_nodes?: Array<{
     name: string;
-    original_url: string;
+    url?: string;
+    original_url?: string;
     online: boolean;
     latency_ms: number;
     china_exit: boolean;
     exit_country?: string;
+    node_type?: string;
+    status_text?: string;
   }>;
-  correctness_proof?: {
-    is_q?: boolean;
-    is_ashan?: boolean;
-    residential_count?: number;
-    transit_count?: number;
-    message?: string;
-  };
+  external_nodes_skipped?: string;
+  composite_valid?: boolean;
+  summary?: string;
 }
 
 export interface SubscriptionInspectResponse {

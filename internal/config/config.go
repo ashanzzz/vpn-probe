@@ -10,12 +10,34 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	Logging   LogConfig       `yaml:"logging"`
-	Monitor   MonitorConfig   `yaml:"monitor"`
-	SubStore  SubStoreConfig  `yaml:"substore"`
-	Probe     ProbeConfig     `yaml:"probe"`
-	SpeedTest SpeedTestConfig `yaml:"speedtest"`
+	Server       ServerConfig        `yaml:"server"`
+	Logging      LogConfig           `yaml:"logging"`
+	Monitor      MonitorConfig       `yaml:"monitor"`
+	SubStore     SubStoreConfig      `yaml:"substore"`
+	Probe        ProbeConfig         `yaml:"probe"`
+	SpeedTest    SpeedTestConfig     `yaml:"speedtest"`
+	VPSHub       VPSHubConfig        `yaml:"vps_hub,omitempty"`
+	VPSInstances []VPSInstanceConfig `yaml:"vps_instances,omitempty"`
+}
+
+type VPSHubConfig struct {
+	URL      string `yaml:"url" json:"url"`
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password"`
+}
+
+type VPSInstanceConfig struct {
+	ID          string `yaml:"id" json:"id"`
+	Name        string `yaml:"name" json:"name"`
+	IP          string `yaml:"ip" json:"ip"`
+	SSHPort     int    `yaml:"ssh_port" json:"ssh_port"`
+	SSHUser     string `yaml:"ssh_user" json:"ssh_user"`
+	SSHPassword string `yaml:"ssh_password" json:"ssh_password"`
+	ProviderID  string `yaml:"provider_id,omitempty" json:"provider_id,omitempty"`
+	Status      string `yaml:"status,omitempty" json:"status,omitempty"`
+	Region      string `yaml:"region,omitempty" json:"region,omitempty"`
+	IsNAT       bool   `yaml:"is_nat,omitempty" json:"is_nat,omitempty"`
+	NATPorts    []int  `yaml:"nat_ports,omitempty" json:"nat_ports,omitempty"`
 }
 
 type SpeedTestConfig struct {
@@ -63,8 +85,9 @@ type SubStoreConfig struct {
 
 	// 动态全周期解耦架构字段 (Issue #18)
 	ExternalSources []string `yaml:"external_sources"` // 动态外部机场订阅列表 (如 ["蜂窝云"])
-	Domains         []string `yaml:"domains"`          // 域名列表 (如 ["free.1992004.xyz", "sub.ashanzzz.com"])
-	ShareToken      string   `yaml:"share_token"`      // 分享 Token (如 "13602004317")
+	Domains         []string `yaml:"domains"`          // 域名列表
+	ShareToken      string   `yaml:"share_token"`      // 分享 Token (由 config.yaml / VPN_PROBE_SHARE_TOKEN 注入)
+	SelfSubName     string   `yaml:"self_sub_name,omitempty" json:"self_sub_name,omitempty"` // 主自建订阅名称 (默认 "ashan's vps")
 
 	// 四大分组对应的 SubStore 订阅或集合名称
 	GroupSelfOnline      string `yaml:"group_self_online"`       // 在线自有服务
@@ -118,9 +141,10 @@ func DefaultConfig() *Config {
 			Enabled:              false,
 			URL:                  "http://127.0.0.1:2999",
 			Token:                "",
-			ExternalSources:      []string{"蜂窝云"},
-			Domains:              []string{"free.1992004.xyz", "sub.ashanzzz.com"},
-			ShareToken:           "13602004317",
+			ExternalSources:      []string{},
+			Domains:              []string{},
+			ShareToken:           "",
+			SelfSubName:          "ashan's vps",
 			GroupSelfOnline:      "在线自有服务",
 			GroupSelfOffline:     "离线自有服务",
 			GroupSelfOnlineChina: "在线自有服务送中",
@@ -145,8 +169,8 @@ func DefaultConfig() *Config {
 			},
 		},
 		SpeedTest: SpeedTestConfig{
-			SelfHostedURL10M: "http://45.192.242.72:28745/s/default/speedtest-10m.bin",
-			SelfHostedURL30M: "http://45.192.242.72:28745/s/default/speedtest-30m.bin",
+			SelfHostedURL10M: "",
+			SelfHostedURL30M: "",
 		},
 	}
 }
@@ -187,6 +211,18 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if env := os.Getenv("VPN_PROBE_SUBSTORE_TOKEN"); env != "" {
 		cfg.SubStore.Token = env
+	}
+	if env := os.Getenv("VPN_PROBE_SHARE_TOKEN"); env != "" {
+		cfg.SubStore.ShareToken = env
+	}
+	if env := os.Getenv("VPS_HUB_URL"); env != "" {
+		cfg.VPSHub.URL = env
+	}
+	if env := os.Getenv("VPS_HUB_USER"); env != "" {
+		cfg.VPSHub.Username = env
+	}
+	if env := os.Getenv("VPS_HUB_PASS"); env != "" {
+		cfg.VPSHub.Password = env
 	}
 
 	return cfg, nil

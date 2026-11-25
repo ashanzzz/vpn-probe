@@ -216,7 +216,7 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 		// Stage 3: 多区 NAT 中转服务器
 		natKey := serverHost
 		if natKey == "" {
-			natKey = "167.104.167.151" // 兜底
+			natKey = "unknown-nat"
 		}
 		natRelay, exists := natMap[natKey]
 		if !exists {

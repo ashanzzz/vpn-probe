@@ -218,3 +218,58 @@ func TestManager_AtomicSaveAndDeepCopy(t *testing.T) {
 		t.Errorf("atomic-test.org was not persisted to disk")
 	}
 }
+
+func TestGenerateJS_QuoteEscapeNoHomeLanAndPausedFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr, err := NewManager(filepath.Join(tmpDir, "rules.json"))
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	cfg := mgr.GetConfig()
+	cfg.DirectDomains = append(cfg.DirectDomains, "quote'test.example.com")
+	if err := mgr.UpdateConfig(cfg); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	js := mgr.GenerateJS()
+	for _, forbidden := range []string{"10.0.0.1", "bind-address", "0.0.0.0:9090", "0.0.0.0:7874"} {
+		if strings.Contains(js, forbidden) {
+			t.Errorf("generated JS unexpectedly enforces home-router directive %q", forbidden)
+		}
+	}
+
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed on PATH")
+	}
+
+	jsFile := filepath.Join(tmpDir, "custom_patch.js")
+	if err := os.WriteFile(jsFile, []byte(js), 0644); err != nil {
+		t.Fatalf("write js: %v", err)
+	}
+	if out, err := exec.Command("node", "-c", jsFile).CombinedOutput(); err != nil {
+		t.Fatalf("node -c failed with quoted domain: %v, out: %s", err, string(out))
+	}
+
+	harness := js + `
+const out = transformConfig({
+  proxies: [{ name: "[PAUSED] NodeA" }, { name: "HealthyNode" }],
+  "proxy-groups": [
+    { name: "OnlyPausedGroup", type: "select", proxies: ["[PAUSED] NodeA"] },
+    { name: "选择代理", type: "select", proxies: ["HealthyNode"] }
+  ],
+  rules: ["MATCH,选择代理"]
+});
+console.log(JSON.stringify(out["proxy-groups"]));
+`
+	out, err := exec.Command("node", "-e", harness).CombinedOutput()
+	if err != nil {
+		t.Fatalf("node harness failed: %v, out: %s", err, string(out))
+	}
+	if !strings.Contains(string(out), `"OnlyPausedGroup","type":"select","proxies":["DIRECT"]`) && !strings.Contains(string(out), `"proxies":["DIRECT"]`) {
+		t.Errorf("expected paused-only group to fallback cleanly to ['DIRECT'], got: %s", string(out))
+	}
+	if strings.Contains(string(out), "[PAUSED] NodeA") {
+		t.Errorf("paused node leaked into proxy-groups: %s", string(out))
+	}
+}

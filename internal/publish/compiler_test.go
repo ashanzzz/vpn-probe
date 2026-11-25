@@ -574,3 +574,99 @@ console.log(JSON.stringify(processed));
 		t.Errorf("expected 选择代理 to EXCLUDE dirty leak group '自建-送中', got: %v", entryProxies)
 	}
 }
+
+func TestCompileScript_BusinessPureSelfIsolationAndCustomGroupProtection(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed on PATH")
+	}
+
+	customGroup := model.CustomGroupDef{
+		Name:        "biz-custom",
+		DisplayName: "办公专用链",
+		Enabled:     true,
+		Type:        "select",
+		Order:       50,
+		AddToEntry:  true,
+		Filter:      model.GroupFilter{IncludeTransit: true},
+	}
+	atoms := []model.AtomNode{
+		{Name: "Self-Transit-1", Kind: "transit", Country: "US", ChinaExit: false},
+	}
+
+	script, err := CompileScript([]model.CustomGroupDef{customGroup}, atoms, "business")
+	if err != nil {
+		t.Fatalf("CompileScript(business) failed: %v", err)
+	}
+
+	mockCfg := map[string]any{
+		"proxies": []any{
+			map[string]any{"name": "Self-Transit-1"},
+			map[string]any{"name": "Airport-HK-01"},
+		},
+		"proxy-groups": []any{
+			map[string]any{"name": "选择代理", "type": "select", "proxies": []any{"自动选择", "香港节点", "Airport-HK-01"}},
+			map[string]any{"name": "自动选择", "type": "url-test", "proxies": []any{"Airport-HK-01"}},
+			map[string]any{"name": "香港节点", "type": "select", "proxies": []any{"Airport-HK-01"}},
+			map[string]any{"name": "全球直连", "type": "select", "proxies": []any{"DIRECT", "选择代理"}},
+		},
+	}
+	cfgBytes, _ := json.Marshal(mockCfg)
+	jsCode := script + "\nconst res = processConfig(" + string(cfgBytes) + "); console.log(JSON.stringify(res));"
+
+	cmd := exec.Command("node", "-e", jsCode)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node execution failed: %v, out: %s", err, string(out))
+	}
+
+	var processed struct {
+		Proxies []struct {
+			Name string `json:"name"`
+		} `json:"proxies"`
+		Groups []struct {
+			Name    string   `json:"name"`
+			Proxies []string `json:"proxies"`
+		} `json:"proxy-groups"`
+	}
+	if err := json.Unmarshal(out, &processed); err != nil {
+		t.Fatalf("unmarshal processed: %v", err)
+	}
+
+	// 1. Business track must strip commercial airport proxy Airport-HK-01
+	hasSelf := false
+	for _, p := range processed.Proxies {
+		if p.Name == "Airport-HK-01" {
+			t.Fatalf("business track leaked commercial proxy Airport-HK-01")
+		}
+		if p.Name == "Self-Transit-1" {
+			hasSelf = true
+		}
+	}
+	if !hasSelf {
+		t.Fatalf("expected Self-Transit-1 in business proxies")
+	}
+
+	// 2. Custom non-自建- group must be preserved, commercial group removed, 全球直连 keeps DIRECT first
+	foundCustom := false
+	foundDirect := false
+	for _, g := range processed.Groups {
+		if g.Name == "香港节点" {
+			t.Fatalf("business track failed to strip commercial group 香港节点")
+		}
+		if g.Name == "办公专用链" {
+			foundCustom = true
+			if len(g.Proxies) == 0 || g.Proxies[0] != "Self-Transit-1" {
+				t.Errorf("expected 办公专用链 to contain Self-Transit-1, got %v", g.Proxies)
+			}
+		}
+		if g.Name == "全球直连" {
+			foundDirect = true
+			if len(g.Proxies) == 0 || g.Proxies[0] != "DIRECT" {
+				t.Errorf("expected 全球直连 to keep DIRECT first, got %v", g.Proxies)
+			}
+		}
+	}
+	if !foundCustom || !foundDirect {
+		t.Fatalf("expected custom=%v and direct=%v groups", foundCustom, foundDirect)
+	}
+}

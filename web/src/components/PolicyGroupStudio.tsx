@@ -480,49 +480,49 @@ export const PolicyGroupStudio: React.FC = () => {
               </div>
             </div>
             <div className="text-2xs font-mono text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded-lg border border-slate-700">
-              中枢节点: free.1992004.xyz (156.231.113.91)
+              中枢节点: {manifest?.domains?.[0] || 'SubStore 未返回域名'}
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-            {/* Card 1: 外部策略与商业分流覆写脚本 */}
+            {/* Card 1: 本机规则转换算子 (/rules/convert.js) */}
             <div className="bg-slate-800/70 rounded-xl p-3.5 border border-slate-700/80 flex flex-col justify-between space-y-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-2xs font-semibold px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                    外部策略源 · 规则覆写
+                    规则转换算子
                   </span>
-                  <span className="text-2xs font-mono text-slate-400">v121</span>
+                  <span className="text-2xs font-mono text-slate-400">桥接缓存</span>
                 </div>
-                <div className="font-bold text-xs text-white">convert_openclash_v2.js</div>
+                <div className="font-bold text-xs text-white">convert.js</div>
                 <p className="text-2xs text-slate-300 leading-relaxed">
-                  驱动外部商业机场节点清洗、OpenClash / Mihomo 规则覆写、全球国别分流与标准业务组自动构建。
+                  驱动商用节点清洗、Mihomo / Clash 规则覆写与基础地域分组生成。
                 </p>
                 <div className="bg-slate-900/80 rounded-lg p-2 border border-slate-800 font-mono text-2xs text-slate-300 break-all select-all">
-                  https://free.1992004.xyz/convert_openclash_v2.js
+                  {`${window.location.origin}/rules/convert.js`}
                 </div>
               </div>
 
               <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-700/60">
                 <button
                   type="button"
-                  onClick={() => handleCopy('https://free.1992004.xyz/convert_openclash_v2.js?v=121#grouptype=0&threshold=1&full=true', 'ext_script')}
+                  onClick={() => handleCopy(`${window.location.origin}/rules/convert.js`, 'ext_script')}
                   className="px-2.5 py-1 text-2xs font-semibold rounded bg-blue-600 hover:bg-blue-700 text-white transition flex items-center space-x-1"
                 >
                   {copiedScriptKey === 'ext_script' ? (
                     <>
                       <Check size={12} className="text-white" />
-                      <span>已复制带参直链!</span>
+                      <span>已复制算子 URL!</span>
                     </>
                   ) : (
                     <>
                       <Copy size={12} />
-                      <span>复制带参直链</span>
+                      <span>复制算子 URL</span>
                     </>
                   )}
                 </button>
                 <a
-                  href="https://free.1992004.xyz/convert_openclash_v2.js"
+                  href="/rules/convert.js"
                   target="_blank"
                   rel="noreferrer"
                   className="text-2xs text-slate-400 hover:text-white flex items-center space-x-1 underline"
@@ -533,28 +533,28 @@ export const PolicyGroupStudio: React.FC = () => {
               </div>
             </div>
 
-            {/* Card 2: 内部双轨自建编排与防送中算子 */}
+            {/* Card 2: 个性化规则补丁算子 (/rules/custom_patch.js) */}
             <div className="bg-slate-800/70 rounded-xl p-3.5 border border-slate-700/80 flex flex-col justify-between space-y-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-2xs font-semibold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                    自建策略源 · 动态编排
+                    通用分流与防送中算子
                   </span>
-                  <span className="text-2xs font-mono text-slate-400">v3.0</span>
+                  <span className="text-2xs font-mono text-slate-400">动态编译</span>
                 </div>
-                <div className="font-bold text-xs text-white">classify_songzhong.js (编排算子)</div>
+                <div className="font-bold text-xs text-white">custom_patch.js</div>
                 <p className="text-2xs text-slate-300 leading-relaxed">
-                  驱动 Google 出口防送中研判、自有骨干+懒猫家宽网状链式中继、自建 8 大组置底与外部业务组纯净注入。
+                  动态注入自定义直连域名、防定位送中屏蔽、暂停/失效节点清理与 MLKEM 特性支持。
                 </p>
                 <div className="bg-slate-900/80 rounded-lg p-2 border border-slate-800 font-mono text-2xs text-slate-300 break-all select-all">
-                  https://free.1992004.xyz/classify_songzhong.js
+                  {`${window.location.origin}/rules/custom_patch.js`}
                 </div>
               </div>
 
               <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-700/60">
                 <button
                   type="button"
-                  onClick={() => handleCopy('https://free.1992004.xyz/classify_songzhong.js', 'int_script')}
+                  onClick={() => handleCopy(`${window.location.origin}/rules/custom_patch.js`, 'int_script')}
                   className="px-2.5 py-1 text-2xs font-semibold rounded bg-emerald-600 hover:bg-emerald-700 text-white transition flex items-center space-x-1"
                 >
                   {copiedScriptKey === 'int_script' ? (
@@ -570,7 +570,7 @@ export const PolicyGroupStudio: React.FC = () => {
                   )}
                 </button>
                 <a
-                  href="https://free.1992004.xyz/classify_songzhong.js"
+                  href="/rules/custom_patch.js"
                   target="_blank"
                   rel="noreferrer"
                   className="text-2xs text-slate-400 hover:text-white flex items-center space-x-1 underline"
@@ -581,42 +581,46 @@ export const PolicyGroupStudio: React.FC = () => {
               </div>
             </div>
 
-            {/* Card 3: 双轨核心生产订阅直链 */}
+            {/* Card 3: 三轨核心生产订阅直链 (由 Manifest 动态读取) */}
             <div className="bg-slate-800/70 rounded-xl p-3.5 border border-slate-700/80 flex flex-col justify-between space-y-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-2xs font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                    双轨订阅输出 · 高防分发
+                    三轨订阅输出 · 动态读取
                   </span>
                   <span className="text-2xs font-mono text-slate-400">Clash YAML</span>
                 </div>
-                <div className="font-bold text-xs text-white">Q 极速轻量 vs ashan 全栈旗舰</div>
+                <div className="font-bold text-xs text-white">Q vs ashan vs business</div>
                 <div className="space-y-1.5 text-2xs">
-                  <div className="flex items-center justify-between bg-slate-900/60 p-1.5 rounded border border-slate-800">
-                    <span className="font-mono text-blue-300 font-semibold">Q (0 住宅骨干):</span>
-                    <button
-                      type="button"
-                      onClick={() => handleCopy('https://free.1992004.xyz/share/file/Q?token=13602004317', 'sub_q')}
-                      className="text-2xs font-mono text-slate-400 hover:text-white underline ml-2"
-                    >
-                      {copiedScriptKey === 'sub_q' ? '已复制 Q 链接' : '复制 Q 订阅'}
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between bg-slate-900/60 p-1.5 rounded border border-slate-800">
-                    <span className="font-mono text-purple-300 font-semibold">ashan (全家桶):</span>
-                    <button
-                      type="button"
-                      onClick={() => handleCopy('https://free.1992004.xyz/share/file/ashan?token=13602004317', 'sub_ashan')}
-                      className="text-2xs font-mono text-slate-400 hover:text-white underline ml-2"
-                    >
-                      {copiedScriptKey === 'sub_ashan' ? '已复制 ashan 链接' : '复制 ashan 订阅'}
-                    </button>
-                  </div>
+                  {(['Q', 'ashan', 'business'] as const).map((track) => {
+                    const matchedShare = (manifest?.share_links || []).find((s: any) => s.name?.toLowerCase() === track.toLowerCase());
+                    const shareLink = matchedShare?.share_url || (manifest?.domains?.[0]
+                      ? `https://${manifest.domains[0]}/share/file/${track}${manifest?.share_token ? `?token=${encodeURIComponent(manifest.share_token)}` : ''}`
+                      : '');
+                    const label = track === 'Q' ? 'Q (0 住宅骨干):' : track === 'ashan' ? 'ashan (全栈旗舰):' : 'business (纯自建):';
+                    const cls = track === 'Q' ? 'text-blue-300' : track === 'ashan' ? 'text-purple-300' : 'text-emerald-300';
+                    return (
+                      <div key={track} className="flex items-center justify-between bg-slate-900/60 p-1.5 rounded border border-slate-800">
+                        <span className={`font-mono font-semibold ${cls}`}>{label}</span>
+                        {shareLink ? (
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(shareLink, `sub_${track}`)}
+                            className="text-2xs font-mono text-slate-400 hover:text-white underline ml-2"
+                          >
+                            {copiedScriptKey === `sub_${track}` ? `已复制 ${track}` : `复制 ${track} 分享`}
+                          </button>
+                        ) : (
+                          <span className="text-slate-500 font-mono">未配置分发域名</span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
               <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-700/60 text-2xs text-slate-400">
-                <span>支持直接粘贴至 Clash / Loon / Stash</span>
+                <span>支持直接粘贴至 Clash / Mihomo / Stash</span>
                 <span className="font-mono text-emerald-400">已就绪</span>
               </div>
             </div>

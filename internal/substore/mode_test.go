@@ -241,3 +241,25 @@ func TestCleanupDeadSocks_PathEscapeAndAtomicWrite(t *testing.T) {
 	}
 	defer os.Remove(res.BackupPath)
 }
+
+func TestCheckShareDomains_ReportsFailureOnErrorOr500(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("upstream down"))
+	}))
+	defer srv.Close()
+
+	restore := SetShareDomainsForTest([]string{srv.URL, "http://127.0.0.1:1"})
+	defer restore()
+
+	statuses := CheckShareDomains(context.Background(), "Q", "test-tok")
+	if len(statuses) != 2 {
+		t.Fatalf("expected 2 share statuses, got %d", len(statuses))
+	}
+	if statuses[0].Reachable || statuses[0].StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected HTTP 500 domain to be unreachable, got %+v", statuses[0])
+	}
+	if statuses[1].Reachable || statuses[1].StatusCode != 0 {
+		t.Errorf("expected dial-error domain to report Reachable=false StatusCode=0, got %+v", statuses[1])
+	}
+}

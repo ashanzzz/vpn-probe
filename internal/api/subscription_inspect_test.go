@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -581,5 +582,172 @@ proxy-groups:
 				}
 			}
 		}
+	}
+}
+
+func TestSubscriptionInspect_BusinessAndPolicyGroupClassification(t *testing.T) {
+	tmpDir := t.TempDir()
+	mockYAML := `
+proxies:
+  - name: "Self-US-1"
+    type: vless
+    server: 2.3.4.5
+    port: 443
+
+proxy-groups:
+  - name: "选择代理"
+    type: select
+    proxies: ["自建-线路机", "DIRECT"]
+  - name: "自建-线路机"
+    type: select
+    proxies: ["Self-US-1"]
+
+rules:
+  - MATCH,选择代理
+`
+	snapDir := filepath.Join(tmpDir, "snapshots")
+	_ = os.MkdirAll(snapDir, 0755)
+	_ = os.WriteFile(filepath.Join(snapDir, "business.yaml"), []byte(mockYAML), 0644)
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{AuthToken: "test-auth-token"},
+		SubStore: config.SubStoreConfig{
+			Enabled: true,
+			URL:     "http://127.0.0.1:3001",
+		},
+	}
+	sc := substore.NewClient(&cfg.SubStore)
+	sch := monitor.NewScheduler(cfg, nil, nil, sc)
+	server := NewAPIServer(cfg, nil, nil, sc, nil, sch, nil)
+	server.snapshotMgr = substore.NewSnapshotManager(substore.NewClient(&cfg.SubStore), snapDir)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/subscriptions/business/inspect", nil)
+	req.Header.Set("Authorization", "Bearer test-auth-token")
+	resp, err := server.app.Test(req)
+	if err != nil {
+		t.Fatalf("inspect business failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var out SubscriptionInspectResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode inspect: %v", err)
+	}
+
+	var checkedGroupRef, checkedDirectRef bool
+	for _, g := range out.Groups {
+		if g.Name == "选择代理" {
+			for _, p := range g.Proxies {
+				if p.Name == "自建-线路机" {
+					checkedGroupRef = true
+					if p.Kind != "policy_group" {
+						t.Errorf("expected nested group reference 自建-线路机 to have kind 'policy_group', got %q", p.Kind)
+					}
+				}
+				if p.Name == "DIRECT" {
+					checkedDirectRef = true
+					if p.Kind != "policy_group" {
+						t.Errorf("expected DIRECT reference to have kind 'policy_group', got %q", p.Kind)
+					}
+				}
+			}
+		}
+	}
+	if !checkedGroupRef || !checkedDirectRef {
+		t.Fatalf("missing group references: groupRef=%v directRef=%v", checkedGroupRef, checkedDirectRef)
+	}
+}
+
+func TestManifestMasking_WarmupAlias_And_MonitorQuota(t *testing.T) {
+	subSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"success","data":[]}`))
+	}))
+	defer subSrv.Close()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			AuthToken:  "write-tok",
+			AdminToken: "admin-tok",
+		},
+		SubStore: config.SubStoreConfig{
+			Enabled:    true,
+			URL:        subSrv.URL,
+			ShareToken: "plain-share-secret",
+		},
+	}
+	sc := substore.NewClient(&cfg.SubStore)
+	sch := monitor.NewScheduler(cfg, nil, nil, sc)
+	server := NewAPIServer(cfg, nil, nil, sc, nil, sch, nil)
+	server.snapshotMgr = substore.NewSnapshotManager(sc, t.TempDir())
+
+	// 1. /api/substore/manifest must hide plaintext share token for non-admin
+	reqWrite := httptest.NewRequest(http.MethodGet, "/api/substore/manifest", nil)
+	reqWrite.Header.Set("Authorization", "Bearer write-tok")
+	respWrite, err := server.app.Test(reqWrite)
+	if err != nil {
+		t.Fatalf("manifest write req failed: %v", err)
+	}
+	if respWrite.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", respWrite.StatusCode)
+	}
+	var writeBuf bytes.Buffer
+	_, _ = writeBuf.ReadFrom(respWrite.Body)
+	if strings.Contains(writeBuf.String(), "plain-share-secret") {
+		t.Errorf("manifest leaked plaintext share_token to RoleWrite caller: %s", writeBuf.String())
+	}
+
+	reqAdmin := httptest.NewRequest(http.MethodGet, "/api/substore/manifest", nil)
+	reqAdmin.Header.Set("Authorization", "Bearer admin-tok")
+	respAdmin, err := server.app.Test(reqAdmin)
+	if err != nil {
+		t.Fatalf("manifest admin req failed: %v", err)
+	}
+	var adminBuf bytes.Buffer
+	_, _ = adminBuf.ReadFrom(respAdmin.Body)
+	if !strings.Contains(adminBuf.String(), "plain-share-secret") {
+		t.Errorf("expected admin manifest response to include share_token, got: %s", adminBuf.String())
+	}
+
+	// 2. /api/monitor/quota returns structured daily quota fields
+	reqQuota := httptest.NewRequest(http.MethodGet, "/api/monitor/quota", nil)
+	reqQuota.Header.Set("Authorization", "Bearer write-tok")
+	respQuota, err := server.app.Test(reqQuota)
+	if err != nil || respQuota.StatusCode != http.StatusOK {
+		t.Fatalf("quota endpoint failed: status=%v err=%v", respQuota.StatusCode, err)
+	}
+	var qBody map[string]any
+	if err := json.NewDecoder(respQuota.Body).Decode(&qBody); err != nil {
+		t.Fatalf("decode quota response: %v", err)
+	}
+	if _, ok := qBody["speed_test_count"]; !ok {
+		t.Errorf("expected speed_test_count in quota response, got %+v", qBody)
+	}
+	if _, ok := qBody["split_check_count"]; !ok {
+		t.Errorf("expected split_check_count in quota response, got %+v", qBody)
+	}
+
+	// 3. /api/sub/snapshot/warmup accepts file_names and defaults to Q/ashan/business/Business
+	reqWarmup := httptest.NewRequest(http.MethodPost, "/api/sub/snapshot/warmup", strings.NewReader(`{"file_names":["Q","business"]}`))
+	reqWarmup.Header.Set("Content-Type", "application/json")
+	reqWarmup.Header.Set("Authorization", "Bearer write-tok")
+	respWarmup, err := server.app.Test(reqWarmup)
+	if err != nil {
+		t.Fatalf("warmup req failed: %v", err)
+	}
+	if respWarmup.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on warmup, got %d", respWarmup.StatusCode)
+	}
+	var wBody struct {
+		Files []string `json:"files"`
+	}
+	if err := json.NewDecoder(respWarmup.Body).Decode(&wBody); err != nil {
+		t.Fatalf("decode warmup: %v", err)
+	}
+	if len(wBody.Files) != 2 || wBody.Files[0] != "Q" || wBody.Files[1] != "business" {
+		t.Errorf("expected warmup files [Q, business], got %v", wBody.Files)
 	}
 }

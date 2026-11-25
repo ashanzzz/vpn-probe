@@ -388,49 +388,61 @@ func TestResolveFallbackURL(t *testing.T) {
 	cases := []struct {
 		name     string
 		cfg      *config.SubStoreConfig
+		envBase  string
 		expected string
 	}{
 		{
-			name:     "nil config",
+			name:     "nil config without env returns empty",
 			cfg:      nil,
-			expected: "http://156.231.113.91:3001",
+			expected: "",
+		},
+		{
+			name:     "nil config with env returns env base",
+			cfg:      nil,
+			envBase:  "http://fallback.local:3001",
+			expected: "http://fallback.local:3001",
 		},
 		{
 			name: "token explicitly set",
 			cfg: &config.SubStoreConfig{
-				URL:   "https://free.1992004.xyz",
-				Token: "mysecret",
+				URL:         "https://sub.example.com",
+				FallbackURL: "http://fallback.local:3001",
+				Token:       "mysecret",
 			},
-			expected: "http://156.231.113.91:3001/mysecret",
+			expected: "http://fallback.local:3001/mysecret",
 		},
 		{
 			name: "token with leading slash",
 			cfg: &config.SubStoreConfig{
-				URL:   "https://free.1992004.xyz",
-				Token: "/mysecret/",
+				URL:         "https://sub.example.com",
+				FallbackURL: "http://fallback.local:3001/",
+				Token:       "/mysecret/",
 			},
-			expected: "http://156.231.113.91:3001/mysecret",
+			expected: "http://fallback.local:3001/mysecret",
 		},
 		{
-			name: "token empty but url path contains token (production pattern)",
+			name: "token empty but url path contains token",
 			cfg: &config.SubStoreConfig{
-				URL:   "https://free.1992004.xyz/Woo@@@204317",
-				Token: "",
+				URL:         "https://sub.example.com/secret-path",
+				FallbackURL: "http://fallback.local:3001",
+				Token:       "",
 			},
-			expected: "http://156.231.113.91:3001/Woo@@@204317",
+			expected: "http://fallback.local:3001/secret-path",
 		},
 		{
 			name: "token empty and url path is root",
 			cfg: &config.SubStoreConfig{
-				URL:   "https://free.1992004.xyz/",
-				Token: "",
+				URL:         "https://sub.example.com/",
+				FallbackURL: "http://fallback.local:3001",
+				Token:       "",
 			},
-			expected: "http://156.231.113.91:3001",
+			expected: "http://fallback.local:3001",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("VPN_PROBE_SUBSTORE_FALLBACK_URL", tc.envBase)
 			got := ResolveFallbackURL(tc.cfg)
 			if got != tc.expected {
 				t.Errorf("ResolveFallbackURL() = %q; expected %q", got, tc.expected)

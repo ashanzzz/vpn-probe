@@ -20,7 +20,12 @@ type compiledGroup struct {
 // CompileScript compiles user-authored groups into a robust Sub-Store script operator.
 // targetFileType: "ashan" (all nodes), "q" (strictly backbone only, excludes residential), or "business" (pure self-built, no commercial airports)
 func CompileScript(groups []model.CustomGroupDef, atoms []model.AtomNode, targetFileType ...string) (string, error) {
-	isQ := len(targetFileType) > 0 && strings.EqualFold(targetFileType[0], "q")
+	track := "ashan"
+	if len(targetFileType) > 0 && strings.TrimSpace(targetFileType[0]) != "" {
+		track = strings.ToLower(strings.TrimSpace(targetFileType[0]))
+	}
+	isQ := track == "q"
+	isBusiness := track == "business"
 
 	output := make([]compiledGroup, 0, len(groups))
 	seenGroups := map[string]bool{}
@@ -100,9 +105,20 @@ func CompileScript(groups []model.CustomGroupDef, atoms []model.AtomNode, target
 		return "", err
 	}
 
+	isQJS := "false"
+	if isQ {
+		isQJS = "true"
+	}
+	isBusinessJS := "false"
+	if isBusiness {
+		isBusinessJS = "true"
+	}
+
 	// Embedded JS with Alias Resolver (resolving R2: 链式|Transit ➔ Resi <-> IIJ-美宽-Pavlov)
 	return `// vpn-probe-managed user groups with dynamic alias resolution.
 const vpnUserGroups = ` + string(encoded) + `;
+const vpnIsQ = ` + isQJS + `;
+const vpnIsBusiness = ` + isBusinessJS + `;
 
 function getYamlLib() {
   if (typeof yaml !== 'undefined' && yaml) return yaml;
@@ -187,10 +203,15 @@ function resolveProxyName(targetName, allNames) {
       else if (transitUpper.includes('SOFTBANK') || transitUpper.includes('SB') || transit.includes('软银')) prefix = 'SB-';
 
       let suffix = '';
+      const resiParts = resi.replace(/[-_](家宽|住宅|Native|Residential)\d*$/i, '').split('-').filter(Boolean);
+      const resiKeywords = ['Pavlov', 'Frontier', 'Verizon', 'BIGLOBE', 'KDDI', 'SoftBank', 'GLBB', 'StarHub', 'KT', 'HiNet'];
       const resiUpper = resi.toUpperCase();
-      const keywords = ['Pavlov', 'Frontier', 'Verizon', 'BIGLOBE', 'KDDI', 'SoftBank', 'GLBB', 'StarHub', 'KT', 'HiNet'];
-      for (const kw of keywords) {
+      for (const kw of resiKeywords) {
         if (resiUpper.includes(kw.toUpperCase())) { suffix = kw; break; }
+      }
+      if (!suffix && resiParts.length > 0) {
+        const cand = resiParts[resiParts.length - 1];
+        if (cand && cand.length >= 2) suffix = cand;
       }
       if (prefix && suffix) {
         const prefixLower = prefix.toLowerCase();
@@ -301,39 +322,72 @@ function processConfig(vpnCfg) {
     '选择代理', '手动选择', '自动选择', '故障转移', '负载均衡',
     '广告拦截', '搜狗输入法', 'DIRECT', 'REJECT', 'REJECT-DROP',
     '外部分组', '外部节点', '自有节点', '自建节点', 'GLOBAL', 'Final',
-    '前置代理', '落地节点', '低倍率节点'
+    '前置代理', '落地节点', '低倍率节点',
+    '全球直连', '国内网站', '国内媒体', '国内直连', '漏网之鱼',
+    '苹果服务', '微软服务', '谷歌FCM', 'Direct'
   ]);
 
+  const builtinControls = new Set(['DIRECT', 'REJECT', 'REJECT-DROP', '选择代理', '自动选择', '手动选择', '故障转移', '负载均衡']);
+
+  // Track-level business isolation: drop any non-self commercial proxies & commercial pool groups
+  if (vpnIsBusiness) {
+    const allowedSelfProxies = new Set();
+    for (const g of vpnGroups) {
+      if (isSelfName(g.name) || vpnDefined.has(g.name)) {
+        for (const pName of (g.proxies || [])) {
+          if (vpnNames.has(pName)) allowedSelfProxies.add(pName);
+        }
+      }
+    }
+    if (allowedSelfProxies.size > 0) {
+      vpnCfg.proxies = vpnCfg.proxies.filter(p => p && allowedSelfProxies.has(p.name));
+      vpnNames.clear();
+      for (const p of vpnCfg.proxies) {
+        if (p && p.name) vpnNames.add(p.name);
+      }
+    }
+    const excludedCommercialPools = new Set(['外部分组', '外部节点', '低倍率节点']);
+    vpnGroups = vpnGroups.filter(g => g && (isSelfName(g.name) || vpnDefined.has(g.name) || (nonAppGroupNames.has(g.name) && !excludedCommercialPools.has(g.name))));
+    const validGroupSet = new Set(vpnGroups.map(g => g.name));
+    for (const g of vpnGroups) {
+      if (Array.isArray(g.proxies) && !isSelfName(g.name) && !vpnDefined.has(g.name)) {
+        g.proxies = g.proxies.filter(p => builtinControls.has(p) || validGroupSet.has(p) || vpnNames.has(p));
+        if (g.proxies.length === 0) g.proxies = ['DIRECT'];
+      }
+    }
+  }
+
   // Extract active self-hosted groups in current subscription (ordered by spec.order)
-  const activeSelfGroups = vpnGroups.filter(g => isSelfName(g.name));
+  const activeSelfGroups = vpnGroups.filter(g => isSelfName(g.name) || vpnDefined.has(g.name));
   activeSelfGroups.sort((a, b) => (a._order || 999) - (b._order || 999));
   const activeSelfNames = activeSelfGroups.map(g => g.name);
 
   // Clean proxy groups:
   // 1. Region node pools (ends with 节点 / 池) MUST ONLY contain genuine external/pure nodes (strictly purge self groups & other policy groups).
   // 2. External app groups (TikTok, YouTube, AI服务, Spotify, Netflix, etc.):
-  //    Unified layout: ['自动选择', '选择代理', '故障转移', ...external node pools & DIRECT, ...activeSelfNames (trailing additions only if present)]
-  // 3. Self groups MUST NOT contain self reference (anti-nesting).
+  //    Unified layout: ['选择代理', '自动选择', '故障转移', ...external node pools & DIRECT, ...activeSelfNames (trailing additions only if present)]
+  // 3. Self / user-authored groups MUST NOT be overwritten by external-app-group layout.
   for (const g of vpnGroups) {
     if (!g || !Array.isArray(g.proxies)) continue;
 
     // Anti-nesting: no group should ever contain itself
     g.proxies = g.proxies.filter(p => p !== g.name && !purgedNodeNames.has(p));
 
-    if (isSelfName(g.name)) {
-      // Self groups: only keep valid nodes or allowed group references
+    if (isSelfName(g.name) || vpnDefined.has(g.name)) {
+      // Self or user-defined custom groups: preserve compiled proxies directly
       continue;
     }
 
+    const isDirectFirst = g.proxies.length > 0 && (g.proxies[0] === 'DIRECT' || g.proxies[0] === 'REJECT' || g.proxies[0] === 'REJECT-DROP');
     const isNodePool = g.name.endsWith('节点') || g.name.endsWith('池');
     if (isNodePool) {
       // Region node pool: strictly purge any self group or nested group names
       g.proxies = g.proxies.filter(p => !isSelfName(p) && (!existingGroupNames.has(p) || p === 'DIRECT' || p === 'REJECT') && !isDirtyLeakName(p));
     } else if (g.name !== '选择代理' && g.name !== '手动选择') {
-      const isSpecialPool = g.name.endsWith('分组') || g.type === 'url-test' || g.type === 'fallback' || g.type === 'load-balance' || nonAppGroupNames.has(g.name);
+      const isSpecialPool = isDirectFirst || g.name.endsWith('分组') || g.type === 'url-test' || g.type === 'fallback' || g.type === 'load-balance' || nonAppGroupNames.has(g.name);
       if (!isSpecialPool) {
         // External application policy group (TikTok, Spotify, AI服务, etc.)
-        const externalMembers = g.proxies.filter(p => !isSelfName(p) && p !== '自动选择' && p !== '选择代理' && p !== '故障转移' && !isDirtyLeakName(p));
+        const externalMembers = g.proxies.filter(p => !isSelfName(p) && !vpnDefined.has(p) && p !== '自动选择' && p !== '选择代理' && p !== '故障转移' && !isDirtyLeakName(p));
         const prefix = [];
         if (existingGroupNames.has('选择代理')) prefix.push('选择代理');
         if (existingGroupNames.has('自动选择')) prefix.push('自动选择');
@@ -394,7 +448,7 @@ function processConfig(vpnCfg) {
   }
   const topSet = new Set(topGroups.map(g => g.name));
 
-  const selfGroups = vpnGroups.filter(g => isSelfName(g.name));
+  const selfGroups = vpnGroups.filter(g => isSelfName(g.name) || vpnDefined.has(g.name));
   selfGroups.sort((a, b) => (a._order || 999) - (b._order || 999));
   const selfSet = new Set(selfGroups.map(g => g.name));
 

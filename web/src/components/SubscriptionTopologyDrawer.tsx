@@ -199,21 +199,58 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
     setSelectedNodeNames(prev => Array.from(new Set([...prev, ...names])));
   };
 
-  // Save updated nodes to custom group
-  const handleSavePickerNodes = async (groupName: string) => {
+  const resolveProfile = (sub: string): 'q' | 'business' | 'ashan' => {
+    const s = (sub || '').toLowerCase();
+    if (s === 'q') return 'q';
+    if (s === 'business') return 'business';
+    return 'ashan';
+  };
+
+  const resolveGroupId = (group: GroupInspectItem): string => {
+    if (group.custom_def?.name) return group.custom_def.name;
+    if (/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(group.name)) return group.name;
+    const prefix = resolveProfile(currentSub);
+    return `${prefix}-custom-${Date.now().toString(36)}`;
+  };
+
+  // Filtered atoms inside the Node Picker
+  const pickerFilteredAtoms = useMemo(() => {
+    const q = pickerSearch.trim().toLowerCase();
+    return atoms.filter(a => {
+      if (pickerTagFilter === 'transit' && a.kind !== 'transit') return false;
+      if (pickerTagFilter === 'residential' && a.kind !== 'residential') return false;
+      if (pickerTagFilter === 'chain' && a.kind !== 'chain') return false;
+      if (pickerTagFilter === 'clean' && a.china_exit) return false;
+      if (q) {
+        return a.name.toLowerCase().includes(q) || a.country.toLowerCase().includes(q) || (a.tags || []).some(t => t.toLowerCase().includes(q));
+      }
+      return true;
+    });
+  }, [atoms, pickerSearch, pickerTagFilter]);
+
+  // Save updated nodes to custom group (preserving profile, type, order, add_to_entry, tags)
+  const handleSavePickerNodes = async (group: GroupInspectItem) => {
+    if (selectedNodeNames.length === 0) {
+      alert('手动模式至少需要保留或勾选 1 个节点');
+      return;
+    }
     setSavingGroup(true);
     try {
+      const profile = resolveProfile(currentSub);
+      const gid = resolveGroupId(group);
       const def: CustomGroupDef = {
-        name: groupName,
-        display_name: groupName,
+        ...(group.custom_def || {}),
+        name: gid,
+        display_name: group.display_name || group.name,
         enabled: true,
-        type: 'select',
+        type: group.custom_def?.type || group.type || 'select',
         filter: {
+          ...(group.custom_def?.filter || {}),
           mode: 'manual',
           node_ids: selectedNodeNames,
         }
       };
-      await api.createPolicyGroup(def);
+      await api.createPolicyGroup(def, profile);
       setPickerGroupId(null);
       await loadInspect(currentSub);
     } catch (err: any) {
@@ -227,31 +264,61 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
   const handleRemoveNode = async (group: GroupInspectItem, proxyName: string) => {
     if (!confirm(`确定从分组「${group.display_name}」中移除节点「${proxyName}」吗？`)) return;
     const remaining = group.proxies.map(p => p.name).filter(n => n !== proxyName);
+    if (remaining.length === 0) {
+      alert('至少需保留 1 个节点；如需删除整个分组，请在策略编排工坊中停用或删除。');
+      return;
+    }
     try {
+      const profile = resolveProfile(currentSub);
+      const gid = resolveGroupId(group);
       const def: CustomGroupDef = {
-        name: group.name,
+        ...(group.custom_def || {}),
+        name: gid,
         display_name: group.display_name,
         enabled: true,
-        type: group.type,
+        type: group.custom_def?.type || group.type || 'select',
         filter: {
+          ...(group.custom_def?.filter || {}),
           mode: 'manual',
           node_ids: remaining,
         }
       };
-      await api.createPolicyGroup(def);
+      await api.createPolicyGroup(def, profile);
       await loadInspect(currentSub);
     } catch (err: any) {
       alert(`移除节点失败: ${err.message}`);
     }
   };
 
-  // Add new tag to group
+  // Add new tag to group and persist to backend
   const handleAddTag = async (group: GroupInspectItem) => {
-    if (!newTagText.trim()) return;
-    const updatedTags = Array.from(new Set([...group.tags, newTagText.trim()]));
-    group.tags = updatedTags;
-    setTagInputGroupId(null);
-    setNewTagText('');
+    const tagVal = newTagText.trim();
+    if (!tagVal) return;
+    try {
+      const profile = resolveProfile(currentSub);
+      const gid = resolveGroupId(group);
+      const baseCustom = group.custom_def;
+      const mergedTags = Array.from(new Set([...(baseCustom?.tags || []), tagVal]));
+      const fallbackFilter = baseCustom?.filter || {
+        mode: 'manual' as const,
+        node_ids: group.proxies.map(p => p.name).filter(Boolean),
+      };
+      const def: CustomGroupDef = {
+        ...(baseCustom || {}),
+        name: gid,
+        display_name: group.display_name || group.name,
+        enabled: baseCustom?.enabled ?? true,
+        type: baseCustom?.type || group.type || 'select',
+        tags: mergedTags,
+        filter: fallbackFilter,
+      };
+      await api.createPolicyGroup(def, profile);
+      setTagInputGroupId(null);
+      setNewTagText('');
+      await loadInspect(currentSub);
+    } catch (err: any) {
+      alert(`保存便签失败: ${err.message || '未知错误'}`);
+    }
   };
 
   // Copy JS script
@@ -359,10 +426,10 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
         </div>
 
         {/* 2. Tab Navigation */}
-        <div className="flex border-b border-slate-200 bg-white px-5">
+        <div className="flex border-b border-slate-200 bg-white px-5 overflow-x-auto flex-shrink-0">
           <button
             onClick={() => setActiveTab('groups')}
-            className={`py-3 px-4 text-xs font-bold border-b-2 flex items-center space-x-2 transition ${
+            className={`py-3 px-4 text-xs font-bold border-b-2 flex items-center space-x-2 whitespace-nowrap transition ${
               activeTab === 'groups'
                 ? 'border-indigo-600 text-indigo-600'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -379,7 +446,7 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
 
           <button
             onClick={() => setActiveTab('verify')}
-            className={`py-3 px-4 text-xs font-bold border-b-2 flex items-center space-x-2 transition ${
+            className={`py-3 px-4 text-xs font-bold border-b-2 flex items-center space-x-2 whitespace-nowrap transition ${
               activeTab === 'verify'
                 ? 'border-indigo-600 text-indigo-600'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -400,7 +467,7 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
 
           <button
             onClick={() => setActiveTab('rules')}
-            className={`py-3 px-4 text-xs font-bold border-b-2 flex items-center space-x-2 transition ${
+            className={`py-3 px-4 text-xs font-bold border-b-2 flex items-center space-x-2 whitespace-nowrap transition ${
               activeTab === 'rules'
                 ? 'border-indigo-600 text-indigo-600'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -640,9 +707,34 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
                             </div>
                           </div>
 
+                          {/* Picker Search & Category Filter */}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="relative flex-1 min-w-[180px]">
+                              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+                              <input
+                                type="text"
+                                placeholder="搜索节点名称 / 国家 / 标签..."
+                                value={pickerSearch}
+                                onChange={e => setPickerSearch(e.target.value)}
+                                className="w-full pl-8 pr-2.5 py-1 text-2xs bg-white border border-emerald-200 rounded-md focus:outline-none focus:border-emerald-500"
+                              />
+                            </div>
+                            <select
+                              value={pickerTagFilter}
+                              onChange={e => setPickerTagFilter(e.target.value)}
+                              className="px-2 py-1 text-2xs bg-white border border-emerald-200 rounded-md text-slate-700"
+                            >
+                              <option value="all">全部节点 ({atoms.length})</option>
+                              <option value="transit">仅骨干专线</option>
+                              <option value="residential">仅原生家宽</option>
+                              <option value="chain">仅链式中继</option>
+                              <option value="clean">仅不送中纯净</option>
+                            </select>
+                          </div>
+
                           {/* Node Checkboxes List */}
                           <div className="max-h-56 overflow-y-auto bg-white rounded-lg border border-emerald-200/80 p-2 divide-y divide-slate-100 text-xs">
-                            {atoms.map(atom => {
+                            {pickerFilteredAtoms.map(atom => {
                               const isChecked = selectedNodeNames.includes(atom.name);
                               return (
                                 <label 
@@ -685,7 +777,7 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
                                 取消
                               </button>
                               <button
-                                onClick={() => handleSavePickerNodes(group.name)}
+                                onClick={() => handleSavePickerNodes(group)}
                                 disabled={savingGroup}
                                 className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-2xs transition disabled:opacity-50"
                               >
@@ -826,29 +918,32 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
                   </div>
 
                   {/* Card 2: Correctness Proof Banner */}
-                  {verifyData.correctness_proof && (
-                    <div className="p-4 rounded-xl border bg-gradient-to-r from-blue-50/60 to-purple-50/60 border-indigo-200 shadow-2xs space-y-1.5">
-                      <div className="flex items-center space-x-2">
-                        <ShieldCheck className="w-4 h-4 text-indigo-600" />
-                        <h4 className="text-xs font-bold text-indigo-950">
-                          双轨标准合成架构正确性证明 (Architectural Synthesis Proof)
-                        </h4>
-                      </div>
-                      <p className="text-2xs text-indigo-800">
-                        {verifyData.correctness_proof.message || '订阅拓扑与双轨交付规范 100% 一致'}
-                      </p>
-                      <div className="flex items-center space-x-3 text-2xs font-mono pt-1 text-slate-600">
-                        <span>骨干线路数: <b>{verifyData.correctness_proof.transit_count || 0}</b></span>
-                        <span>住宅家宽数: <b>{verifyData.correctness_proof.residential_count || 0}</b></span>
-                        <span className="text-indigo-700 font-bold">
-                          {verifyData.correctness_proof.is_q ? '【Q 规范：0 住宅硬隔离】' : '【ashan 规范：全量家宽覆盖】'}
-                        </span>
-                      </div>
+                  <div className="p-4 rounded-xl border bg-gradient-to-r from-blue-50/60 to-purple-50/60 border-indigo-200 shadow-2xs space-y-1.5">
+                    <div className="flex items-center space-x-2">
+                      <ShieldCheck className="w-4 h-4 text-indigo-600" />
+                      <h4 className="text-xs font-bold text-indigo-950">
+                        三轨标准合成架构正确性证明 (Architectural Synthesis Proof)
+                      </h4>
                     </div>
-                  )}
+                    <p className="text-2xs text-indigo-800">
+                      {verifyData.summary || '订阅拓扑校验完成'}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-3 text-2xs font-mono pt-1 text-slate-600">
+                      <span>总代理: <b>{verifyData.total_proxies ?? 0}</b></span>
+                      <span>骨干在线: <b>{verifyData.self_nodes_online ?? 0}</b></span>
+                      <span>家宽中继正常: <b>{verifyData.self_nodes_residential_chained ?? 0}</b></span>
+                      <span className={`font-bold ${verifyData.composite_valid ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        {currentSub.toLowerCase() === 'q'
+                          ? '【Q 规范：0 住宅硬隔离】'
+                          : currentSub.toLowerCase() === 'business'
+                          ? '【business 规范：纯自建零商业机场】'
+                          : '【ashan 规范：商业+全量自建】'}
+                      </span>
+                    </div>
+                  </div>
 
                   {/* Card 3: Group Proxy Distribution & Dangling References Check */}
-                  {verifyData.audit && (
+                  {verifyData.group_counts && (
                     <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs space-y-3">
                       <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                         <div>
@@ -860,18 +955,18 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
                           </p>
                         </div>
                         <span className="text-2xs font-mono font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-800">
-                          {Object.keys(verifyData.audit.group_counts || {}).length} 个策略组已注册
+                          {Object.keys(verifyData.group_counts || {}).length} 个策略组已注册
                         </span>
                       </div>
 
                       {/* Dangling References Warning if any */}
-                      {verifyData.audit.dangling_references && Object.keys(verifyData.audit.dangling_references).length > 0 && (
+                      {verifyData.dangling_references && Object.keys(verifyData.dangling_references).length > 0 && (
                         <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-2xs text-amber-900 space-y-1">
                           <div className="font-bold flex items-center">
                             <AlertTriangle className="w-3.5 h-3.5 mr-1 text-amber-600" />
                             <span>发现潜在空引用或非活跃依赖:</span>
                           </div>
-                          {Object.entries(verifyData.audit.dangling_references).map(([grp, refs]) => (
+                          {Object.entries(verifyData.dangling_references).map(([grp, refs]) => (
                             <div key={grp} className="font-mono">
                               组 [{grp}]: {refs.join(', ')}
                             </div>
@@ -881,7 +976,7 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
 
                       {/* Group Counts Grid */}
                       <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 font-mono text-2xs max-h-56 overflow-y-auto">
-                        {Object.entries(verifyData.audit.group_counts || {}).map(([grpName, count]) => (
+                        {Object.entries(verifyData.group_counts || {}).map(([grpName, count]) => (
                           <div key={grpName} className="p-2 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between">
                             <span className="truncate pr-1 font-medium text-slate-700" title={grpName}>{grpName}</span>
                             <span className="px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 font-bold flex-shrink-0">
@@ -905,16 +1000,19 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
                         </p>
                       </div>
                       <span className="text-2xs font-mono text-slate-500">
-                        在线: <b>{verifyData.self_nodes_online_count || 0}</b> / {verifyData.self_nodes_count || 0}
+                        可用: <b>{(verifyData.self_nodes_online || 0) + (verifyData.self_nodes_residential_chained || 0)}</b> / {verifyData.self_nodes_count || 0}
                       </span>
                     </div>
 
                     <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden font-mono text-2xs">
-                      {(verifyData.self_nodes_report || []).map((node, i) => (
+                      {(verifyData.self_nodes || []).map((node, i) => (
                         <div key={i} className="p-3 bg-white hover:bg-slate-50 transition flex items-center justify-between">
                           <div className="flex items-center space-x-2 truncate pr-2">
-                            <span className={`w-2 h-2 rounded-full ${node.online ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                            <span className={`w-2 h-2 rounded-full ${node.online ? 'bg-emerald-500' : 'bg-amber-500'}`} />
                             <span className="font-bold text-slate-900 truncate">{node.name}</span>
+                            {node.node_type && (
+                              <span className="px-1 py-0.2 rounded bg-slate-100 text-slate-600 text-3xs">{node.node_type}</span>
+                            )}
                           </div>
                           <div className="flex items-center space-x-3 flex-shrink-0">
                             <span className="text-slate-600">

@@ -2,6 +2,8 @@ package vpsmgr
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,6 +12,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vpn-probe/internal/config"
@@ -27,6 +30,10 @@ type Manager struct {
 	hubMu          sync.RWMutex
 	instances      []*VPSInstance
 	instancesMu    sync.RWMutex
+	vpsCache       []*SoftwareInfo
+	vpsCacheTime   time.Time
+	vpsCacheMu     sync.RWMutex
+	vpsRefreshing  atomic.Bool
 	detector       *Detector
 	ghChecker      *GitHubChecker
 	healer         *AutoHealer
@@ -47,13 +54,18 @@ func (m *Manager) SetProbeFunc(fn NodeProbeFunc) {
 // SetInstancesForTest 注入单测实例列表
 func (m *Manager) SetInstancesForTest(insts []*VPSInstance) {
 	m.instancesMu.Lock()
-	defer m.instancesMu.Unlock()
 	cloned := make([]*VPSInstance, len(insts))
 	for idx, inst := range insts {
 		clone := *inst
 		cloned[idx] = &clone
 	}
 	m.instances = cloned
+	m.instancesMu.Unlock()
+
+	m.vpsCacheMu.Lock()
+	m.vpsCache = nil
+	m.vpsCacheTime = time.Time{}
+	m.vpsCacheMu.Unlock()
 }
 
 // SetDetectorForTest 注入单测探查器
@@ -87,24 +99,58 @@ func NewManager(cfg *config.Config, sc *substore.Client, configPath string) *Man
 	gh := NewGitHubChecker()
 	det := NewDetector(gh)
 	heal := NewAutoHealer(det, sc, configPath)
+	if cfg != nil && cfg.SubStore.SelfSubName != "" {
+		heal.SetSelfSubName(cfg.SubStore.SelfSubName)
+	}
 
-	vpsHubURL := os.Getenv("VPS_HUB_URL")
-	if vpsHubURL == "" {
-		vpsHubURL = "http://192.168.8.11:3338"
+	var vpsHubURL, vpsHubUser, vpsHubPass string
+	if cfg != nil {
+		vpsHubURL = cfg.VPSHub.URL
+		vpsHubUser = cfg.VPSHub.Username
+		vpsHubPass = cfg.VPSHub.Password
 	}
-	vpsHubUser := os.Getenv("VPS_HUB_USER")
-	if vpsHubUser == "" {
-		vpsHubUser = "ashan"
+	if env := os.Getenv("VPS_HUB_URL"); env != "" {
+		vpsHubURL = env
 	}
-	vpsHubPass := os.Getenv("VPS_HUB_PASS")
-	if vpsHubPass == "" {
-		vpsHubPass = "Woo@@@204317"
+	if env := os.Getenv("VPS_HUB_USER"); env != "" {
+		vpsHubUser = env
+	}
+	if env := os.Getenv("VPS_HUB_PASS"); env != "" {
+		vpsHubPass = env
+	}
+
+	var loadedInstances []*VPSInstance
+	if cfg != nil {
+		for _, vc := range cfg.VPSInstances {
+			sshPort := vc.SSHPort
+			if sshPort <= 0 {
+				sshPort = 22
+			}
+			sshUser := vc.SSHUser
+			if sshUser == "" {
+				sshUser = "root"
+			}
+			loadedInstances = append(loadedInstances, &VPSInstance{
+				ID:          vc.ID,
+				Name:        vc.Name,
+				IP:          vc.IP,
+				SSHPort:     sshPort,
+				SSHUser:     sshUser,
+				SSHPassword: vc.SSHPassword,
+				ProviderID:  vc.ProviderID,
+				Status:      vc.Status,
+				Region:      vc.Region,
+				IsNAT:       vc.IsNAT,
+				NATPorts:    append([]int(nil), vc.NATPorts...),
+			})
+		}
 	}
 
 	m := &Manager{
 		vpsHubURL:      vpsHubURL,
 		vpsHubUser:     vpsHubUser,
 		vpsHubPass:     vpsHubPass,
+		instances:      loadedInstances,
 		detector:       det,
 		ghChecker:      gh,
 		healer:         heal,
@@ -113,45 +159,10 @@ func NewManager(cfg *config.Config, sc *substore.Client, configPath string) *Man
 		configPath:     configPath,
 	}
 
-	// 初始化静态托管 VPS 凭据（防止 VPS Hub 短暂离线时丢失）
-	m.instances = []*VPSInstance{
-		{
-			ID:          "23881",
-			Name:        "JPSB4",
-			IP:          "45.192.242.72",
-			SSHPort:     22,
-			SSHUser:     "root",
-			SSHPassword: "eTA^a9nSg6DHtN2d",
-			ProviderID:  "acck",
-			Status:      "running",
-			Region:      "日本",
-		},
-		{
-			ID:          "13483",
-			Name:        "LAX4837ISP",
-			IP:          "38.175.222.44",
-			SSHPort:     22,
-			SSHUser:     "root",
-			SSHPassword: "GVpjVRFfYb0oS-3m",
-			ProviderID:  "acck",
-			Status:      "running",
-			Region:      "美国",
-		},
-		{
-			ID:          "23712",
-			Name:        "JP IIJ BGP",
-			IP:          "156.231.113.91",
-			SSHPort:     22,
-			SSHUser:     "root",
-			SSHPassword: "s5Upk7j1PKt!RP0TYn",
-			ProviderID:  "akile",
-			Status:      "running",
-			Region:      "日本",
-		},
+	// 若配置了 VPS Hub，异步拉取最新实例与缓存状态（无任何源码硬编码凭据）
+	if vpsHubURL != "" {
+		go m.refreshFromVPSHub()
 	}
-
-	// 异步尝试从 VPS Hub 动态刷新最新实例
-	go m.refreshFromVPSHub()
 
 	return m
 }
@@ -280,8 +291,48 @@ func (m *Manager) refreshFromVPSHub() {
 	}
 }
 
-// ListVPSInstances 并发探查所有托管 VPS 的软件形态、当前版本与最新版本
+// ListVPSInstances 优先返回短期缓存，避免前端/接口因逐台 SSH 阻塞超时；缓存过期时带 5s 有界超时刷新并后台异步更新
 func (m *Manager) ListVPSInstances(ctx context.Context) []*SoftwareInfo {
+	m.vpsCacheMu.RLock()
+	hasCache := len(m.vpsCache) > 0
+	cacheAge := time.Since(m.vpsCacheTime)
+	if hasCache && cacheAge < 90*time.Second {
+		cached := cloneSoftwareInfos(m.vpsCache)
+		m.vpsCacheMu.RUnlock()
+		if cacheAge > 30*time.Second {
+			m.RefreshVPSInstancesAsync()
+		}
+		return cached
+	}
+	m.vpsCacheMu.RUnlock()
+
+	return m.RefreshVPSInstances(ctx)
+}
+
+// RefreshVPSInstancesAsync 异步触发后台 VPS 状态刷新（防重入）
+func (m *Manager) RefreshVPSInstancesAsync() {
+	if !m.vpsRefreshing.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer m.vpsRefreshing.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		m.inspectAndCacheVPS(ctx)
+	}()
+}
+
+// RefreshVPSInstances 同步执行有界超时(<=6s) VPS 状态探查并更新缓存
+func (m *Manager) RefreshVPSInstances(ctx context.Context) []*SoftwareInfo {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	boundedCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	return m.inspectAndCacheVPS(boundedCtx)
+}
+
+func (m *Manager) inspectAndCacheVPS(ctx context.Context) []*SoftwareInfo {
 	m.instancesMu.RLock()
 	insts := make([]*VPSInstance, len(m.instances))
 	for idx, inst := range m.instances {
@@ -289,6 +340,10 @@ func (m *Manager) ListVPSInstances(ctx context.Context) []*SoftwareInfo {
 		insts[idx] = &clone
 	}
 	m.instancesMu.RUnlock()
+
+	if len(insts) == 0 {
+		return []*SoftwareInfo{}
+	}
 
 	var wg sync.WaitGroup
 	results := make([]*SoftwareInfo, len(insts))
@@ -302,7 +357,28 @@ func (m *Manager) ListVPSInstances(ctx context.Context) []*SoftwareInfo {
 	}
 
 	wg.Wait()
+
+	m.vpsCacheMu.Lock()
+	m.vpsCache = cloneSoftwareInfos(results)
+	m.vpsCacheTime = time.Now()
+	m.vpsCacheMu.Unlock()
+
 	return results
+}
+
+func cloneSoftwareInfos(in []*SoftwareInfo) []*SoftwareInfo {
+	out := make([]*SoftwareInfo, len(in))
+	for i, item := range in {
+		if item == nil {
+			continue
+		}
+		c := *item
+		if item.ActivePorts != nil {
+			c.ActivePorts = append([]int(nil), item.ActivePorts...)
+		}
+		out[i] = &c
+	}
+	return out
 }
 
 // GetBlockedAnalysis 对所有自建节点执行四分类深度墙况计算
@@ -374,7 +450,21 @@ func (m *Manager) findInstance(target string) *VPSInstance {
 	return nil
 }
 
-// InstallSoftware 在指定 VPS 上全自动一键部署 sing-box 或 3x-ui
+func generateRandomUUID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+func generateShortID() string {
+	b := make([]byte, 4)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// InstallSoftware 在指定 VPS 上全自动一键部署 sing-box 或 3x-ui（动态生成 UUID、ShortID 与 Reality 密钥对）
 func (m *Manager) InstallSoftware(ctx context.Context, vpsID string, software string) (string, error) {
 	inst := m.findInstance(vpsID)
 	if inst == nil {
@@ -382,12 +472,21 @@ func (m *Manager) InstallSoftware(ctx context.Context, vpsID string, software st
 	}
 
 	if software == "" || software == "sing-box" {
-		// 首选方案：安装现代轻量安全 VLESS Reality sing-box Docker 容器 (彻底废除 Shadowsocks)
-		installCmd := `
+		newUUID := generateRandomUUID()
+		newSID := generateShortID()
+		installPort := 36564
+		if inst.IsNAT && len(inst.NATPorts) > 0 {
+			installPort = inst.NATPorts[0]
+		}
+		installCmd := fmt.Sprintf(`
 command -v docker >/dev/null 2>&1 || curl -fsSL https://get.docker.com | sh
 docker pull ghcr.io/sagernet/sing-box:latest
+KEYS=$(docker run --rm ghcr.io/sagernet/sing-box:latest generate reality-keypair)
+PRIV_KEY=$(echo "$KEYS" | awk '/PrivateKey/{print $2}')
+PUB_KEY=$(echo "$KEYS" | awk '/PublicKey/{print $2}')
+if [ -z "$PRIV_KEY" ]; then echo "failed to generate reality keypair" >&2; exit 1; fi
 mkdir -p /opt/sb-mgr
-cat << 'EOF' > /opt/sb-mgr/config.json
+cat << EOF > /opt/sb-mgr/config.json
 {
   "log": {"level": "warn", "timestamp": true},
   "inbounds": [
@@ -395,10 +494,10 @@ cat << 'EOF' > /opt/sb-mgr/config.json
       "type": "vless",
       "tag": "vless-reality",
       "listen": "::",
-      "listen_port": 36564,
+      "listen_port": %d,
       "users": [
         {
-          "uuid": "5b84d275-d328-4565-9b47-20e9121fee7e",
+          "uuid": "%s",
           "flow": "xtls-rprx-vision"
         }
       ],
@@ -411,8 +510,8 @@ cat << 'EOF' > /opt/sb-mgr/config.json
             "server": "aws.amazon.com",
             "server_port": 443
           },
-          "private_key": "oA6K1zcO9AWpQkBOmx9kU2yTMc9g9oGINyB9OmC38WY",
-          "short_id": ["3c4ffcc0"]
+          "private_key": "${PRIV_KEY}",
+          "short_id": ["%s"]
         }
       }
     }
@@ -420,15 +519,17 @@ cat << 'EOF' > /opt/sb-mgr/config.json
   "outbounds": [{"type": "direct", "tag": "direct"}]
 }
 EOF
-iptables -I INPUT -p tcp --dport 36564 -j ACCEPT
+iptables -I INPUT -p tcp --dport %d -j ACCEPT 2>/dev/null || true
 docker rm -f sb-mgr 2>/dev/null
 docker run -d --name sb-mgr --restart always --net=host -v /opt/sb-mgr:/etc/sing-box ghcr.io/sagernet/sing-box:latest run -c /etc/sing-box/config.json
-`
+echo "PUBLIC_KEY=${PUB_KEY}"
+`, installPort, newUUID, newSID, installPort)
+
 		out, err := m.detector.RunSSH(inst, installCmd)
 		if err != nil {
 			return out, fmt.Errorf("install sing-box failed: %w", err)
 		}
-		return fmt.Sprintf("Successfully installed sing-box VLESS Reality container 'sb-mgr' on %s (port 36564)", inst.IP), nil
+		return fmt.Sprintf("Successfully installed sing-box VLESS Reality container 'sb-mgr' on %s (port %d, uuid=%s, sid=%s)\n%s", inst.IP, installPort, newUUID, newSID, strings.TrimSpace(out)), nil
 	} else if software == "3x-ui" {
 		cmd := "docker pull ghcr.io/mhsanaei/3x-ui:latest && docker run -d --name 3x-ui --restart always --net=host -v /etc/x-ui:/etc/x-ui ghcr.io/mhsanaei/3x-ui:latest"
 		out, err := m.detector.RunSSH(inst, cmd)

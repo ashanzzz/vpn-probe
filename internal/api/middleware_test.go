@@ -278,3 +278,39 @@ func TestAuthMiddleware_FailureTrackerPruning(t *testing.T) {
 		t.Fatalf("expected hard cap pruning to keep records bounded <= 505, got %d", hardCapRemaining)
 	}
 }
+
+func TestAuthMiddleware_RevealRequiresAdmin(t *testing.T) {
+	app := fiber.New()
+	app.Use(NewAuthMiddleware(AuthConfig{
+		AuthToken:  "write-tok",
+		ReadToken:  "read-tok",
+		AdminToken: "admin-tok",
+	}))
+	app.Get("/api/test", func(c *fiber.Ctx) error {
+		return c.SendString("ok")
+	})
+
+	cases := []struct {
+		name   string
+		token  string
+		path   string
+		expect int
+	}{
+		{"read reveal=true denied", "read-tok", "/api/test?reveal=true", 403},
+		{"write reveal=true denied", "write-tok", "/api/test?reveal=true", 403},
+		{"write reveal=1 denied", "write-tok", "/api/test?reveal=1", 403},
+		{"write normal allowed", "write-tok", "/api/test", 200},
+		{"admin reveal=true allowed", "admin-tok", "/api/test?reveal=true", 200},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest("GET", tc.path, nil)
+		req.Header.Set("Authorization", "Bearer "+tc.token)
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatalf("%s failed: %v", tc.name, err)
+		}
+		if resp.StatusCode != tc.expect {
+			t.Errorf("%s: expected HTTP %d, got %d", tc.name, tc.expect, resp.StatusCode)
+		}
+	}
+}

@@ -366,6 +366,9 @@ export const ClientLiveSplitVerifier: React.FC = () => {
               <p className="text-xs text-slate-300 max-w-2xl mt-1 leading-relaxed">
                 由您的浏览器直接发起探测，真实检验本地代理软件（Clash / Sing-box / Surge）的分流策略是否准确将流量分配至对应落地节点、归属城市与【家宽】/【机房】属性。
               </p>
+              <p className="text-2xs text-amber-200/90 bg-amber-500/10 border border-amber-400/20 rounded-lg px-2.5 py-1.5 mt-2 max-w-2xl">
+                注：受浏览器同源策略（CORS）限制，除 Cloudflare CDN-CGI Trace 外，其余域名通过 no-cors + api.ip.sb 估算通用代理出口 IP，精确逐域路由匹配请在本地 Clash/Mihomo Connections 面板核对。
+              </p>
             </div>
 
             <button

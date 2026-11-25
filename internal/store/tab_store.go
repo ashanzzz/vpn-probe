@@ -209,6 +209,22 @@ func (s *Store) seedDefaultTabsAndProfiles() error {
 			TargetFormat:    "mihomoConfig",
 			UpdatedAt:       now,
 		},
+		{
+			Name:            "business",
+			DisplayName:     "business 纯自建商业直出 (仅自建零机场)",
+			SelectedTabs:    []string{"group_self_all"},
+			IncludeExternal: false,
+			TargetFormat:    "mihomoConfig",
+			UpdatedAt:       now,
+		},
+		{
+			Name:            "Business",
+			DisplayName:     "Business 纯自建商业直出 (大写别名)",
+			SelectedTabs:    []string{"group_self_all"},
+			IncludeExternal: false,
+			TargetFormat:    "mihomoConfig",
+			UpdatedAt:       now,
+		},
 	}
 
 	for _, p := range defaultProfiles {
@@ -455,6 +471,22 @@ func (s *Store) ResetProfiles(ctx context.Context) error {
 			DisplayName:     "Ashan 全量全家桶 (大写别名)",
 			SelectedTabs:    []string{"external", "group_self_all"},
 			IncludeExternal: true,
+			TargetFormat:    "mihomoConfig",
+			UpdatedAt:       now,
+		},
+		{
+			Name:            "business",
+			DisplayName:     "business 纯自建商业直出 (仅自建零机场)",
+			SelectedTabs:    []string{"group_self_all"},
+			IncludeExternal: false,
+			TargetFormat:    "mihomoConfig",
+			UpdatedAt:       now,
+		},
+		{
+			Name:            "Business",
+			DisplayName:     "Business 纯自建商业直出 (大写别名)",
+			SelectedTabs:    []string{"group_self_all"},
+			IncludeExternal: false,
 			TargetFormat:    "mihomoConfig",
 			UpdatedAt:       now,
 		},

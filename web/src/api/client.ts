@@ -38,8 +38,12 @@ export function removeStoredToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
-async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const token = getStoredToken() || 'Woo@@@204317';
+interface RequestOptions extends RequestInit {
+  reveal?: boolean;
+}
+
+async function request<T>(endpoint: string, options: RequestOptions = {}): Promise<T> {
+  const token = getStoredToken();
   const headers = new Headers(options.headers || {});
   
   headers.set('Content-Type', 'application/json');
@@ -48,12 +52,15 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers.set('X-API-Key', token);
   }
 
-  // Ensure reveal=true is present to show raw full links without masking
-  const separator = endpoint.includes('?') ? '&' : '?';
-  const url = `${endpoint}${separator}reveal=true`;
+  let url = endpoint;
+  if (options.reveal) {
+    const separator = endpoint.includes('?') ? '&' : '?';
+    url = `${endpoint}${separator}reveal=true`;
+  }
 
+  const { reveal: _, ...fetchOptions } = options;
   const resp = await fetch(url, {
-    ...options,
+    ...fetchOptions,
     headers,
   });
 
@@ -111,12 +118,16 @@ export const api = {
     });
   },
 
-  // 3. 自研 30MB 吞吐量测速 (非开源测速库)
-  async runSpeedTest(isStream: boolean = false, durationSec: number = 30): Promise<{ status: string; count: number; nodes: any[] }> {
+  // 3. 自研 30MB 吞吐量测速 (非开源测速库，支持指定单个节点或全量)
+  async runSpeedTest(isStream: boolean = false, durationSec: number = 30, nodeName?: string): Promise<{ status: string; count: number; nodes: any[] }> {
     return request('/api/speedtest/run', {
       method: 'POST',
-      body: JSON.stringify({ is_stream: isStream, duration_sec: durationSec }),
+      body: JSON.stringify({ is_stream: isStream, duration_sec: durationSec, node_name: nodeName || undefined }),
     });
+  },
+
+  async getMonitorQuota(): Promise<{ status: string; date: string; speed_test_count: number; split_check_count: number; speed_test_limit: number; split_check_limit: number }> {
+    return request('/api/monitor/quota');
   },
 
   async getSpeedTestRanking(): Promise<{ status: string; count: number; ranking: any[] }> {
@@ -255,12 +266,12 @@ export const api = {
   },
 
   // 7. VPS 管理与自愈换端口
-  async getVPSManagement(): Promise<{ count: number; instances: SoftwareInfo[] }> {
-    return request<{ count: number; instances: SoftwareInfo[] }>('/api/vps/manage');
+  async getVPSManagement(refresh: boolean = false): Promise<{ status?: string; total: number; count?: number; instances: SoftwareInfo[] }> {
+    return request<{ status?: string; total: number; count?: number; instances: SoftwareInfo[] }>(`/api/vps/manage${refresh ? '?refresh=true' : ''}`);
   },
 
-  async getBlockedAnalysis(): Promise<{ count: number; results: BlockedAnalysisResult[] }> {
-    return request<{ count: number; results: BlockedAnalysisResult[] }>('/api/vps/blocked-analysis');
+  async getBlockedAnalysis(): Promise<{ status?: string; total?: number; count?: number; analysis: BlockedAnalysisResult[]; results?: BlockedAnalysisResult[] }> {
+    return request<{ status?: string; total?: number; count?: number; analysis: BlockedAnalysisResult[]; results?: BlockedAnalysisResult[] }>('/api/vps/blocked-analysis');
   },
 
   async healPort(nodeName: string, targetPort?: number): Promise<PortHealResponse> {
@@ -352,7 +363,7 @@ export const api = {
   async warmupSnapshot(fileNames: string[] = ['Q', 'ashan', 'business']): Promise<any> {
     return request('/api/sub/snapshot/warmup', {
       method: 'POST',
-      body: JSON.stringify({ file_names: fileNames }),
+      body: JSON.stringify({ files: fileNames }),
     });
   },
 

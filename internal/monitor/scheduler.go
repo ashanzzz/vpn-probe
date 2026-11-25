@@ -36,6 +36,11 @@ type Scheduler struct {
 	substoreClient *substore.Client
 	healer         *healer.Healer
 	vpsMgr         *vpsmgr.Manager
+	onSubStoreSync func()
+	quotaMu        sync.Mutex
+	quotaDate      string
+	speedTestCount int
+	splitCheckCount int
 	mu             sync.RWMutex
 	checkMu        sync.Mutex            // 保证 RunAllChecks 串行执行，防止沙箱探针与系统资源竞争
 	speedMu        sync.Mutex            // 保证 RunSpeedTestAll 串行执行，避免并发测速带宽互相挤占
@@ -48,6 +53,41 @@ func (s *Scheduler) SetVPSManager(m *vpsmgr.Manager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.vpsMgr = m
+}
+
+// SetOnSubStoreSync 注册 SubStore 同步完成回调（用于自动刷新快照预热）
+func (s *Scheduler) SetOnSubStoreSync(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSubStoreSync = fn
+}
+
+func (s *Scheduler) incQuota(speed, split bool) {
+	s.quotaMu.Lock()
+	defer s.quotaMu.Unlock()
+	today := time.Now().Format("2006-01-02")
+	if s.quotaDate != today {
+		s.quotaDate = today
+		s.speedTestCount = 0
+		s.splitCheckCount = 0
+	}
+	if speed {
+		s.speedTestCount++
+	}
+	if split {
+		s.splitCheckCount++
+	}
+}
+
+// GetQuotaStats 返回当日真实测速与分流探测执行次数
+func (s *Scheduler) GetQuotaStats() (date string, speedCount int, splitCount int) {
+	s.quotaMu.Lock()
+	defer s.quotaMu.Unlock()
+	today := time.Now().Format("2006-01-02")
+	if s.quotaDate != today {
+		return today, 0, 0
+	}
+	return s.quotaDate, s.speedTestCount, s.splitCheckCount
 }
 
 func NewScheduler(
@@ -78,7 +118,8 @@ func NewScheduler(
 					Name:        nodeName,
 					OriginalURL: n.URL,
 					NodeType:    "transit",
-					Online:      true,
+					Online:      false,
+					StatusText:  "待巡检",
 					ExitCountry: model.ResolveCountry("", nodeName),
 				},
 			}
@@ -111,7 +152,8 @@ func NewScheduler(
 					Name:        nodeName,
 					OriginalURL: r.URL,
 					NodeType:    "residential",
-					Online:      true,
+					Online:      false,
+					StatusText:  "待巡检",
 					ExitCountry: model.ResolveCountry("", nodeName),
 				},
 			}
@@ -601,11 +643,79 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 			} else {
 				logger.Event(logger.LevelInfo, "substore", "sync_done",
 					fmt.Sprintf("transit=%d resi=%d chains=%d five_groups=synced", len(fiveGroups.TransitNodes), len(uniqueResis), len(chainLinks)))
+				s.mu.RLock()
+				hook := s.onSubStoreSync
+				s.mu.RUnlock()
+				if hook != nil {
+					go hook()
+				}
 			}
 		}
 	}
+	if checkSplit {
+		s.incQuota(false, true)
+	}
 
 	return resp
+}
+
+// RunSpeedTestOne 仅对指定的单个节点执行测速，避免全局重测浪费带宽与配额
+func (s *Scheduler) RunSpeedTestOne(ctx context.Context, nodeName string, isStream bool, durationSec int) (*model.NodeProbeResult, error) {
+	s.speedMu.Lock()
+	defer s.speedMu.Unlock()
+
+	if s.engine == nil {
+		return nil, fmt.Errorf("probe engine is nil")
+	}
+
+	s.mu.RLock()
+	var targetKey, targetURL string
+	for k, state := range s.nodeStates {
+		if k == nodeName || (state.LastResult != nil && (state.LastResult.Name == nodeName || state.LastResult.ID == nodeName)) || state.Config.Name == nodeName {
+			targetKey = k
+			targetURL = state.Config.URL
+			if state.LastResult != nil && state.LastResult.OriginalURL != "" {
+				targetURL = state.LastResult.OriginalURL
+			}
+			break
+		}
+	}
+	s.mu.RUnlock()
+
+	if targetKey == "" || targetURL == "" {
+		return nil, fmt.Errorf("node '%s' not found", nodeName)
+	}
+
+	res, err := s.engine.SpeedTestOne(ctx, targetURL, isStream, durationSec)
+	if err != nil {
+		return nil, err
+	}
+	s.incQuota(true, false)
+
+	var updated *model.NodeProbeResult
+	s.mu.Lock()
+	if state, ok := s.nodeStates[targetKey]; ok {
+		base := &model.NodeProbeResult{
+			ID:          targetKey,
+			Name:        targetKey,
+			OriginalURL: targetURL,
+			IsSelf:      true,
+		}
+		if state.LastResult != nil {
+			cloned := *state.LastResult
+			base = &cloned
+		}
+		base.Speed = res
+		base.Score = res.Score
+		state.LastResult = base
+		updated = base
+	}
+	s.mu.Unlock()
+
+	if updated != nil && s.store != nil {
+		_ = s.store.SaveResult(ctx, updated)
+	}
+	return updated, nil
 }
 
 // RunSpeedTestAll 对所有在线线路机执行测速并按得分重排
@@ -642,6 +752,7 @@ func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, duration
 	}
 
 	logger.Infof("[SPEEDTEST] Launching speed tests for %d active transit nodes...", len(targets))
+	s.incQuota(true, false)
 	for _, t := range targets {
 		res, err := s.engine.SpeedTestOne(ctx, t.originalURL, isStream, durationSec)
 		if err == nil && res != nil {

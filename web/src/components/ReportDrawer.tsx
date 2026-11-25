@@ -53,6 +53,14 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
     }
   }, [initialTab, node]);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
   if (!node) return null;
 
   const nodeName = node.name || '未命名节点';
@@ -94,8 +102,8 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
   };
 
   const parsedHP = parseHostPort(node.original_url);
-  const accessHost = parsedHP.host || node.diagnostic?.target_ip || (landingIP !== '—' ? landingIP : '127.0.0.1');
-  const accessPort = parsedHP.port || (node.diagnostic?.target_port ? String(node.diagnostic.target_port) : '443');
+  const accessHost = parsedHP.host || node.diagnostic?.target_ip || (landingIP !== '—' ? landingIP : '—');
+  const accessPort = parsedHP.port || (node.diagnostic?.target_port ? String(node.diagnostic.target_port) : '—');
   const isChain = nodeName.includes('➔') || Boolean(node.chain_info?.relay_node_name);
   const portNum = Number(accessPort);
   const isNatPort = portNum > 10000;
@@ -134,42 +142,24 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
     setTimeout(() => setCopiedIP(null), 2000);
   };
 
-  // 生成测速历史
-  const historyList: SpeedTestHistoryItem[] = node.speed_history || [
-    {
-      id: 'h1',
-      tested_at: node.tested_at || new Date().toISOString(),
-      type: 'peak',
-      speed_mb_s: node.speed_result?.bandwidth_mb_s || 14.8,
-      speed_mbps: (node.speed_result?.bandwidth_mb_s || 14.8) * 8,
-      ttfb_ms: node.speed_result?.ttfb_ms || 182,
-      latency_ms: node.latency_ms || 124,
-      file_size_mb: 10,
-      relay_name: node.chain_info?.relay_node_name,
-    },
-    {
-      id: 'h2',
-      tested_at: new Date(Date.now() - 14 * 3600 * 1000).toISOString(),
-      type: 'idle',
-      speed_mb_s: ((node.speed_result?.bandwidth_mb_s || 14.8) * 1.15),
-      speed_mbps: ((node.speed_result?.bandwidth_mb_s || 14.8) * 1.15) * 8,
-      ttfb_ms: 145,
-      latency_ms: Math.max(20, (node.latency_ms || 124) - 15),
-      file_size_mb: 10,
-      relay_name: node.chain_info?.relay_node_name,
-    },
-    {
-      id: 'h3',
-      tested_at: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
-      type: 'peak',
-      speed_mb_s: ((node.speed_result?.bandwidth_mb_s || 14.8) * 0.92),
-      speed_mbps: ((node.speed_result?.bandwidth_mb_s || 14.8) * 0.92) * 8,
-      ttfb_ms: 210,
-      latency_ms: (node.latency_ms || 124) + 12,
-      file_size_mb: 10,
-      relay_name: node.chain_info?.relay_node_name,
-    },
-  ];
+  // 仅使用真实后端测速历史与当前实测结果（禁止任何 Mock 假数据）
+  const historyList: SpeedTestHistoryItem[] = node.speed_history && node.speed_history.length > 0
+    ? node.speed_history
+    : node.speed_result?.bandwidth_mb_s
+      ? [
+          {
+            id: 'latest-real',
+            tested_at: node.speed_result.tested_at || node.tested_at || new Date().toISOString(),
+            type: 'manual',
+            speed_mb_s: node.speed_result.bandwidth_mb_s,
+            speed_mbps: node.speed_result.bandwidth_mbps || node.speed_result.bandwidth_mb_s * 8,
+            ttfb_ms: node.speed_result.ttfb_ms || 0,
+            latency_ms: node.latency_ms || 0,
+            file_size_mb: 10,
+            relay_name: node.chain_info?.relay_node_name,
+          },
+        ]
+      : [];
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/40 backdrop-blur-2xs flex justify-end">
@@ -203,10 +193,10 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-2 flex-shrink-0">
             <button
               onClick={handleCopy}
-              className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-lg text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 transition"
+              className="inline-flex items-center px-2.5 py-1.5 text-xs font-medium rounded-lg text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 transition whitespace-nowrap"
               title="复制完整明文代理 URL"
             >
               {copied ? (
@@ -762,40 +752,48 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white">
-                    {historyList.map((item) => (
-                      <tr key={item.id} className="hover:bg-slate-50 transition">
-                        <td className="px-4 py-3 text-slate-700 text-2xs">
-                          {new Date(item.tested_at).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                        </td>
-                        <td className="px-4 py-3 font-sans">
-                          {item.type === 'peak' ? (
-                            <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-amber-100 text-amber-800">
-                              [高峰期]
-                            </span>
-                          ) : item.type === 'idle' ? (
-                            <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-blue-100 text-blue-800">
-                              [闲时]
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-slate-100 text-slate-700">
-                              [单测]
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 font-bold text-blue-600">
-                          {item.speed_mb_s.toFixed(1)} MB/s
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">
-                          {item.ttfb_ms} ms
-                        </td>
-                        <td className="px-4 py-3 text-emerald-600 font-bold">
-                          {item.latency_ms} ms
-                        </td>
-                        <td className="px-4 py-3 text-slate-500 truncate max-w-[120px]">
-                          {item.relay_name || '直连落地'}
+                    {historyList.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-8 text-center text-slate-400 font-sans text-xs">
+                          暂无真实 10MB 测速记录，可点击右上角「即时单测 10M」发起实测。
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      historyList.map((item) => (
+                        <tr key={item.id} className="hover:bg-slate-50 transition">
+                          <td className="px-4 py-3 text-slate-700 text-2xs">
+                            {new Date(item.tested_at).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td className="px-4 py-3 font-sans">
+                            {item.type === 'peak' ? (
+                              <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-amber-100 text-amber-800">
+                                [高峰期]
+                              </span>
+                            ) : item.type === 'idle' ? (
+                              <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-blue-100 text-blue-800">
+                                [闲时]
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded text-2xs font-semibold bg-slate-100 text-slate-700">
+                                [实测]
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 font-bold text-blue-600">
+                            {item.speed_mb_s.toFixed(1)} MB/s
+                          </td>
+                          <td className="px-4 py-3 text-slate-600">
+                            {item.ttfb_ms} ms
+                          </td>
+                          <td className="px-4 py-3 text-emerald-600 font-bold">
+                            {item.latency_ms} ms
+                          </td>
+                          <td className="px-4 py-3 text-slate-500 truncate max-w-[120px]">
+                            {item.relay_name || '直连落地'}
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -826,12 +824,8 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
                     </div>
                   ))
                 ) : (
-                  <div className="text-slate-500 italic p-4 text-center">
-                    [sandbox] dynamic sing-box core spawned for verification<br />
-                    [sandbox] inbound socks5 127.0.0.1:3xxxx bound<br />
-                    [sandbox] probe request gstatic/generate_204 dispatched: HTTP 204 OK ({node.latency_ms}ms)<br />
-                    [sandbox] 10MB speed stream started: throughput test clean<br />
-                    [sandbox] sing-box process gracefully terminated and ports released.
+                  <div className="text-slate-400 italic p-4 text-center">
+                    暂无本次单进程沙箱 stdout/stderr 日志记录（可点击底部「重新测试此节点」实时触发采样）。
                   </div>
                 )}
               </div>

@@ -72,6 +72,7 @@ type CustomGroupDef struct {
 	Type        string      `json:"type,omitempty"` // select | url-test | fallback | load-balance
 	Order       int         `json:"order,omitempty"`
 	AddToEntry  bool        `json:"add_to_entry,omitempty"`
+	Tags        []string    `json:"tags,omitempty"`
 	Filter      GroupFilter `json:"filter"`
 	CreatedAt   string      `json:"created_at"`
 	UpdatedAt   string      `json:"updated_at"`

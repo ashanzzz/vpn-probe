@@ -22,6 +22,7 @@ type AutoHealer struct {
 	detector       *Detector
 	substoreClient *substore.Client
 	configPath     string
+	selfSubName    string
 }
 
 func NewAutoHealer(d *Detector, sc *substore.Client, configPath string) *AutoHealer {
@@ -30,6 +31,27 @@ func NewAutoHealer(d *Detector, sc *substore.Client, configPath string) *AutoHea
 		substoreClient: sc,
 		configPath:     configPath,
 	}
+}
+
+// SetSelfSubName 配置主自建订阅名称（避免硬编码遗留名称）
+func (h *AutoHealer) SetSelfSubName(name string) {
+	if strings.TrimSpace(name) != "" {
+		h.selfSubName = strings.TrimSpace(name)
+	}
+}
+
+func (h *AutoHealer) targetSelfSubs() []string {
+	seen := map[string]bool{"ashan-transit": true}
+	subs := []string{"ashan-transit"}
+	if h.selfSubName != "" {
+		if !seen[h.selfSubName] {
+			subs = append(subs, h.selfSubName)
+		}
+	} else {
+		// 未显式配置 self_sub_name 时兼容存量 "ashan's vps"（仅更新已存在项，绝不重建已删除订阅）
+		subs = append(subs, "ashan's vps")
+	}
+	return subs
 }
 
 // GenerateRandomPort 在 [20000, 60000] 之间生成安全随机高位端口
@@ -236,8 +258,8 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 		return resp, err
 	}
 
-	// A. 自动配置快照备份
-	backupCmd := fmt.Sprintf("cp %s %s.bak", activeFile, activeFile)
+	// A. 自动配置快照备份 (保留 .bak 与时间戳滚动备份)
+	backupCmd := fmt.Sprintf("cp %s %s.bak && cp %s %s.bak.$(date +%%Y%%m%%d%%H%%M%%S) 2>/dev/null || cp %s %s.bak", activeFile, activeFile, activeFile, activeFile, activeFile, activeFile)
 	if _, err := h.detector.RunSSH(inst, backupCmd); err != nil {
 		resp.Message = fmt.Sprintf("failed to backup config: %v", err)
 		return resp, err
@@ -263,14 +285,15 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 			return resp, err
 		}
 	} else {
-		// JSON 文本配置 (sing-box / xray)
-		// sing-box 使用 "listen_port": <int>，xray 入站使用 "port": <int>
-		var replaceCmd string
+		// JSON 文本配置 (sing-box / xray)：优先用 python3 精准定位 inbounds 节点更新端口，防误改出站/DNS 同号端口；缺 python3 时安全回退 scoped sed
+		pyScript := fmt.Sprintf(`python3 -c 'import json; p="%s"; d=json.load(open(p)); [inb.__setitem__(k,%d) for inb in d.get("inbounds",[]) for k in ("listen_port","port") if inb.get(k)==%d]; json.dump(d,open(p,"w"),indent=2)'`, activeFile, newPort, oldPort)
+		var sedFallback string
 		if softInfo.SoftwareType == "xray" {
-			replaceCmd = fmt.Sprintf("sed -i -E 's/\"port\":\\s*%d/\"port\": %d/g' %s", oldPort, newPort, activeFile)
+			sedFallback = fmt.Sprintf("sed -i -E 's/\"port\":\\s*%d/\"port\": %d/g' %s", oldPort, newPort, activeFile)
 		} else {
-			replaceCmd = fmt.Sprintf("sed -i -E 's/\"(listen_port|port)\":\\s*%d/\"\\1\": %d/g' %s", oldPort, newPort, activeFile)
+			sedFallback = fmt.Sprintf("sed -i -E 's/\"(listen_port|port)\":\\s*%d/\"\\1\": %d/g' %s", oldPort, newPort, activeFile)
 		}
+		replaceCmd := fmt.Sprintf("if command -v python3 >/dev/null 2>&1; then %s; else %s; fi", pyScript, sedFallback)
 		if _, err := h.detector.RunSSH(inst, replaceCmd); err != nil {
 			h.detector.RunSSH(inst, fmt.Sprintf("cp %s.bak %s", activeFile, activeFile))
 			resp.Message = fmt.Sprintf("failed to modify port in config: %v", err)
@@ -306,8 +329,8 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 		}
 	}
 
-	// C. 防火墙放行新端口并安全平滑重启服务
-	fwAndRestartCmd := fmt.Sprintf("iptables -I INPUT -p tcp --dport %d -j ACCEPT 2>/dev/null; iptables -I INPUT -p udp --dport %d -j ACCEPT 2>/dev/null; %s", newPort, newPort, restartCmd)
+	// C. 放行新端口、清理旧端口并尽量持久化防火墙规则后平滑重启服务
+	fwAndRestartCmd := fmt.Sprintf("iptables -D INPUT -p tcp --dport %d -j ACCEPT 2>/dev/null || true; iptables -D INPUT -p udp --dport %d -j ACCEPT 2>/dev/null || true; iptables -I INPUT -p tcp --dport %d -j ACCEPT 2>/dev/null || true; iptables -I INPUT -p udp --dport %d -j ACCEPT 2>/dev/null || true; (command -v ufw >/dev/null 2>&1 && ufw allow %d >/dev/null 2>&1 && ufw delete allow %d >/dev/null 2>&1) || true; (command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1) || true; %s", oldPort, oldPort, newPort, newPort, newPort, oldPort, restartCmd)
 	if out, err := h.detector.RunSSH(inst, fwAndRestartCmd); err != nil {
 		resp.Message = fmt.Sprintf("failed to restart service: %v (output: %s)", err, out)
 		return resp, err
@@ -343,12 +366,12 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 	return resp, nil
 }
 
-// updateSubStoreSubscription 将换端口后的新节点同步至 SubStore 主订阅 (同时兼容 ashan-transit 与历史 ashan's vps)
+// updateSubStoreSubscription 将换端口后的新节点同步至 SubStore 主订阅
 func (h *AutoHealer) updateSubStoreSubscription(ctx context.Context, oldPort, newPort int, oldURL, newURL string) error {
 	if h.substoreClient == nil {
 		return nil
 	}
-	targetSubs := []string{"ashan-transit", "ashan's vps"}
+	targetSubs := h.targetSelfSubs()
 	var updatedCount int
 	var lastErr error
 
@@ -421,12 +444,12 @@ func (h *AutoHealer) updateSubStoreSubscription(ctx context.Context, oldPort, ne
 	return nil
 }
 
-// AddNodeToSubStore 将新安装节点追加同步至 SubStore 主订阅 (同时维护 ashan-transit 与历史 ashan's vps)
+// AddNodeToSubStore 将新安装节点追加同步至 SubStore 主订阅
 func (h *AutoHealer) AddNodeToSubStore(ctx context.Context, newURL string) error {
 	if h.substoreClient == nil || newURL == "" {
 		return nil
 	}
-	targetSubs := []string{"ashan-transit", "ashan's vps"}
+	targetSubs := h.targetSelfSubs()
 	var successCount int
 	var lastErr error
 	for _, subName := range targetSubs {
@@ -477,7 +500,7 @@ func (h *AutoHealer) RemoveNodeFromSubStore(ctx context.Context, targetIP string
 	if h.substoreClient == nil || targetIP == "" {
 		return 0, nil
 	}
-	targetSubs := []string{"ashan-transit", "ashan's vps"}
+	targetSubs := h.targetSelfSubs()
 	var totalRemoved int
 	for _, subName := range targetSubs {
 		content, err := h.substoreClient.GetSubscriptionContent(ctx, subName)

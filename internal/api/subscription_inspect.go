@@ -170,6 +170,14 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 		}
 	}
 
+	groupNameSet := make(map[string]bool, len(rawCfg.ProxyGroups)+4)
+	for _, g := range rawCfg.ProxyGroups {
+		groupNameSet[g.Name] = true
+	}
+	builtinPolicySet := map[string]bool{
+		"DIRECT": true, "REJECT": true, "REJECT-DROP": true, "PASS": true, "COMPATIBLE": true,
+	}
+
 	// 5. Build parsed rules and calculate rule counts per target policy group
 	parsedRules := make([]RuleInspectItem, 0, len(rawCfg.Rules))
 	ruleCountMap := make(map[string]int)
@@ -235,22 +243,28 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 				tags = append(tags, "自建·内部组")
 			}
 			if isCustom {
-				if cg.Filter.Countries != nil && len(cg.Filter.Countries) > 0 {
+				if len(cg.Filter.Countries) > 0 {
 					tags = append(tags, strings.Join(cg.Filter.Countries, "/"))
 				}
 				if cg.Filter.CleanOnly {
 					tags = append(tags, "干净出口")
+				}
+				if len(cg.Tags) > 0 {
+					tags = append(tags, cg.Tags...)
 				}
 			}
 		} else if isCustom {
 			isExt = false
 			category = "self_custom"
 			tags = append(tags, "自建·可配置")
-			if cg.Filter.Countries != nil && len(cg.Filter.Countries) > 0 {
+			if len(cg.Filter.Countries) > 0 {
 				tags = append(tags, strings.Join(cg.Filter.Countries, "/"))
 			}
 			if cg.Filter.CleanOnly {
 				tags = append(tags, "干净出口")
+			}
+			if len(cg.Tags) > 0 {
+				tags = append(tags, cg.Tags...)
 			}
 		} else {
 			// External groups
@@ -288,6 +302,15 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 				psum.LatencyMs = atom.LatencyMs
 				psum.Online = atom.Online
 				psum.Tags = atom.Tags
+			} else if groupNameSet[pName] || builtinPolicySet[pName] {
+				psum.Type = "policy_group"
+				if builtinPolicySet[pName] {
+					psum.Type = "builtin"
+				}
+				psum.Kind = "policy_group"
+				_, inCustom := customMap[pName]
+				psum.IsSelfHosted = inCustom || strings.HasPrefix(pName, "自建-") || strings.HasPrefix(pName, "自建·") || pName == "不送中"
+				psum.Online = true
 			} else {
 				// 二次尝试：使用对称别名匹配器检索链式中继与别名原子节点
 				matched := false

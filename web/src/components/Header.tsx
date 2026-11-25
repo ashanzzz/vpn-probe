@@ -33,7 +33,7 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'pipeline' as TabType, label: '订阅与编排枢纽', icon: Layers },
     { id: 'vps' as TabType, label: 'VPS 资产与自愈', icon: Wrench },
     { id: 'probe' as TabType, label: '沙箱即时探针', icon: Terminal },
-    { id: 'settings' as TabType, label: '系统设置与审计', icon: Settings },
+    { id: 'settings' as TabType, label: '系统设置与规则', icon: Settings },
   ];
 
   return (

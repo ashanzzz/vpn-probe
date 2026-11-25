@@ -134,6 +134,11 @@ func NewAPIServer(
 		snapshotMgr = substore.NewSnapshotManager(sc, filepath.Join("data", "snapshots"))
 		if cfg.SubStore.Enabled {
 			snapshotMgr.StartAutoWarmup(15*time.Minute, []string{"ashan", "Ashan", "Q", "q", "business", "Business"})
+			if sched != nil {
+				sched.SetOnSubStoreSync(func() {
+					snapshotMgr.TriggerAsyncWarmup([]string{"ashan", "Ashan", "Q", "q", "business", "Business"})
+				})
+			}
 		}
 	}
 
@@ -289,6 +294,22 @@ func (s *APIServer) setupRoutes() {
 			s.scheduler.RunAllChecks(ctx, checkSplit)
 		}()
 		return c.JSON(fiber.Map{"status": "ok", "message": "inspection round triggered"})
+	})
+
+	// 2.1 真实测速与分流探测每日配额统计 API
+	s.app.Get("/api/monitor/quota", func(c *fiber.Ctx) error {
+		if s.scheduler == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
+		}
+		date, speedCnt, splitCnt := s.scheduler.GetQuotaStats()
+		return c.JSON(fiber.Map{
+			"status":            "ok",
+			"date":              date,
+			"speed_test_count":  speedCnt,
+			"split_check_count": splitCnt,
+			"speed_test_limit":  2,
+			"split_check_limit": 1,
+		})
 	})
 
 	// 3. 历史记录查询 API
@@ -509,7 +530,11 @@ func (s *APIServer) setupRoutes() {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "substore client not initialized"})
 		}
 		fileName := c.Query("file", "Q")
-		token := c.Query("token", "13602004317")
+		defaultTok := ""
+		if s.cfg != nil {
+			defaultTok = s.cfg.SubStore.ShareToken
+		}
+		token := c.Query("token", defaultTok)
 		audit, err := s.substoreClient.AuditFileGroups(c.Context(), fileName)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
@@ -995,6 +1020,10 @@ func (s *APIServer) setupRoutes() {
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
+		role, _ := c.Locals("role").(Role)
+		if role != RoleAdmin {
+			substore.MaskManifestForNonAdmin(manifest)
+		}
 		return c.JSON(manifest)
 	})
 
@@ -1005,6 +1034,10 @@ func (s *APIServer) setupRoutes() {
 		manifest, err := s.substoreClient.GetManifest(c.Context())
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		role, _ := c.Locals("role").(Role)
+		if role != RoleAdmin {
+			substore.MaskManifestForNonAdmin(manifest)
 		}
 		return c.JSON(fiber.Map{
 			"status":       "ok",
@@ -1035,6 +1068,16 @@ func (s *APIServer) setupRoutes() {
 		}
 		name := c.Params("name")
 		content, err := s.substoreClient.GetScriptContent(c.Context(), name)
+		if err != nil && s.rulesMgr != nil {
+			switch name {
+			case "custom_patch.js":
+				content = s.rulesMgr.GenerateJS()
+				err = nil
+			case "convert.js":
+				content = s.rulesMgr.GetBridgedConvertJS()
+				err = nil
+			}
+		}
 		if err != nil {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -1075,16 +1118,28 @@ func (s *APIServer) setupRoutes() {
 		})
 	})
 
-	// 5.3 测速与排名 API
+	// 5.3 测速与排名 API (支持指定单节点 node_name 或全量测速)
 	s.app.Post("/api/speedtest/run", func(c *fiber.Ctx) error {
 		if s.scheduler == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
 		}
 		var req struct {
-			IsStream    bool `json:"is_stream"`
-			DurationSec int  `json:"duration_sec"`
+			NodeName    string `json:"node_name"`
+			IsStream    bool   `json:"is_stream"`
+			DurationSec int    `json:"duration_sec"`
 		}
 		_ = c.BodyParser(&req)
+		if strings.TrimSpace(req.NodeName) != "" {
+			res, err := s.scheduler.RunSpeedTestOne(c.Context(), req.NodeName, req.IsStream, req.DurationSec)
+			if err != nil {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "error": err.Error()})
+			}
+			return c.JSON(fiber.Map{
+				"status": "success",
+				"count":  1,
+				"nodes":  []*model.NodeProbeResult{res},
+			})
+		}
 		ranked := s.scheduler.RunSpeedTestAll(c.Context(), req.IsStream, req.DurationSec)
 		return c.JSON(fiber.Map{
 			"status": "success",
@@ -1696,7 +1751,11 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 	}
 
 	fileName := c.Query("file", "Q")
-	token := c.Query("token", "13602004317")
+	defaultTok := ""
+	if s.cfg != nil {
+		defaultTok = s.cfg.SubStore.ShareToken
+	}
+	token := c.Query("token", defaultTok)
 	reveal := c.QueryBool("reveal", false)
 
 	ctx := c.Context()
@@ -1759,6 +1818,7 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 		}
 
 		nodeStates := s.scheduler.GetStatus()
+		isQTrack := strings.EqualFold(fileName, "q")
 		for _, st := range nodeStates {
 			// 严格准则：只针对自建连接，外部连接绝不纳入检测
 			isSelf := st.Config.IsSelf
@@ -1768,15 +1828,26 @@ func (s *APIServer) handleVerifySubscription(c *fiber.Ctx) error {
 			if !isSelf {
 				continue
 			}
-			selfNodesCount++
-			nodeURL := st.Config.URL
-			if nodeURL == "" && st.LastResult != nil {
-				nodeURL = st.LastResult.OriginalURL
-			}
 			nodeName := st.Config.Name
 			if nodeName == "" && st.LastResult != nil {
 				nodeName = st.LastResult.Name
 			}
+			nodeURL := st.Config.URL
+			if nodeURL == "" && st.LastResult != nil {
+				nodeURL = st.LastResult.OriginalURL
+			}
+			proto := ""
+			nodeType := ""
+			if st.LastResult != nil {
+				proto = st.LastResult.Protocol
+				nodeType = st.LastResult.NodeType
+			}
+			isResidentialNode := nodeType == "residential" || model.IsResidentialNode(nodeName, nodeURL, proto)
+			if isQTrack && isResidentialNode {
+				// Q 轨道严格排除全部住宅家宽，仅统计骨干专线自建节点
+				continue
+			}
+			selfNodesCount++
 			if !reveal {
 				nodeURL = MaskNodeURL(nodeURL)
 			}
@@ -1875,10 +1946,16 @@ func (s *APIServer) handleVPSManage(c *fiber.Ctx) error {
 	if s.vpsMgr == nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "vps manager not initialized"})
 	}
-	infos := s.vpsMgr.ListVPSInstances(c.Context())
+	var infos []*vpsmgr.SoftwareInfo
+	if c.QueryBool("refresh", false) {
+		infos = s.vpsMgr.RefreshVPSInstances(c.Context())
+	} else {
+		infos = s.vpsMgr.ListVPSInstances(c.Context())
+	}
 	return c.JSON(fiber.Map{
 		"status":    "ok",
 		"total":     len(infos),
+		"count":     len(infos),
 		"instances": infos,
 	})
 }
@@ -2170,18 +2247,22 @@ func (s *APIServer) handleGetSnapshotStatus(c *fiber.Ctx) error {
 	})
 }
 
-// handleTriggerSnapshotWarmup 手动触发一次快照批量预烘焙
+// handleTriggerSnapshotWarmup 手动触发一次快照批量预烘焙 (兼容 files 与 file_names 请求字段，默认包含三轨)
 func (s *APIServer) handleTriggerSnapshotWarmup(c *fiber.Ctx) error {
 	if s.snapshotMgr == nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "snapshot manager not initialized"})
 	}
 	var req struct {
-		Files []string `json:"files"`
+		Files     []string `json:"files"`
+		FileNames []string `json:"file_names"`
 	}
 	_ = c.BodyParser(&req)
 	files := req.Files
 	if len(files) == 0 {
-		files = []string{"ashan", "Ashan", "Q", "q"}
+		files = req.FileNames
+	}
+	if len(files) == 0 {
+		files = []string{"ashan", "Ashan", "Q", "q", "business", "Business"}
 	}
 	s.snapshotMgr.TriggerAsyncWarmup(files)
 	return c.JSON(fiber.Map{

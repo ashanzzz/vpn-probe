@@ -96,6 +96,16 @@ func TestManager_RefreshFromVPSHub(t *testing.T) {
 
 	cfg := &config.Config{}
 	m := NewManager(cfg, nil, "")
+	m.SetInstancesForTest([]*VPSInstance{
+		{
+			ID:         "23881",
+			Name:       "old-name",
+			IP:         "45.192.242.72",
+			SSHPort:    22,
+			SSHUser:    "root",
+			ProviderID: "acck",
+		},
+	})
 	m.SetVPSHubConfig(server.URL, "admin", "admin")
 
 	// 1. 成功从 Hub 同步 (更新 45.192.242.72 的名称为 jp-sb)

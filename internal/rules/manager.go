@@ -165,14 +165,17 @@ func (m *Manager) AddCustomRule(rule string) error {
 	return m.save()
 }
 
-// GenerateJS 动态渲染最新的 Sub-Store JavaScript 算子脚本
+// GenerateJS 动态渲染最新的 Sub-Store JavaScript 算子脚本 (纯通用分流与防送中，不篡改用户本地网关/端口配置)
 func (m *Manager) GenerateJS() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	lanPolicyEntries := []string{}
-	for _, d := range m.cfg.LANDNSDomains {
-		lanPolicyEntries = append(lanPolicyEntries, fmt.Sprintf("    config.dns['nameserver-policy']['%s'] = '%s';", d, m.cfg.LANPolicyGateway))
+	marshalStr := func(s string) string {
+		b, err := json.Marshal(s)
+		if err != nil {
+			return `""`
+		}
+		return string(b)
 	}
 
 	directRuleEntries := []string{
@@ -192,8 +195,12 @@ func (m *Manager) GenerateJS() string {
 	}
 
 	for _, d := range m.cfg.DirectDomains {
-		directRuleEntries = append(directRuleEntries, fmt.Sprintf("      'DOMAIN-SUFFIX,%s,DIRECT',", d))
-		fakeIpFilters = append(fakeIpFilters, fmt.Sprintf("      '+.%s',", d))
+		dTrim := strings.TrimSpace(d)
+		if dTrim == "" {
+			continue
+		}
+		directRuleEntries = append(directRuleEntries, "      "+marshalStr(fmt.Sprintf("DOMAIN-SUFFIX,%s,DIRECT", dTrim))+",")
+		fakeIpFilters = append(fakeIpFilters, "      "+marshalStr(fmt.Sprintf("+.%s", dTrim))+",")
 	}
 
 	antiSongZhongRules := []string{}
@@ -225,7 +232,11 @@ func (m *Manager) GenerateJS() string {
 
 	userCustomRules := []string{}
 	for _, r := range m.cfg.CustomRules {
-		userCustomRules = append(userCustomRules, fmt.Sprintf("      '%s',", r))
+		rTrim := strings.TrimSpace(r)
+		if rTrim == "" {
+			continue
+		}
+		userCustomRules = append(userCustomRules, "      "+marshalStr(rTrim)+",")
 	}
 
 	mlkemLogic := ""
@@ -270,23 +281,12 @@ function safeDumpYaml(lib, obj) {
 function transformConfig(config) {
   if (!config || typeof config !== 'object') return config;
 
-  // 1. 全屋网关基础暴露配置
-  config['allow-lan'] = true;
-  config['bind-address'] = '*';
-  config['external-controller'] = '0.0.0.0:9090';
-
-  // 2. DNS 监听 7874、本地内网 Nameserver 策略及 Fake-IP 过滤
-  if (config.dns) {
-    config.dns.enable = true;
-    config.dns.listen = '0.0.0.0:7874';
-
-    config.dns['nameserver-policy'] = config.dns['nameserver-policy'] || {};
-%s
-
+  // 1. 仅按需补全 Fake-IP 直连过滤规则，不强制改写客户端网关/监听端口/DNS
+  if (config.dns && typeof config.dns === 'object') {
     const requiredFakeIpFilters = [
 %s
     ];
-    config.dns['fake-ip-filter'] = config.dns['fake-ip-filter'] || [];
+    config.dns['fake-ip-filter'] = Array.isArray(config.dns['fake-ip-filter']) ? config.dns['fake-ip-filter'] : [];
     for (const item of requiredFakeIpFilters) {
       if (!config.dns['fake-ip-filter'].includes(item)) {
         config.dns['fake-ip-filter'].push(item);
@@ -294,42 +294,43 @@ function transformConfig(config) {
     }
   }
 
-  // 3. 动态节点过滤与 Reality MLKEM 支持
+  // 2. 动态节点过滤与 Reality MLKEM 支持
   if (Array.isArray(config.proxies)) {
-    const isPaused = (name) => name && (
-      name.includes('[限速]') || 
-      name.includes('[THROTTLED]') || 
+    const isPaused = (name) => typeof name === 'string' && (
+      name.includes('[限速]') ||
+      name.includes('[THROTTLED]') ||
       name.includes('[PAUSED]') ||
       name.includes('[DEGRADED]')
     );
-    
-    const activeProxies = config.proxies.filter(p => !isPaused(p.name));
+
+    const purgedNames = new Set();
+    const activeProxies = [];
+    for (const p of config.proxies) {
+      if (!p || typeof p !== 'object') continue;
+      if (isPaused(p.name)) {
+        purgedNames.add(p.name);
+        continue;
+      }
+%s
+      activeProxies.push(p);
+    }
     if (activeProxies.length > 0) {
       config.proxies = activeProxies;
+    } else {
+      purgedNames.clear();
     }
-
-    const proxyNames = new Set(config.proxies.map(p => p && p.name).filter(Boolean));
-    const laxRelayName = '美国-洛杉矶4837-直连';
-
-    config.proxies.forEach(p => {
-      if (!p || typeof p !== 'object') return;
-%s
-      if (p.name && p.name.includes('美西中继') && p.name !== laxRelayName && proxyNames.has(laxRelayName)) {
-        p['dialer-proxy'] = laxRelayName;
-      }
-    });
 
     if (Array.isArray(config['proxy-groups'])) {
       config['proxy-groups'].forEach(group => {
-        if (Array.isArray(group.proxies)) {
-          const filtered = group.proxies.filter(p => !isPaused(p));
-          if (filtered.length > 0) group.proxies = filtered;
+        if (group && Array.isArray(group.proxies)) {
+          const filtered = group.proxies.filter(p => !purgedNames.has(p) && !isPaused(p));
+          group.proxies = filtered.length > 0 ? filtered : ['DIRECT'];
         }
       });
     }
   }
 
-  // 4. 前置注入个性规则
+  // 3. 前置注入个性规则
   if (Array.isArray(config.rules)) {
     const customHeadRules = [
 %s
@@ -345,7 +346,7 @@ function transformConfig(config) {
       if (geoipIdx >= 0) {
         mergedRules.splice(geoipIdx, 0, 'GEOSITE,cn,DIRECT');
       } else {
-        const matchIdx = mergedRules.findIndex(r => r.startsWith('MATCH,'));
+        const matchIdx = mergedRules.findIndex(r => typeof r === 'string' && r.startsWith('MATCH,'));
         if (matchIdx >= 0) {
           mergedRules.splice(matchIdx, 0, 'GEOSITE,cn,DIRECT', 'GEOIP,cn,DIRECT');
         } else {
@@ -393,7 +394,6 @@ if (typeof $content !== 'undefined') {
 
 	return fmt.Sprintf(
 		jsTemplate,
-		strings.Join(lanPolicyEntries, "\n"),
 		strings.Join(fakeIpFilters, "\n"),
 		mlkemLogic,
 		strings.Join(directRuleEntries, "\n"),

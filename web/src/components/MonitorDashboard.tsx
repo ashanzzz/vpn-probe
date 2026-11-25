@@ -223,7 +223,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       if (h.status === 'healthy') transitHealthy++;
       else if (h.status === 'china') transitChina++;
       else if (h.status === 'port_blocked') transitPortBlocked++;
-      else if (h.status === 'all_blocked') transitAllBlocked++;
+      else if (h.status === 'all_blocked' || h.status === 'congested') transitAllBlocked++;
     });
 
     const resiTotal = residentialAtoms.length;
@@ -623,7 +623,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
               const probeNode: NodeProbeResult = rawNodes.find((n) => n.name === atom.name) || {
                 id: atom.id,
                 name: atom.name,
-                protocol: 'socks5',
+                protocol: atom.protocol || 'vless',
                 online: atom.latency_ms > 0,
                 latency_ms: atom.latency_ms,
                 china_exit: atom.china_exit,
@@ -644,8 +644,8 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                       <div>
                         <div className="flex items-center space-x-2">
                           <span className="font-bold text-xs text-slate-900">{atom.name}</span>
-                          <span className="text-2xs font-mono px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 font-semibold border border-purple-200">
-                            {atom.infra_type || '家宽 Socks5'}
+                          <span className="text-2xs font-mono px-1.5 py-0.2 rounded bg-purple-50 text-purple-700 font-semibold border border-purple-200 uppercase">
+                            {atom.infra_type || atom.protocol || '原生家宽'}
                           </span>
                         </div>
 

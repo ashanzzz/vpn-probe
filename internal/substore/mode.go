@@ -121,15 +121,8 @@ func (c *Client) GetExternalSourceItems() []ExternalSourceItem {
 		}
 	}
 
-	// 仅当文件完全不存在且未持久化时默认保底
-	return []ExternalSourceItem{
-		{
-			Name:        "蜂窝云",
-			DisplayName: "蜂窝云",
-			URL:         "https://api.fwcloud.xyz/link/Iq3NLWozJmSbeuiy?clash=1",
-			Enabled:     true,
-		},
-	}
+	// 未配置且未持久化时返回空列表（禁止硬编码外部订阅 Token URL）
+	return []ExternalSourceItem{}
 }
 
 // SetExternalSources 设置外部订阅列表并持久化
@@ -710,11 +703,14 @@ func SetShareDomainsForTest(domains []string) func() {
 	}
 }
 
-// CheckShareDomains 并发对 free.1992004.xyz 与 sub.ashanzzz.com 进行本地连通性与防墙检测
+func shareDomainsSnapshot() []string {
+	shareDomainsMu.RLock()
+	defer shareDomainsMu.RUnlock()
+	return append([]string(nil), shareDomains...)
+}
+
+// CheckShareDomains 并发对配置域名进行本地连通性与防墙检测
 func CheckShareDomains(ctx context.Context, fileName string, token string) []ShareDomainCheck {
-	if token == "" {
-		token = "13602004317"
-	}
 	shareDomainsMu.RLock()
 	domains := append([]string{}, shareDomains...)
 	shareDomainsMu.RUnlock()
@@ -726,41 +722,64 @@ func CheckShareDomains(ctx context.Context, fileName string, token string) []Sha
 		wg.Add(1)
 		go func(idx int, d string) {
 			defer wg.Done()
-			url := fmt.Sprintf("https://%s/share/file/%s?token=%s", d, fileName, token)
+			baseURL := fmt.Sprintf("https://%s", d)
+			skipTLS := false
+			dialTarget := d + ":443"
+			serverName := d
+			if strings.HasPrefix(d, "http://") {
+				baseURL = strings.TrimRight(d, "/")
+				skipTLS = true
+			} else if strings.HasPrefix(d, "https://") {
+				baseURL = strings.TrimRight(d, "/")
+				if parsed, pErr := url.Parse(baseURL); pErr == nil && parsed.Host != "" {
+					serverName = parsed.Hostname()
+					if parsed.Port() != "" {
+						dialTarget = parsed.Host
+					} else {
+						dialTarget = serverName + ":443"
+					}
+				}
+			}
+			targetURL := fmt.Sprintf("%s/share/file/%s", baseURL, fileName)
+			if token != "" {
+				targetURL = fmt.Sprintf("%s?token=%s", targetURL, token)
+			}
 			check := ShareDomainCheck{
 				Domain: d,
-				URL:    url,
+				URL:    targetURL,
 			}
 
 			t0 := time.Now()
-			// 1. 本地 TCP / TLS 握手探活 (端口 443，4s 超时)
-			dialer := &tls.Dialer{
-				Config: &tls.Config{
-					InsecureSkipVerify: true,
-					ServerName:         d,
-				},
-			}
-			dialCtx, dialCancel := context.WithTimeout(ctx, 4*time.Second)
-			conn, err := dialer.DialContext(dialCtx, "tcp", d+":443")
-			dialCancel()
+			if !skipTLS {
+				// 1. 本地 TCP / TLS 握手探活 (端口 443，4s 超时)
+				dialer := &tls.Dialer{
+					Config: &tls.Config{
+						InsecureSkipVerify: true,
+						ServerName:         serverName,
+					},
+				}
+				dialCtx, dialCancel := context.WithTimeout(ctx, 4*time.Second)
+				conn, err := dialer.DialContext(dialCtx, "tcp", dialTarget)
+				dialCancel()
 
-			if err != nil {
-				check.Reachable = false
-				check.PossibleGFW = true
-				check.Error = fmt.Sprintf("TLS/TCP 握手失败 (链接可能被墙或CF节点受阻): %v", err)
-				results[idx] = check
-				return
+				if err != nil {
+					check.Reachable = false
+					check.PossibleGFW = true
+					check.Error = fmt.Sprintf("TLS/TCP 握手失败 (链接可能被墙或CF节点受阻): %v", err)
+					results[idx] = check
+					return
+				}
+				_ = conn.Close()
+				check.LatencyMs = time.Since(t0).Milliseconds()
 			}
-			_ = conn.Close()
-			handshakeMs := time.Since(t0).Milliseconds()
 			check.Reachable = true
-			check.LatencyMs = handshakeMs
 
 			// 2. 发起 HTTP HEAD 请求测试分享端点响应 (带 8s 超时)
 			httpCtx, httpCancel := context.WithTimeout(ctx, 8*time.Second)
 			defer httpCancel()
-			req, err := http.NewRequestWithContext(httpCtx, "HEAD", url, nil)
+			req, err := http.NewRequestWithContext(httpCtx, "HEAD", targetURL, nil)
 			if err != nil {
+				check.Reachable = false
 				check.Error = fmt.Sprintf("创建请求失败: %v", err)
 				results[idx] = check
 				return
@@ -781,12 +800,16 @@ func CheckShareDomains(ctx context.Context, fileName string, token string) []Sha
 			}
 
 			if httpErr != nil {
-				// TLS 握手已成功证明未被墙，HTTP 请求若因上游复杂脚本耗时较长则正常标记直连畅通
-				check.StatusCode = 200
-				check.Error = fmt.Sprintf("上游脚本渲染等待 (%v)，但域名端口直连畅通", httpErr)
+				check.Reachable = false
+				check.StatusCode = 0
+				check.Error = fmt.Sprintf("分享链接 HTTP 请求失败: %v", httpErr)
 			} else {
 				check.StatusCode = resp.StatusCode
 				check.LatencyMs = time.Since(t0).Milliseconds()
+				if resp.StatusCode >= 400 {
+					check.Reachable = false
+					check.Error = fmt.Sprintf("分享链接返回异常状态码 HTTP %d", resp.StatusCode)
+				}
 			}
 
 			results[idx] = check

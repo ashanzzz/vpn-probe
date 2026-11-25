@@ -47,9 +47,10 @@ export const App: React.FC = () => {
   const fetchStatus = useCallback(async () => {
     if (!token) return;
     try {
-      const [mStatus, blockedData] = await Promise.all([
+      const [mStatus, blockedData, quotaData] = await Promise.all([
         api.getMonitorStatus().catch(() => null),
         api.getBlockedPorts().catch(() => ({ total: 0, nodes: [] })),
+        api.getMonitorQuota().catch(() => null),
       ]);
 
       if (mStatus) {
@@ -57,6 +58,10 @@ export const App: React.FC = () => {
       }
       if (blockedData && blockedData.nodes) {
         setBlockedNodes(blockedData.nodes);
+      }
+      if (quotaData) {
+        setSpeedTestCount(quotaData.speed_test_count || 0);
+        setSplitCheckCount(quotaData.split_check_count || 0);
       }
     } catch (err: any) {
       if (err.message && err.message.includes('AUTH_FAILED')) {
@@ -162,7 +167,11 @@ export const App: React.FC = () => {
   // Speedtest Single Node (Custom 10M)
   const handleSpeedTestSingleNode = async (node: NodeProbeResult) => {
     try {
-      await api.runSpeedTest(false, 15);
+      const targetName = node.name || node.id;
+      const resp = await api.runSpeedTest(false, 15, targetName);
+      if (resp.nodes && resp.nodes.length > 0) {
+        setSelectedReportNode(resp.nodes[0]);
+      }
       await fetchStatus();
     } catch (err: any) {
       alert(`单节点 10M 测速失败: ${err.message}`);

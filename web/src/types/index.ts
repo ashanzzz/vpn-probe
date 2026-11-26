@@ -148,6 +148,7 @@ export interface TopologyTransitNode {
 
 export interface TopologyNATPortItem {
   port: number;
+  region?: string;
   proto: string;
   target_node: string;
   online: boolean;

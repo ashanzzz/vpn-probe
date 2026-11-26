@@ -294,17 +294,52 @@ func ValidateYAMLWithMembers(body []byte, wanted []string, required map[string][
 	return ValidateYAMLWithProfile(body, wanted, required, profile)
 }
 
+// extractClashRuleTarget returns the policy/group target referenced by a Clash rule string.
+func extractClashRuleTarget(rule string) string {
+	trimmed := strings.TrimSpace(rule)
+	if trimmed == "" {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	var cur strings.Builder
+	depth := 0
+	for i := 0; i < len(trimmed); i++ {
+		ch := trimmed[i]
+		if ch == '(' {
+			depth++
+		} else if ch == ')' && depth > 0 {
+			depth--
+		}
+		if ch == ',' && depth == 0 {
+			parts = append(parts, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		} else {
+			cur.WriteByte(ch)
+		}
+	}
+	parts = append(parts, strings.TrimSpace(cur.String()))
+	if len(parts) == 2 && strings.EqualFold(parts[0], "MATCH") {
+		return parts[1]
+	}
+	if len(parts) >= 3 {
+		return parts[2]
+	}
+	return ""
+}
+
 // ValidateYAMLWithProfile checks final output with explicit profile rules ("ashan", "q", "business")
 func ValidateYAMLWithProfile(body []byte, wanted []string, required map[string][]string, profile string) error {
 	var cfg struct {
 		Proxies []struct {
-			Name string `yaml:"name"`
-			Type string `yaml:"type"`
+			Name        string `yaml:"name"`
+			Type        string `yaml:"type"`
+			DialerProxy string `yaml:"dialer-proxy"`
 		} `yaml:"proxies"`
 		Groups []struct {
 			Name    string   `yaml:"name"`
 			Proxies []string `yaml:"proxies"`
 		} `yaml:"proxy-groups"`
+		Rules []string `yaml:"rules"`
 	}
 	if err := yaml.Unmarshal(body, &cfg); err != nil {
 		return fmt.Errorf("invalid YAML: %w", err)
@@ -324,6 +359,10 @@ func ValidateYAMLWithProfile(body []byte, wanted []string, required map[string][
 		names[p.Name] = true
 	}
 
+	prof := strings.ToLower(strings.TrimSpace(profile))
+	isQ := prof == "q"
+	isBusiness := prof == "business"
+
 	// Sent-to-China leak check in core clean groups (Ironclad Rule #19)
 	for _, g := range cfg.Groups {
 		if g.Name == "选择代理" || g.Name == "谷歌服务" || g.Name == "Youtube" || g.Name == "AI服务" {
@@ -335,9 +374,19 @@ func ValidateYAMLWithProfile(body []byte, wanted []string, required map[string][
 		}
 	}
 
-	prof := strings.ToLower(strings.TrimSpace(profile))
-	isQ := prof == "q"
-	isBusiness := prof == "business"
+	// Verify dialer-proxy closed loop: every dialer-proxy target must exist and chain proxies must carry dialer-proxy
+	for _, p := range cfg.Proxies {
+		if p.DialerProxy != "" {
+			if p.DialerProxy == p.Name {
+				return fmt.Errorf("proxy %q has self-referential dialer-proxy", p.Name)
+			}
+			if !names[p.DialerProxy] {
+				return fmt.Errorf("proxy %q has dangling dialer-proxy %q", p.Name, p.DialerProxy)
+			}
+		} else if !isQ && strings.Contains(p.Name, "➔") {
+			return fmt.Errorf("chain proxy %q is missing dialer-proxy binding", p.Name)
+		}
+	}
 
 	// Q Strict verification: NO residential proxies allowed
 	if isQ {
@@ -373,6 +422,16 @@ func ValidateYAMLWithProfile(body []byte, wanted []string, required map[string][
 			if !names[n] && !groups[n] {
 				return fmt.Errorf("dangling group reference %q in %q", n, g.Name)
 			}
+		}
+	}
+
+	builtinRuleTargets := map[string]bool{
+		"DIRECT": true, "REJECT": true, "REJECT-DROP": true, "PASS": true, "COMPATIBLE": true, "GLOBAL": true,
+	}
+	for _, rule := range cfg.Rules {
+		target := extractClashRuleTarget(rule)
+		if target != "" && !groups[target] && !names[target] && !builtinRuleTargets[target] {
+			return fmt.Errorf("rule %q references missing policy/group %q", rule, target)
 		}
 	}
 

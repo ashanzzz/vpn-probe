@@ -10,9 +10,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -87,6 +87,7 @@ type SandboxInstance struct {
 	Cmd        *exec.Cmd
 	LogBuf     *TailBuffer
 	Cancel     context.CancelFunc
+	doneCh     chan struct{}
 	mu         sync.Mutex
 	closed     bool
 }
@@ -107,19 +108,30 @@ type SandboxManager struct {
 	usedPorts  map[int]bool
 }
 
-func NewSandboxManager(binPath string, portStart, portEnd int) *SandboxManager {
+// ResolveSingboxBinary 解析真实可用的 sing-box 可执行文件路径（Windows 下优先本地 ./bin/sing-box.exe，跳过 WindowsApps 失效存根）
+func ResolveSingboxBinary(binPath string) string {
 	if binPath == "" || binPath == "sing-box" {
-		if _, err := exec.LookPath("sing-box"); err != nil {
-			if _, err := os.Stat("./bin/sing-box.exe"); err == nil {
-				binPath = "./bin/sing-box.exe"
-			} else if _, err := os.Stat("./bin/sing-box"); err == nil {
-				binPath = "./bin/sing-box"
+		localCandidates := []string{"./bin/sing-box", "./bin/sing-box.exe"}
+		if runtime.GOOS == "windows" {
+			localCandidates = []string{"./bin/sing-box.exe", "./bin/sing-box"}
+		}
+		for _, cand := range localCandidates {
+			if _, err := os.Stat(cand); err == nil {
+				return cand
 			}
 		}
+		if found, err := exec.LookPath("sing-box"); err == nil {
+			if runtime.GOOS != "windows" || !strings.Contains(strings.ToLower(found), "windowsapps") {
+				return found
+			}
+		}
+		return "sing-box"
 	}
-	if binPath == "" {
-		binPath = "sing-box"
-	}
+	return binPath
+}
+
+func NewSandboxManager(binPath string, portStart, portEnd int) *SandboxManager {
+	binPath = ResolveSingboxBinary(binPath)
 	if portStart <= 0 || portEnd <= portStart {
 		portStart = 20000
 		portEnd = 28000
@@ -134,6 +146,19 @@ func NewSandboxManager(binPath string, portStart, portEnd int) *SandboxManager {
 
 // Launch 针对指定的 outbound 配置启动一个隔离的 sing-box 进程
 func (m *SandboxManager) Launch(ctx context.Context, outbound map[string]any) (*SandboxInstance, error) {
+	tagStr, _ := outbound["tag"].(string)
+	return m.LaunchWithOutbounds(ctx, []map[string]any{outbound}, tagStr)
+}
+
+// LaunchWithOutbounds 启动包含多个 outbound（支持 detour 链式两跳拨号）的隔离 sing-box 进程
+func (m *SandboxManager) LaunchWithOutbounds(ctx context.Context, outbounds []map[string]any, finalTag string) (*SandboxInstance, error) {
+	if len(outbounds) == 0 {
+		return nil, fmt.Errorf("no outbounds provided")
+	}
+	if finalTag == "" {
+		finalTag, _ = outbounds[0]["tag"].(string)
+	}
+
 	port, err := m.allocatePort()
 	if err != nil {
 		return nil, fmt.Errorf("allocate port: %w", err)
@@ -143,8 +168,25 @@ func (m *SandboxManager) Launch(ctx context.Context, outbound map[string]any) (*
 	tmpDir := os.TempDir()
 	confPath := filepath.Join(tmpDir, fmt.Sprintf("vpn-probe-%s-%d.json", instanceID, port))
 
+	allOutbounds := make([]any, 0, len(outbounds)+1)
+	hasDirect := false
+	for _, ob := range outbounds {
+		if ob == nil {
+			continue
+		}
+		if t, _ := ob["tag"].(string); t == "direct" {
+			hasDirect = true
+		}
+		allOutbounds = append(allOutbounds, ob)
+	}
+	if !hasDirect {
+		allOutbounds = append(allOutbounds, map[string]any{
+			"type": "direct",
+			"tag":  "direct",
+		})
+	}
+
 	// 构建最小化 sing-box 配置 (不配置代理自身 detour 的 DNS，由系统原生直连解析 proxy host，避免域名/CDN 节点陷入死锁)
-	tagStr, _ := outbound["tag"].(string)
 	config := map[string]any{
 		"log": map[string]any{
 			"level":    "debug",
@@ -158,15 +200,9 @@ func (m *SandboxManager) Launch(ctx context.Context, outbound map[string]any) (*
 				"listen_port": port,
 			},
 		},
-		"outbounds": []any{
-			outbound,
-			map[string]any{
-				"type": "direct",
-				"tag":  "direct",
-			},
-		},
+		"outbounds": allOutbounds,
 		"route": map[string]any{
-			"final": tagStr,
+			"final": finalTag,
 		},
 	}
 
@@ -194,6 +230,17 @@ func (m *SandboxManager) Launch(ctx context.Context, outbound map[string]any) (*
 		return nil, fmt.Errorf("start sing-box (%s): %w", m.singboxBin, err)
 	}
 
+	doneCh := make(chan struct{})
+	var waitErrMu sync.Mutex
+	var waitErr error
+	go func() {
+		err := cmd.Wait()
+		waitErrMu.Lock()
+		waitErr = err
+		waitErrMu.Unlock()
+		close(doneCh)
+	}()
+
 	inst := &SandboxInstance{
 		ID:         instanceID,
 		Port:       port,
@@ -201,10 +248,15 @@ func (m *SandboxManager) Launch(ctx context.Context, outbound map[string]any) (*
 		Cmd:        cmd,
 		LogBuf:     logBuf,
 		Cancel:     cancel,
+		doneCh:     doneCh,
 	}
 
-	// 轮询等待入站端口处于监听状态（最高等待 6 秒，端口就绪即刻返回，兼容高并发调度）
-	if err := waitForPort(ctx, cmd, logBuf, port, 6*time.Second); err != nil {
+	// 轮询等待入站端口处于监听状态（最高等待 6 秒，端口就绪即刻返回，兼容高并发调度与 Windows/Linux 双平台）
+	if err := waitForPortWithDone(ctx, doneCh, func() error {
+		waitErrMu.Lock()
+		defer waitErrMu.Unlock()
+		return waitErr
+	}, logBuf, port, 6*time.Second); err != nil {
 		outMsg := strings.TrimSpace(logBuf.String())
 		inst.Close(m)
 		if outMsg != "" && !strings.Contains(err.Error(), "sing-box:") {
@@ -229,7 +281,14 @@ func (s *SandboxInstance) Close(m *SandboxManager) {
 	}
 	if s.Cmd != nil && s.Cmd.Process != nil {
 		_ = s.Cmd.Process.Kill()
-		_ = s.Cmd.Wait()
+		if s.doneCh != nil {
+			select {
+			case <-s.doneCh:
+			case <-time.After(2 * time.Second):
+			}
+		} else {
+			_ = s.Cmd.Wait()
+		}
 	}
 	if s.ConfigFile != "" {
 		_ = os.Remove(s.ConfigFile)
@@ -266,6 +325,10 @@ func (m *SandboxManager) releasePort(port int) {
 }
 
 func waitForPort(ctx context.Context, cmd *exec.Cmd, logBuf *TailBuffer, port int, maxWait time.Duration) error {
+	return waitForPortWithDone(ctx, nil, nil, logBuf, port, maxWait)
+}
+
+func waitForPortWithDone(ctx context.Context, doneCh <-chan struct{}, getWaitErr func() error, logBuf *TailBuffer, port int, maxWait time.Duration) error {
 	if maxWait <= 0 {
 		maxWait = 6 * time.Second
 	}
@@ -293,8 +356,9 @@ func waitForPort(ctx context.Context, cmd *exec.Cmd, logBuf *TailBuffer, port in
 			break
 		}
 
-		if cmd != nil && cmd.Process != nil && cmd.Process.Pid > 0 {
-			if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		if doneCh != nil {
+			select {
+			case <-doneCh:
 				outMsg := ""
 				if logBuf != nil {
 					outMsg = strings.TrimSpace(logBuf.String())
@@ -302,7 +366,13 @@ func waitForPort(ctx context.Context, cmd *exec.Cmd, logBuf *TailBuffer, port in
 				if outMsg != "" {
 					return fmt.Errorf("sing-box process exited prematurely: %s", outMsg)
 				}
-				return fmt.Errorf("sing-box process exited prematurely: %w", err)
+				if getWaitErr != nil {
+					if werr := getWaitErr(); werr != nil {
+						return fmt.Errorf("sing-box process exited prematurely: %w", werr)
+					}
+				}
+				return fmt.Errorf("sing-box process exited prematurely")
+			default:
 			}
 		}
 

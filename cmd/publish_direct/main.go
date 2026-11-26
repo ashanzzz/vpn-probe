@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"strings"
@@ -10,24 +11,119 @@ import (
 	"vpn-probe/internal/config"
 	"vpn-probe/internal/model"
 	"vpn-probe/internal/monitor"
+	"vpn-probe/internal/probe"
 	"vpn-probe/internal/publish"
 	"vpn-probe/internal/substore"
 )
 
 func main() {
+	runProbe := flag.Bool("probe", false, "Run live sing-box direct + 2-hop chain probes and sync 5-group subscriptions before publishing")
+	dryInspect := flag.Bool("inspect-ops", false, "Inspect current remote Sub-Store file operators and exit without modifying")
+	flag.Parse()
+
 	cfg, err := config.LoadConfig("config.yaml")
 	if err != nil {
 		log.Fatalf("LoadConfig: %v", err)
 	}
 
-	cfg.SubStore.FallbackURL = cfg.SubStore.URL
+	cfg.SubStore.FallbackURL = ""
 	client := substore.NewClient(&cfg.SubStore)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 360*time.Second)
 	defer cancel()
 
+	if *dryInspect {
+		files, err := client.GetFileConfigurations(ctx)
+		if err != nil {
+			log.Fatalf("GetFileConfigurations: %v", err)
+		}
+		for _, f := range files {
+			fmt.Printf("File: %v | source=%v/%v\n", f["name"], f["sourceType"], f["sourceName"])
+			if ops, ok := f["process"].([]any); ok {
+				for idx, raw := range ops {
+					if m, ok := raw.(map[string]any); ok {
+						fmt.Printf("  [%d] id=%v customName=%v type=%v disabled=%v\n", idx, m["id"], m["customName"], m["type"], m["disabled"])
+					}
+				}
+			}
+		}
+		if cols, err := client.GetCollections(ctx); err == nil {
+			for _, c := range cols {
+				fmt.Printf("Collection: %s -> %v\n", c.Name, c.Subscriptions)
+			}
+		}
+		if subs, err := client.GetSubscriptions(ctx); err == nil {
+			for _, s := range subs {
+				if strings.HasPrefix(s.Name, "ashan") || strings.Contains(s.Name, "col") {
+					lines := strings.Split(strings.TrimSpace(s.Content), "\n")
+					preview := ""
+					if len(lines) > 0 {
+						if h := strings.Index(lines[0], "#"); h != -1 {
+							preview = lines[0][h:]
+						} else {
+							preview = lines[0]
+						}
+					}
+					fmt.Printf("Sub: %-20s | source=%s | lines=%d | first=%s\n", s.Name, s.Source, len(lines), preview)
+				}
+			}
+		}
+		if body, err := client.RenderFileFresh(ctx, "business"); err == nil {
+			fmt.Printf("Rendered business YAML length: %d\n", len(body))
+			for _, line := range strings.Split(string(body), "\n") {
+				if strings.Contains(line, "name:") || strings.Contains(line, "dialer-proxy:") {
+					if strings.Contains(line, "4837") || strings.Contains(line, "IIJ") || strings.Contains(line, "SB") || strings.Contains(line, "Pavlov") || strings.Contains(line, "dialer-proxy") {
+						fmt.Println("  ", strings.TrimSpace(line))
+					}
+				}
+			}
+		} else {
+			fmt.Printf("RenderFileFresh(business) error: %v\n", err)
+		}
+		return
+	}
+
 	fmt.Println("1. Initializing Scheduler & Orchestrator to collect real atoms...")
-	sched := monitor.NewScheduler(cfg, nil, nil, client)
+	var engine *probe.Engine
+	if *runProbe {
+		cfg.Monitor.AutoSyncSubStore = true
+		engine = probe.NewEngine(cfg)
+	}
+	sched := monitor.NewScheduler(cfg, engine, nil, client)
+	if *runProbe {
+		fmt.Println("   Running live direct + 2-hop chain probes via sing-box...")
+		batchResp := sched.RunAllChecks(ctx, false)
+		if batchResp != nil {
+			fmt.Printf("   Direct probe summary: total=%d online=%d offline=%d engine_err=%d\n",
+				batchResp.Total, batchResp.Online, batchResp.Offline, batchResp.EngineErrors)
+			for _, r := range batchResp.Results {
+				fmt.Printf("     [DIRECT %v] %-24s | latency=%dms | exit=%s (%s) | status=%s\n",
+					r.Online, r.Name, r.LatencyMs, r.ExitIP, r.ExitCountry, r.StatusText)
+			}
+		}
+		chainResults := sched.GetChainResults()
+		chainOnline := 0
+		for _, cr := range chainResults {
+			if cr.Online {
+				chainOnline++
+			}
+			fmt.Printf("     [CHAIN  %v] %-42s | latency=%dms | exit=%s (%s) | %s\n",
+				cr.Online, cr.Name, cr.LatencyMs, cr.ExitIP, cr.ExitCountry, cr.StatusText)
+		}
+		fmt.Printf("   2-hop chain probe summary: online=%d / %d\n", chainOnline, len(chainResults))
+
+		var allResults []*model.NodeProbeResult
+		for _, st := range sched.GetStatus() {
+			if st.LastResult != nil {
+				allResults = append(allResults, st.LastResult)
+			}
+		}
+		allResults = append(allResults, chainResults...)
+		topo := probe.BuildTopologyOverview(allResults)
+		fmt.Printf("   4-stage topology summary: transits=%d nat_relays=%d ports=%d landings=%d online_links=%d fault_links=%d\n",
+			topo.Summary.TotalTransits, topo.Summary.TotalNATRelays, topo.Summary.TotalPorts,
+			topo.Summary.TotalLandings, topo.Summary.OnlineLinks, topo.Summary.FaultLinks)
+	}
 	orc := monitor.NewOrchestrator(sched)
 	atoms := orc.CollectAtoms()
 	fmt.Printf("   Collected %d atoms:\n", len(atoms))
@@ -128,6 +224,9 @@ func main() {
 	// 5. Purge transit nodes from all residential subscriptions in Sub-Store
 	fmt.Println("5. Purging transit nodes from residential subscriptions in Sub-Store...")
 	transitNames := []string{
+		"US-ACCK-4837",
+		"JP-AKILE-IIJ",
+		"JP-ACCK-SB",
 		"US-LAX-ACCK-4837-Reality",
 		"JP-Tokyo-IIJ-Reality",
 		"JP--ACCK-SB",

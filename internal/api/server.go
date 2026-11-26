@@ -1205,6 +1205,29 @@ func (s *APIServer) setupRoutes() {
 					results = append(results, st.LastResult)
 				}
 			}
+			chainResults := s.scheduler.GetChainResults()
+			if len(chainResults) > 0 {
+				results = append(results, chainResults...)
+			} else if s.orchestrator != nil {
+				for _, atom := range s.orchestrator.CollectAtoms() {
+					if atom.Kind == "chain" {
+						results = append(results, &model.NodeProbeResult{
+							ID:          atom.ID,
+							Name:        atom.Name,
+							OriginalURL: atom.URL,
+							Protocol:    atom.Protocol,
+							NodeType:    "chain",
+							IsSelf:      true,
+							Online:      atom.Online,
+							LatencyMs:   atom.LatencyMs,
+							ChinaExit:   atom.ChinaExit,
+							ExitCountry: atom.Country,
+							ExitIPType:  "家宽",
+							TestedAt:    atom.TestedAt,
+						})
+					}
+				}
+			}
 		}
 		if len(results) == 0 && s.store != nil {
 			if hist, err := s.store.GetRecentResults(c.Context(), 100); err == nil {

@@ -81,7 +81,7 @@ func ResolveFallbackURL(cfg *config.SubStoreConfig) string {
 			token = strings.Trim(u.Path, "/")
 		}
 	}
-	if token != "" {
+	if token != "" && !strings.HasSuffix(fallbackBase, "/"+token) {
 		return fmt.Sprintf("%s/%s", fallbackBase, token)
 	}
 	return fallbackBase

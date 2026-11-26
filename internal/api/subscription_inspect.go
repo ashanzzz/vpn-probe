@@ -337,7 +337,7 @@ func (s *APIServer) handleSubscriptionInspect(c *fiber.Ctx) error {
 						psum.Kind = "residential"
 						psum.IsSelfHosted = true
 						psum.Online = false
-					} else if strings.Contains(pName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(pName, "Softbank") || strings.Contains(pName, "SoftBank") || strings.Contains(pName, "4837") || strings.Contains(pName, "LAX") || strings.Contains(pName, "洛杉矶") || strings.Contains(pName, "美西") || strings.Contains(pName, "ACCK") || strings.Contains(pName, "-SB") || strings.Contains(pName, "SB-") || strings.Contains(pName, "自建") || strings.Contains(pName, "骨干") || strings.Contains(strings.ToLower(pName), "transit") || strings.Contains(pName, "Akile") {
+					} else if upperName := strings.ToUpper(pName); strings.Contains(upperName, "IIJ") || strings.Contains(pName, "软银") || strings.Contains(upperName, "SOFTBANK") || strings.Contains(upperName, "4837") || strings.Contains(upperName, "LAX") || strings.Contains(pName, "洛杉矶") || strings.Contains(pName, "美西") || strings.Contains(upperName, "ACCK") || strings.Contains(upperName, "-SB") || strings.Contains(upperName, "SB-") || strings.Contains(pName, "自建") || strings.Contains(pName, "骨干") || strings.Contains(upperName, "TRANSIT") || strings.Contains(upperName, "AKILE") {
 						psum.Kind = "transit"
 						psum.IsSelfHosted = true
 						psum.Online = false

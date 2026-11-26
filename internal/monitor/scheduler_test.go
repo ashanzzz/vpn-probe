@@ -602,3 +602,72 @@ func TestScheduler_RunAllChecks_ConcurrencySafety(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestRefreshNodesFromSubStore_RekeysRenamedNode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/subs" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"status":"success",
+				"data":[
+					{"name":"ashan-transit","displayName":"线路机","content":"vless://uuid@156.231.113.91:33339#JP-AKILE-IIJ"}
+				]
+			}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			Nodes: []config.MonitoredNode{
+				{Name: "东京 IIJ — VLESS Reality", URL: "vless://uuid@156.231.113.91:33339#东京 IIJ — VLESS Reality", IsSelf: true},
+			},
+		},
+		SubStore: config.SubStoreConfig{Enabled: true, URL: srv.URL},
+	}
+	s := NewScheduler(cfg, nil, nil, substore.NewClient(&cfg.SubStore))
+	if err := s.RefreshNodesFromSubStore(context.Background()); err != nil {
+		t.Fatalf("RefreshNodesFromSubStore failed: %v", err)
+	}
+
+	st := s.GetStatus()
+	if _, hasOld := st["东京 IIJ — VLESS Reality"]; hasOld {
+		t.Errorf("expected stale map key '东京 IIJ — VLESS Reality' to be removed after rename")
+	}
+	if renamed, ok := st["JP-AKILE-IIJ"]; !ok {
+		t.Fatalf("expected renamed map key 'JP-AKILE-IIJ' in nodeStates")
+	} else if renamed.LastResult == nil || renamed.LastResult.Name != "JP-AKILE-IIJ" {
+		t.Errorf("expected LastResult.Name=JP-AKILE-IIJ, got %+v", renamed.LastResult)
+	}
+}
+
+func TestScheduler_RunAllChecks_RespectsAutoSyncSubStoreFalse(t *testing.T) {
+	var patchCalled bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patchCalled = true
+		}
+		if r.URL.Path == "/api/subs" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"success","data":[]}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Monitor: config.MonitorConfig{
+			Enabled:          true,
+			AutoSyncSubStore: false,
+		},
+		SubStore: config.SubStoreConfig{Enabled: true, URL: srv.URL},
+	}
+	s := NewScheduler(cfg, nil, nil, substore.NewClient(&cfg.SubStore))
+	_ = s.RunAllChecks(context.Background(), false)
+	if patchCalled {
+		t.Fatalf("expected RunAllChecks not to PATCH Sub-Store when auto_sync_substore=false")
+	}
+}

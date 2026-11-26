@@ -230,3 +230,82 @@ proxy-groups:
 		t.Fatalf("expected ashan profile to accept mixed nodes, got: %v", err)
 	}
 }
+
+func TestValidateYAMLWithProfile_DialerProxyClosedLoop(t *testing.T) {
+	missingDialerYAML := []byte(`
+proxies:
+  - name: "US-ACCK-4837"
+    type: "vless"
+  - name: "US-ACCK-4837 ➔ LZ-US-Pavlov-家宽"
+    type: "vless"
+proxy-groups:
+  - name: "选择代理"
+    proxies: ["US-ACCK-4837", "US-ACCK-4837 ➔ LZ-US-Pavlov-家宽"]
+`)
+	if err := ValidateYAMLWithProfile(missingDialerYAML, []string{"选择代理"}, nil, "ashan"); err == nil {
+		t.Fatalf("expected missing dialer-proxy on chain proxy to fail validation")
+	}
+
+	danglingDialerYAML := []byte(`
+proxies:
+  - name: "US-ACCK-4837"
+    type: "vless"
+  - name: "US-ACCK-4837 ➔ LZ-US-Pavlov-家宽"
+    type: "vless"
+    dialer-proxy: "Old-NonExistent-Transit"
+proxy-groups:
+  - name: "选择代理"
+    proxies: ["US-ACCK-4837", "US-ACCK-4837 ➔ LZ-US-Pavlov-家宽"]
+`)
+	if err := ValidateYAMLWithProfile(danglingDialerYAML, []string{"选择代理"}, nil, "ashan"); err == nil {
+		t.Fatalf("expected dangling dialer-proxy target to fail validation")
+	}
+
+	validChainYAML := []byte(`
+proxies:
+  - name: "US-ACCK-4837"
+    type: "vless"
+  - name: "US-ACCK-4837 ➔ LZ-US-Pavlov-家宽"
+    type: "vless"
+    dialer-proxy: "US-ACCK-4837"
+proxy-groups:
+  - name: "选择代理"
+    proxies: ["US-ACCK-4837", "US-ACCK-4837 ➔ LZ-US-Pavlov-家宽"]
+`)
+	if err := ValidateYAMLWithProfile(validChainYAML, []string{"选择代理"}, nil, "ashan"); err != nil {
+		t.Fatalf("expected valid chain dialer-proxy YAML to pass, got: %v", err)
+	}
+}
+
+func TestValidateYAMLWithProfile_DanglingRuleTarget(t *testing.T) {
+	danglingRuleYAML := []byte(`
+proxies:
+  - name: "US-ACCK-4837"
+    type: "vless"
+proxy-groups:
+  - name: "选择代理"
+    proxies: ["US-ACCK-4837"]
+rules:
+  - AND,((DST-PORT,443),(NETWORK,UDP)),REJECT
+  - DOMAIN-SUFFIX,truthsocial.com,Truth Social
+`)
+	if err := ValidateYAMLWithProfile(danglingRuleYAML, []string{"选择代理"}, nil, "business"); err == nil {
+		t.Fatalf("expected dangling rule target 'Truth Social' to fail validation")
+	}
+
+	validRuleYAML := []byte(`
+proxies:
+  - name: "US-ACCK-4837"
+    type: "vless"
+proxy-groups:
+  - name: "选择代理"
+    proxies: ["US-ACCK-4837"]
+rules:
+  - AND,((DST-PORT,443),(NETWORK,UDP)),REJECT
+  - DOMAIN-SUFFIX,truthsocial.com,选择代理
+  - MATCH,选择代理
+`)
+	if err := ValidateYAMLWithProfile(validRuleYAML, []string{"选择代理"}, nil, "business"); err != nil {
+		t.Fatalf("expected valid rules YAML to pass, got: %v", err)
+	}
+}

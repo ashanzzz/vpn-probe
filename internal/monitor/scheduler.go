@@ -46,6 +46,7 @@ type Scheduler struct {
 	speedMu        sync.Mutex            // 保证 RunSpeedTestAll 串行执行，避免并发测速带宽互相挤占
 	syncMu         sync.Mutex            // 保证五维策略组向 SubStore 同步串行化
 	nodeStates     map[string]*NodeState // node name -> state
+	chainResults   map[string]*model.NodeProbeResult // chain URL -> 真实两跳探测结果
 	cancel         context.CancelFunc
 }
 
@@ -103,6 +104,7 @@ func NewScheduler(
 		substoreClient: sc,
 		healer:         healer.NewHealer(cfg, sc),
 		nodeStates:     make(map[string]*NodeState),
+		chainResults:   make(map[string]*model.NodeProbeResult),
 	}
 
 	for _, n := range cfg.Monitor.Nodes {
@@ -437,14 +439,20 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 		}
 
 		if matchedKey != "" {
+			st := s.nodeStates[matchedKey]
+			if matchedKey != n.Name {
+				delete(s.nodeStates, matchedKey)
+				s.nodeStates[n.Name] = st
+				matchedKey = n.Name
+			}
 			validSelfSet[matchedKey] = true
-			s.nodeStates[matchedKey].Config.URL = n.URL
-			s.nodeStates[matchedKey].Config.Name = n.Name
-			s.nodeStates[matchedKey].Config.IsSelf = true
-			if s.nodeStates[matchedKey].LastResult != nil {
-				s.nodeStates[matchedKey].LastResult.Name = n.Name
-				s.nodeStates[matchedKey].LastResult.OriginalURL = n.URL
-				s.nodeStates[matchedKey].LastResult.NodeType = nodeType
+			st.Config.URL = n.URL
+			st.Config.Name = n.Name
+			st.Config.IsSelf = true
+			if st.LastResult != nil {
+				st.LastResult.Name = n.Name
+				st.LastResult.OriginalURL = n.URL
+				st.LastResult.NodeType = nodeType
 			}
 		} else {
 			validSelfSet[n.Name] = true
@@ -583,11 +591,25 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 		}
 	}
 
-	// 2. 对线路机按综合得分排序
+	// 2. 对线路机按综合得分排序，并注册到 ProbeEngine 供两跳链式拨号解析
 	rankedTransits := speedtest.RankNodes(transitNodes)
+	if s.engine != nil {
+		transitMap := make(map[string]string, len(transitNodes))
+		for _, t := range transitNodes {
+			if t != nil && t.Name != "" && t.OriginalURL != "" {
+				transitMap[t.Name] = t.OriginalURL
+			}
+		}
+		s.engine.RegisterTransitNodes(transitMap)
+	}
 
-	// 3. 组装智能链式代理
-	chainLinks := s.healer.BuildSmartChains(rankedTransits, resiNodes)
+	// 3. 组装智能链式与全网状中继代理
+	uniqueResis := deduplicateNodeResults(resiNodes)
+	chainLinks := s.healer.BuildSmartChains(rankedTransits, uniqueResis)
+	if fullMeshChains := s.healer.BuildFullMeshRegionalChains(rankedTransits, uniqueResis); len(fullMeshChains) > 0 {
+		chainLinks = fullMeshChains
+	}
+	chainLinks = mergeCustomChains(chainLinks)
 
 	// 4. 更新状态与持久化 (支持以 Node.Name 或 OriginalURL 精准匹配)
 	s.mu.Lock()
@@ -616,23 +638,30 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 		}
 	}
 
-	// 5. 三层独立订阅与总集合原子推送至 Sub-Store (带引擎故障熔断保护)
-	if s.substoreClient != nil && s.cfg.SubStore.Enabled {
-		total := len(resp.Results)
-		if total > 0 && float64(resp.EngineErrors)/float64(total) >= 0.30 {
+	// 4.5 真实两跳探测「线路机 ➔ 中转服务器 ➔ 家宽机」端到端连通性与延迟
+	total := len(resp.Results)
+	engineHealthy := total == 0 || float64(resp.EngineErrors)/float64(total) < 0.30
+	if engineHealthy && len(chainLinks) > 0 {
+		probedChains := s.probeChains(ctx, chainLinks, rankedTransits, uniqueResis)
+		s.mu.Lock()
+		newChainMap := make(map[string]*model.NodeProbeResult, len(probedChains))
+		for _, cr := range probedChains {
+			if cr != nil && cr.OriginalURL != "" {
+				newChainMap[cr.OriginalURL] = cr
+			}
+		}
+		s.chainResults = newChainMap
+		s.mu.Unlock()
+	}
+
+	// 5. 三层独立订阅与总集合原子推送至 Sub-Store (带开关控制与引擎故障熔断保护)
+	if s.substoreClient != nil && s.cfg.SubStore.Enabled && s.cfg.Monitor.AutoSyncSubStore {
+		if !engineHealthy {
 			ratio := float64(resp.EngineErrors) / float64(total)
 			logger.Event(logger.LevelWarn, "substore", "sync_skipped",
 				fmt.Sprintf("reason=engine_error_ratio ratio=%.2f threshold=0.30 total=%d engine_err=%d",
 					ratio, total, resp.EngineErrors))
 		} else {
-			// 方案B：全量区域网状池化中继 (美西4837全量挂载美国家宽)
-			uniqueResis := deduplicateNodeResults(resiNodes)
-			fullMeshChains := s.healer.BuildFullMeshRegionalChains(rankedTransits, uniqueResis)
-			if len(fullMeshChains) > 0 {
-				chainLinks = fullMeshChains
-			}
-			chainLinks = mergeCustomChains(chainLinks)
-
 			// 方案B：五维智能策略组分类 (线路机、美区全家桶、日区全家桶、其他、送中隔离)
 			fiveGroups := ClassifyIntoFiveGroups(rankedTransits, uniqueResis, chainLinks)
 			s.syncMu.Lock()
@@ -849,25 +878,51 @@ func (s *Scheduler) SyncFiveGroupsNow(ctx context.Context) error {
 	return s.substoreClient.SyncFiveGroups(ctx, fiveGroups)
 }
 
-// mergeCustomChains 合并全网状中继与用户显式定制的动态链式绑定，按 URL 去重
+// mergeCustomChains 合并全网状中继与用户显式定制的动态链式绑定，按 URL 与规范化链式标签去重
 func mergeCustomChains(baseChains []string) []string {
 	customChains, _ := LoadCustomChains()
 	if len(customChains) == 0 {
 		return baseChains
 	}
+	normChainKey := func(raw string) string {
+		label := raw
+		if idx := strings.Index(raw, "#"); idx != -1 {
+			label = raw[idx+1:]
+		}
+		if uLabel, err := url.QueryUnescape(label); err == nil && uLabel != "" {
+			label = uLabel
+		}
+		tPart, rPart, isChain := ParseChainParts(label)
+		if isChain && tPart != "" && rPart != "" {
+			return strings.ToLower(strings.TrimSpace(tPart) + "->" + strings.TrimSpace(rPart))
+		}
+		return ""
+	}
+
 	chainSet := make(map[string]bool, len(baseChains)+len(customChains))
+	nameSet := make(map[string]bool, len(baseChains)+len(customChains))
 	var merged []string
 	for _, ch := range baseChains {
 		if !chainSet[ch] {
 			chainSet[ch] = true
+			if nk := normChainKey(ch); nk != "" {
+				nameSet[nk] = true
+			}
 			merged = append(merged, ch)
 		}
 	}
 	for _, cc := range customChains {
-		if cc.ChainURL != "" && !chainSet[cc.ChainURL] {
-			chainSet[cc.ChainURL] = true
-			merged = append(merged, cc.ChainURL)
+		if cc.ChainURL == "" || chainSet[cc.ChainURL] {
+			continue
 		}
+		if nk := normChainKey(cc.ChainURL); nk != "" && nameSet[nk] {
+			continue
+		}
+		chainSet[cc.ChainURL] = true
+		if nk := normChainKey(cc.ChainURL); nk != "" {
+			nameSet[nk] = true
+		}
+		merged = append(merged, cc.ChainURL)
 	}
 	return merged
 }
@@ -1001,17 +1056,17 @@ func getHostGroupKey(res *model.NodeProbeResult) string {
 		host = res.Diagnostic.TargetIP
 	}
 
-	// 1. 美西 LAX 主机 (38.175.222.44 / lax-free.1992004.xyz)
-	if strings.Contains(host, "lax-free") || strings.Contains(name, "US-LAX") || strings.Contains(name, "洛杉矶") || strings.Contains(name, "美西") || host == "38.175.222.44" {
-		return "US-LAX"
+	// 1. 美西 LAX / ACCK-4837 主机 (38.175.222.44 / lax-free.1992004.xyz)
+	if strings.Contains(host, "lax-free") || strings.Contains(name, "US-ACCK-4837") || strings.Contains(name, "US-LAX") || strings.Contains(name, "洛杉矶") || strings.Contains(name, "美西") || host == "38.175.222.44" {
+		return "US-ACCK-4837"
 	}
-	// 2. 东京 IIJ 主机 (156.231.113.91 / tokyo-free.1992004.xyz)
-	if strings.Contains(host, "tokyo-free") || strings.Contains(name, "JP-Tokyo-IIJ") || strings.Contains(name, "东京 IIJ") || strings.Contains(name, "东京IIJ") || host == "156.231.113.91" {
-		return "JP-Tokyo-IIJ"
+	// 2. 东京 IIJ / AKILE-IIJ 主机 (156.231.113.91 / tokyo-free.1992004.xyz)
+	if strings.Contains(host, "tokyo-free") || strings.Contains(name, "JP-AKILE-IIJ") || strings.Contains(name, "JP-Tokyo-IIJ") || strings.Contains(name, "东京 IIJ") || strings.Contains(name, "东京IIJ") || host == "156.231.113.91" {
+		return "JP-AKILE-IIJ"
 	}
-	// 3. 东京软银 主机 (45.192.242.72)
-	if strings.Contains(name, "JP-Tokyo-Softbank") || strings.Contains(name, "JP--ACCK-SB") || strings.Contains(name, "ACCK-SB") || strings.Contains(name, "东京软银") || host == "45.192.242.72" {
-		return "JP-Tokyo-Softbank"
+	// 3. 东京软银 / ACCK-SB 主机 (45.192.242.72)
+	if strings.Contains(name, "JP-ACCK-SB") || strings.Contains(name, "JP-Tokyo-Softbank") || strings.Contains(name, "JP--ACCK-SB") || strings.Contains(name, "ACCK-SB") || strings.Contains(name, "东京软银") || host == "45.192.242.72" {
+		return "JP-ACCK-SB"
 	}
 
 	if host != "" {
@@ -1034,6 +1089,111 @@ func (s *Scheduler) GetStatus() map[string]*NodeState {
 		copyMap[k] = &st
 	}
 	return copyMap
+}
+
+// GetChainResults 返回最近一次真实两跳探测的所有链式链路结果副本
+func (s *Scheduler) GetChainResults() []*model.NodeProbeResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*model.NodeProbeResult, 0, len(s.chainResults))
+	for _, r := range s.chainResults {
+		if r != nil {
+			cp := *r
+			out = append(out, &cp)
+		}
+	}
+	return out
+}
+
+// GetChainResultMap 返回按 URL 和 Name 索引的真实链式探测结果副本
+func (s *Scheduler) GetChainResultMap() map[string]*model.NodeProbeResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]*model.NodeProbeResult, len(s.chainResults)*2)
+	for _, r := range s.chainResults {
+		if r != nil {
+			cp := *r
+			if cp.OriginalURL != "" {
+				out[cp.OriginalURL] = &cp
+			}
+			if cp.Name != "" {
+				out[cp.Name] = &cp
+			}
+		}
+	}
+	return out
+}
+
+func (s *Scheduler) probeChains(ctx context.Context, chainLinks []string, transits []*model.NodeProbeResult, resis []*model.NodeProbeResult) []*model.NodeProbeResult {
+	if s.engine == nil || len(chainLinks) == 0 {
+		return nil
+	}
+	concurrency := s.cfg.Probe.MaxConcurrency
+	if concurrency <= 0 {
+		concurrency = 6
+	}
+	if concurrency > 10 {
+		concurrency = 10
+	}
+	timeoutSec := s.cfg.Probe.DefaultTimeout
+	if timeoutSec <= 0 {
+		timeoutSec = 8
+	}
+
+	results := make([]*model.NodeProbeResult, len(chainLinks))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for i, ch := range chainLinks {
+		wg.Add(1)
+		go func(idx int, link string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if idx > 0 {
+				time.Sleep(time.Duration((idx%4)*25) * time.Millisecond)
+			}
+
+			label := link
+			if hashIdx := strings.Index(link, "#"); hashIdx != -1 {
+				label = link[hashIdx+1:]
+			}
+			if uLabel, err := url.QueryUnescape(label); err == nil {
+				label = uLabel
+			}
+			transitPart, targetPart, _ := ParseChainParts(label)
+
+			var transitChina bool
+			for _, t := range transits {
+				if t != nil && MatchTransitCandidate(t.Name, transitPart) {
+					if t.ChinaExit {
+						transitChina = true
+					}
+					break
+				}
+			}
+			var inheritResi *model.NodeProbeResult
+			for _, r := range resis {
+				if r != nil && MatchResidentialCandidate(r.Name, targetPart) {
+					inheritResi = r
+					break
+				}
+			}
+
+			results[idx] = s.engine.ProbeChainFast(ctx, link, inheritResi, transitChina, timeoutSec)
+		}(i, ch)
+	}
+	wg.Wait()
+
+	onlineCnt := 0
+	for _, r := range results {
+		if r != nil && r.Online {
+			onlineCnt++
+		}
+	}
+	logger.Infof("[CHAIN-PROBE] Probed %d chained links via sing-box detour: online=%d offline=%d", len(results), onlineCnt, len(results)-onlineCnt)
+	return results
 }
 
 // ClassifyIntoFiveGroups 将自建线路机、家宽机与链式代理编排为五维自建策略组 (方案B)

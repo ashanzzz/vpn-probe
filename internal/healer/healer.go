@@ -207,7 +207,7 @@ func (h *Healer) BuildSmartChains(transitNodes []*model.NodeProbeResult, resiNod
 			separator = "&"
 		}
 
-		chainName := fmt.Sprintf("链式|%s ➔ %s", pairedRelay.Name, resiLabel)
+		chainName := fmt.Sprintf("%s ➔ %s", pairedRelay.Name, resiLabel)
 		chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(pairedRelay.Name), chainName)
 
 		chains = append(chains, chainURL)
@@ -265,7 +265,7 @@ func (h *Healer) BuildFullMeshRegionalChains(transitNodes []*model.NodeProbeResu
 
 		// 咱们所有自有中转服务器，全部把所有家宽链式代理
 		for _, transit := range activeTransits {
-			chainName := fmt.Sprintf("链式|%s ➔ %s", transit.Name, resiLabel)
+			chainName := fmt.Sprintf("%s ➔ %s", transit.Name, resiLabel)
 			chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(transit.Name), chainName)
 			if !seen[chainURL] {
 				seen[chainURL] = true

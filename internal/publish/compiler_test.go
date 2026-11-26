@@ -608,6 +608,14 @@ func TestCompileScript_BusinessPureSelfIsolationAndCustomGroupProtection(t *test
 			map[string]any{"name": "自动选择", "type": "url-test", "proxies": []any{"Airport-HK-01"}},
 			map[string]any{"name": "香港节点", "type": "select", "proxies": []any{"Airport-HK-01"}},
 			map[string]any{"name": "全球直连", "type": "select", "proxies": []any{"DIRECT", "选择代理"}},
+			map[string]any{"name": "Truth Social", "type": "select", "proxies": []any{"Airport-HK-01"}},
+			map[string]any{"name": "静态资源", "type": "select", "proxies": []any{"DIRECT"}},
+		},
+		"rules": []any{
+			"AND,((DST-PORT,443),(NETWORK,UDP)),REJECT",
+			"DOMAIN-SUFFIX,truthsocial.com,Truth Social",
+			"RULE-SET,StaticResources,静态资源",
+			"MATCH,全球直连",
 		},
 	}
 	cfgBytes, _ := json.Marshal(mockCfg)
@@ -627,6 +635,7 @@ func TestCompileScript_BusinessPureSelfIsolationAndCustomGroupProtection(t *test
 			Name    string   `json:"name"`
 			Proxies []string `json:"proxies"`
 		} `json:"proxy-groups"`
+		Rules []string `json:"rules"`
 	}
 	if err := json.Unmarshal(out, &processed); err != nil {
 		t.Fatalf("unmarshal processed: %v", err)
@@ -668,5 +677,96 @@ func TestCompileScript_BusinessPureSelfIsolationAndCustomGroupProtection(t *test
 	}
 	if !foundCustom || !foundDirect {
 		t.Fatalf("expected custom=%v and direct=%v groups", foundCustom, foundDirect)
+	}
+
+	// 3. Rules targeting stripped app groups must be rewritten to surviving groups
+	if len(processed.Rules) != 4 {
+		t.Fatalf("expected 4 rules, got %v", processed.Rules)
+	}
+	if processed.Rules[0] != "AND,((DST-PORT,443),(NETWORK,UDP)),REJECT" {
+		t.Errorf("AND rule mutated unexpectedly: %s", processed.Rules[0])
+	}
+	if processed.Rules[1] != "DOMAIN-SUFFIX,truthsocial.com,选择代理" {
+		t.Errorf("expected dangling Truth Social rule to remap to 选择代理, got: %s", processed.Rules[1])
+	}
+	if processed.Rules[2] != "RULE-SET,StaticResources,全球直连" {
+		t.Errorf("expected dangling 静态资源 rule to remap to 全球直连, got: %s", processed.Rules[2])
+	}
+	if processed.Rules[3] != "MATCH,全球直连" {
+		t.Errorf("MATCH rule mutated unexpectedly: %s", processed.Rules[3])
+	}
+}
+
+func TestCompileScript_EnforcesDialerProxyAndNormalizesChainName(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed on PATH")
+	}
+
+	atoms := []model.AtomNode{
+		{Name: "US-ACCK-4837", Kind: "transit", Country: "US"},
+		{Name: "JP-ACCK-SB", Kind: "transit", Country: "JP"},
+		{Name: "US-ACCK-4837 ➔ LZ-US-Pavlov-家宽", Kind: "chain", Country: "US"},
+		{Name: "JP-ACCK-SB ➔ LZ-TW-HiNet-家宽", Kind: "chain", Country: "TW"},
+	}
+	groups := []model.CustomGroupDef{
+		{
+			Name:        "ashan-us-resi",
+			DisplayName: "自建-美国家宽",
+			Enabled:     true,
+			Type:        "select",
+			Order:       20,
+			Filter:      model.GroupFilter{Countries: []string{"US"}, Kinds: []string{"chain"}},
+		},
+	}
+
+	script, err := CompileScript(groups, atoms, "ashan")
+	if err != nil {
+		t.Fatalf("CompileScript failed: %v", err)
+	}
+
+	mockCfg := map[string]any{
+		"proxies": []any{
+			map[string]any{"name": "🇺🇸 US-ACCK-4837", "type": "vless"},
+			map[string]any{"name": "🇯🇵 JP-ACCK-SB", "type": "vless"},
+			map[string]any{"name": "链式|US-ACCK-4837 ➔ LZ-US-Pavlov-家宽", "type": "vless"},
+			map[string]any{"name": "JP-ACCK-SB ➔ LZ-TW-HiNet-家宽", "type": "vless", "dialer-proxy": "JP--ACCK-SB"},
+		},
+		"proxy-groups": []any{
+			map[string]any{"name": "选择代理", "type": "select", "proxies": []any{"自动选择"}},
+			map[string]any{"name": "自动选择", "type": "url-test", "proxies": []any{"🇺🇸 US-ACCK-4837"}},
+		},
+	}
+	cfgBytes, _ := json.Marshal(mockCfg)
+	jsCode := script + "\nconst res = processConfig(" + string(cfgBytes) + "); console.log(JSON.stringify(res));"
+
+	cmd := exec.Command("node", "-e", jsCode)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node execution failed: %v, out: %s", err, string(out))
+	}
+
+	var processed struct {
+		Proxies []struct {
+			Name        string `json:"name"`
+			DialerProxy string `json:"dialer-proxy"`
+		} `json:"proxies"`
+		Groups []struct {
+			Name    string   `json:"name"`
+			Proxies []string `json:"proxies"`
+		} `json:"proxy-groups"`
+	}
+	if err := json.Unmarshal(out, &processed); err != nil {
+		t.Fatalf("unmarshal processed: %v", err)
+	}
+
+	dialers := map[string]string{}
+	for _, p := range processed.Proxies {
+		dialers[p.Name] = p.DialerProxy
+	}
+	if dialers["US-ACCK-4837 ➔ LZ-US-Pavlov-家宽"] != "🇺🇸 US-ACCK-4837" {
+		t.Errorf("expected normalized chain dialer-proxy '🇺🇸 US-ACCK-4837', got %q (all: %+v)", dialers["US-ACCK-4837 ➔ LZ-US-Pavlov-家宽"], dialers)
+	}
+	if dialers["JP-ACCK-SB ➔ LZ-TW-HiNet-家宽"] != "🇯🇵 JP-ACCK-SB" {
+		t.Errorf("expected legacy dialer-proxy realigned to '🇯🇵 JP-ACCK-SB', got %q", dialers["JP-ACCK-SB ➔ LZ-TW-HiNet-家宽"])
 	}
 }

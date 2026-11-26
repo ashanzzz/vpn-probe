@@ -159,9 +159,11 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 	}
 
 	transitMap := make(map[string]*model.TopologyTransitNode)
+	transitDirectSeen := make(map[string]bool)
 	natMap := make(map[string]*model.TopologyNATRelayNode) // key: publicIP
+	natRegions := make(map[string]map[string]bool)
 	landingMap := make(map[string]*model.TopologyLandingNode)
-	linkMap := make(map[string]bool)
+	linkMap := make(map[string]*model.TopologyLinkEdge)
 
 	summary := model.TopologySummary{}
 
@@ -181,7 +183,47 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 		}
 
 		rawTag := res.Name
-		isChain := strings.Contains(rawTag, "➔") || strings.Contains(rawTag, "链式") || (u != nil && u.Query().Get("dialerProxy") != "")
+		isChain := res.NodeType == "chain" || strings.Contains(rawTag, "➔") || strings.Contains(rawTag, "链式") || (u != nil && (u.Query().Get("dialerProxy") != "" || u.Query().Get("dialer-proxy") != ""))
+
+		// Stage 2 直连专线线路机：仅注册为 Stage 2，绝不混入 Stage 3 (NAT) 或 Stage 4 (家宽)
+		if !isChain && res.NodeType == "transit" {
+			tName := strings.TrimSpace(res.Name)
+			if tName != "" {
+				host := serverHost
+				if host == "" {
+					host = tName
+				}
+				country := DetectRegionFromName(tName, res.ExitCountry)
+				if country == "" || country == "OTHER" {
+					country = res.ExitCountry
+				}
+				transitMap[tName] = &model.TopologyTransitNode{
+					ID:        "transit-" + tName,
+					Name:      tName,
+					Host:      host,
+					Country:   country,
+					Online:    res.Online,
+					LatencyMs: res.LatencyMs,
+				}
+				transitDirectSeen[tName] = true
+
+				c2tID := "link-client-transit-" + tName
+				linkStatus := "ok"
+				if !res.Online {
+					linkStatus = "fault"
+				}
+				linkMap[c2tID] = &model.TopologyLinkEdge{
+					ID:        c2tID,
+					SourceID:  "client",
+					TargetID:  "transit-" + tName,
+					StageFrom: 1,
+					StageTo:   2,
+					LatencyMs: res.LatencyMs,
+					Status:    linkStatus,
+				}
+			}
+			continue
+		}
 
 		var transitName string
 		var landingTag string = rawTag
@@ -191,12 +233,14 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 				landingTag = strings.TrimSpace(rawTag[idx+len("➔"):])
 			} else if u != nil && u.Query().Get("dialerProxy") != "" {
 				transitName = u.Query().Get("dialerProxy")
+			} else if u != nil && u.Query().Get("dialer-proxy") != "" {
+				transitName = u.Query().Get("dialer-proxy")
 			}
 			transitName = strings.TrimPrefix(transitName, "链式|")
 			transitName = strings.TrimSpace(transitName)
 		}
 
-		// Stage 2: 专线线路机
+		// Stage 2: 专线线路机 (若仅从链式节点发现则补全)
 		if isChain && transitName != "" {
 			if _, exists := transitMap[transitName]; !exists {
 				tNode := &model.TopologyTransitNode{
@@ -208,7 +252,7 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 					LatencyMs: res.LatencyMs / 3,
 				}
 				transitMap[transitName] = tNode
-			} else if res.Online {
+			} else if res.Online && !transitDirectSeen[transitName] {
 				transitMap[transitName].Online = true
 			}
 		}
@@ -218,12 +262,23 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 		if natKey == "" {
 			natKey = "unknown-nat"
 		}
+		portRegion := DetectNATRegion(natKey, landingTag)
+		if res.ExitCountry != "" && res.ExitCountry != "OTHER" {
+			portRegion = res.ExitCountry
+		}
+		if natRegions[natKey] == nil {
+			natRegions[natKey] = make(map[string]bool)
+		}
+		if portRegion != "" {
+			natRegions[natKey][portRegion] = true
+		}
+
 		natRelay, exists := natMap[natKey]
 		if !exists {
 			natRelay = &model.TopologyNATRelayNode{
 				ID:       "nat-" + natKey,
-				Name:     fmt.Sprintf("懒猫云 NAT 中转 (%s)", DetectNATRegion(natKey, landingTag)),
-				Region:   DetectNATRegion(natKey, landingTag),
+				Name:     fmt.Sprintf("懒猫云 NAT 中转 (%s)", portRegion),
+				Region:   portRegion,
 				PublicIP: natKey,
 				Online:   res.Online,
 				Ports:    make([]*model.TopologyNATPortItem, 0),
@@ -245,6 +300,7 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 			if portItem == nil {
 				portItem = &model.TopologyNATPortItem{
 					Port:        serverPort,
+					Region:      portRegion,
 					TargetProto: res.Protocol,
 					TargetNode:  landingTag,
 					Online:      res.Online,
@@ -254,6 +310,9 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 				summary.TotalPorts++
 			} else if res.Online {
 				portItem.Online = true
+				if portItem.LatencyMs == 0 || (res.LatencyMs > 0 && res.LatencyMs < portItem.LatencyMs) {
+					portItem.LatencyMs = res.LatencyMs
+				}
 			}
 		}
 
@@ -262,16 +321,20 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 		if exitKey == "" {
 			exitKey = landingTag
 		}
-		if _, exists := landingMap[exitKey]; !exists {
+		if existing, exists := landingMap[exitKey]; !exists {
 			ipType := res.ExitIPType
 			if ipType == "" {
 				ipType = "家宽"
+			}
+			country := res.ExitCountry
+			if country == "" || country == "OTHER" {
+				country = DetectRegionFromName(landingTag, "OTHER")
 			}
 			lNode := &model.TopologyLandingNode{
 				ID:        "landing-" + exitKey,
 				Tag:       landingTag,
 				ExitIP:    res.ExitIP,
-				Country:   res.ExitCountry,
+				Country:   country,
 				City:      res.ExitCity,
 				ISP:       res.ExitISP,
 				IPType:    ipType,
@@ -280,8 +343,22 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 			}
 			landingMap[exitKey] = lNode
 			summary.TotalLandings++
-		} else if res.Online {
-			landingMap[exitKey].Online = true
+		} else {
+			if res.Online {
+				existing.Online = true
+			}
+			if existing.ExitIP == "" && res.ExitIP != "" {
+				existing.ExitIP = res.ExitIP
+			}
+			if existing.City == "" && res.ExitCity != "" {
+				existing.City = res.ExitCity
+			}
+			if existing.ISP == "" && res.ExitISP != "" {
+				existing.ISP = res.ExitISP
+			}
+			if res.ChinaExit {
+				existing.ChinaExit = true
+			}
 		}
 
 		// 生成跨阶连线 Links
@@ -291,10 +368,10 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 		}
 
 		if isChain && transitName != "" {
-			// Link: Client (1) -> Transit (2)
+			// Link: Client (1) -> Transit (2) (仅当未由直连线路机注册时补齐)
 			c2tID := "link-client-transit-" + transitName
-			if !linkMap[c2tID] {
-				resp.Links = append(resp.Links, &model.TopologyLinkEdge{
+			if _, ok := linkMap[c2tID]; !ok {
+				linkMap[c2tID] = &model.TopologyLinkEdge{
 					ID:        c2tID,
 					SourceID:  "client",
 					TargetID:  "transit-" + transitName,
@@ -302,31 +379,31 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 					StageTo:   2,
 					LatencyMs: res.LatencyMs / 3,
 					Status:    linkStatus,
-				})
-				linkMap[c2tID] = true
+				}
 			}
 
 			// Link: Transit (2) -> NAT (3)
 			t2nID := fmt.Sprintf("link-transit-%s-nat-%s-%d", transitName, natKey, serverPort)
-			if !linkMap[t2nID] {
-				resp.Links = append(resp.Links, &model.TopologyLinkEdge{
-					ID:        t2nID,
-					SourceID:  "transit-" + transitName,
-					TargetID:  "nat-" + natKey,
-					StageFrom: 2,
-					StageTo:   3,
-					Port:      serverPort,
-					Proto:     res.Protocol,
-					LatencyMs: (res.LatencyMs * 2) / 3,
-					Status:    linkStatus,
-				})
-				linkMap[t2nID] = true
+			edgeProto := res.Protocol
+			if edgeProto == "" {
+				edgeProto = "vless"
+			}
+			linkMap[t2nID] = &model.TopologyLinkEdge{
+				ID:        t2nID,
+				SourceID:  "transit-" + transitName,
+				TargetID:  "nat-" + natKey,
+				StageFrom: 2,
+				StageTo:   3,
+				Port:      serverPort,
+				Proto:     edgeProto,
+				LatencyMs: res.LatencyMs,
+				Status:    linkStatus,
 			}
 		} else {
 			// Link: Client (1) -> NAT (3)
 			c2nID := fmt.Sprintf("link-client-nat-%s-%d", natKey, serverPort)
-			if !linkMap[c2nID] {
-				resp.Links = append(resp.Links, &model.TopologyLinkEdge{
+			if existing, ok := linkMap[c2nID]; !ok || (res.Online && existing.Status != "ok") {
+				linkMap[c2nID] = &model.TopologyLinkEdge{
 					ID:        c2nID,
 					SourceID:  "client",
 					TargetID:  "nat-" + natKey,
@@ -334,17 +411,16 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 					StageTo:   3,
 					Port:      serverPort,
 					Proto:     res.Protocol,
-					LatencyMs: res.LatencyMs / 2,
+					LatencyMs: res.LatencyMs,
 					Status:    linkStatus,
-				})
-				linkMap[c2nID] = true
+				}
 			}
 		}
 
 		// Link: NAT (3) -> Landing (4)
 		n2lID := fmt.Sprintf("link-nat-%s-%d-landing-%s", natKey, serverPort, exitKey)
-		if !linkMap[n2lID] {
-			resp.Links = append(resp.Links, &model.TopologyLinkEdge{
+		if existing, ok := linkMap[n2lID]; !ok || (res.Online && existing.Status != "ok") {
+			linkMap[n2lID] = &model.TopologyLinkEdge{
 				ID:        n2lID,
 				SourceID:  "nat-" + natKey,
 				TargetID:  "landing-" + exitKey,
@@ -354,8 +430,15 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 				Proto:     res.Protocol,
 				LatencyMs: res.LatencyMs,
 				Status:    linkStatus,
-			})
-			linkMap[n2lID] = true
+			}
+		}
+	}
+
+	// 多区 NAT 宿主机聚合标题归一化
+	for natKey, natRelay := range natMap {
+		if regs := natRegions[natKey]; len(regs) > 1 {
+			natRelay.Region = "MULTI"
+			natRelay.Name = fmt.Sprintf("懒猫云多区 NAT 中转 (%d区)", len(regs))
 		}
 	}
 
@@ -367,6 +450,9 @@ func BuildTopologyOverview(results []*model.NodeProbeResult) *model.TopologyOver
 	}
 	for _, l := range landingMap {
 		resp.Landings = append(resp.Landings, l)
+	}
+	for _, edge := range linkMap {
+		resp.Links = append(resp.Links, edge)
 	}
 
 	// 稳定排序: 杜绝 Go map 随机遍历导致的 API 响应抖动与前端重渲闪烁

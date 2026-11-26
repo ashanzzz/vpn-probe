@@ -20,6 +20,8 @@ type Engine struct {
 	sandboxMgr   *SandboxManager
 	peerMu       sync.RWMutex
 	healthyPeers map[string]PeerProxyCandidate // key: URL
+	transitMu    sync.RWMutex
+	transitLinks map[string]string // key: transit name -> URL
 	splitCache   map[string]*splitCacheEntry
 	splitCacheMu sync.RWMutex
 }
@@ -36,8 +38,88 @@ func NewEngine(cfg *config.Config) *Engine {
 		cfg:          cfg,
 		sandboxMgr:   sm,
 		healthyPeers: make(map[string]PeerProxyCandidate),
+		transitLinks: make(map[string]string),
 		splitCache:   make(map[string]*splitCacheEntry),
 	}
+}
+
+// RegisterTransitNodes 注册可用于 dialerProxy 两跳拨号的前置线路机映射 (name -> url)
+func (e *Engine) RegisterTransitNodes(nodes map[string]string) {
+	e.transitMu.Lock()
+	defer e.transitMu.Unlock()
+	for name, rawURL := range nodes {
+		name = strings.TrimSpace(name)
+		rawURL = strings.TrimSpace(rawURL)
+		if name != "" && rawURL != "" {
+			e.transitLinks[name] = rawURL
+		}
+	}
+}
+
+func (e *Engine) resolveTransitURL(dialer string) string {
+	dialer = strings.TrimSpace(dialer)
+	if dialer == "" {
+		return ""
+	}
+	e.transitMu.RLock()
+	defer e.transitMu.RUnlock()
+
+	if u, ok := e.transitLinks[dialer]; ok {
+		return u
+	}
+	for name, u := range e.transitLinks {
+		if strings.EqualFold(name, dialer) {
+			return u
+		}
+	}
+	// 兼容从已探测健康探针池回查
+	e.peerMu.RLock()
+	defer e.peerMu.RUnlock()
+	for _, p := range e.healthyPeers {
+		if strings.EqualFold(strings.TrimSpace(p.Name), dialer) {
+			return p.URL
+		}
+	}
+	return ""
+}
+
+func cloneOutboundMap(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func (e *Engine) buildLaunchOutbounds(parsed *ParsedNode) ([]map[string]any, string, error) {
+	if parsed == nil || parsed.RawOutbound == nil {
+		return nil, "", fmt.Errorf("parsed outbound is nil")
+	}
+	landingOb := cloneOutboundMap(parsed.RawOutbound)
+	finalTag := parsed.Tag
+	if finalTag == "" {
+		finalTag, _ = landingOb["tag"].(string)
+	}
+	if parsed.DialerProxy == "" {
+		return []map[string]any{landingOb}, finalTag, nil
+	}
+
+	transitURL := e.resolveTransitURL(parsed.DialerProxy)
+	if transitURL == "" {
+		return nil, "", fmt.Errorf("dialerProxy transit node %q not found", parsed.DialerProxy)
+	}
+	transitParsed, err := ParseLink(transitURL)
+	if err != nil {
+		return nil, "", fmt.Errorf("parse transit %q: %w", parsed.DialerProxy, err)
+	}
+	transitOb := cloneOutboundMap(transitParsed.RawOutbound)
+	transitTag := "detour-" + transitParsed.Tag
+	if transitTag == finalTag || transitTag == "direct" {
+		transitTag = "transit-detour"
+	}
+	transitOb["tag"] = transitTag
+	landingOb["detour"] = transitTag
+	return []map[string]any{landingOb, transitOb}, finalTag, nil
 }
 
 func (e *Engine) UpdateHealthyPeer(candidate PeerProxyCandidate) {
@@ -102,7 +184,18 @@ func (e *Engine) ProbeOneAdvanced(ctx context.Context, link string, isSelf bool,
 		serverPort, _ = parsed.RawOutbound["server_port"].(int)
 	}
 
-	// 2. 启动临时 sing-box 沙箱并执行在线状态与延迟检测 (支持本地沙箱启动或环回端口瞬时连接失败自动重试，规避瞬时端口复用竞争)
+	// 2. 构建单跳或 detour 两跳 outbound 并启动临时 sing-box 沙箱
+	launchOutbounds, finalTag, obErr := e.buildLaunchOutbounds(parsed)
+	if obErr != nil {
+		result.Online = false
+		result.OfflineReason = "node_down"
+		result.StatusText = fmt.Sprintf("【链式配置异常】%v", obErr)
+		result.ErrorMsg = obErr.Error()
+		result.Category = classifier.Classify(isSelf, false, false)
+		result.TopologyTrace = BuildNodeHopTrace(result, parsed, link)
+		return result
+	}
+
 	var inst *SandboxInstance
 	var activeSandboxCancel context.CancelFunc
 	var online bool
@@ -126,7 +219,7 @@ func (e *Engine) ProbeOneAdvanced(ctx context.Context, link string, isSelf bool,
 		}
 
 		sCtx, sCancel := context.WithTimeout(ctx, timeout+5*time.Second)
-		launchInst, launchErr := e.sandboxMgr.Launch(sCtx, parsed.RawOutbound)
+		launchInst, launchErr := e.sandboxMgr.LaunchWithOutbounds(sCtx, launchOutbounds, finalTag)
 		if launchErr != nil {
 			sCancel()
 			if attempt < 1 {
@@ -383,6 +476,17 @@ func (e *Engine) ProbeBatch(ctx context.Context, req *model.BatchProbeRequest) *
 	logger.Infof("Batch probe started: %d links (concurrency=%d, is_self=%v, split=%v, force_refresh=%v)",
 		len(req.Links), concurrency, req.IsSelf, req.CheckDetailedSplit, req.ForceRefresh)
 
+	// 预注册本批次中的非链式线路机，使同批中的 dialerProxy 链式节点可直接解析前置节点
+	batchTransits := make(map[string]string)
+	for _, l := range req.Links {
+		if p, err := ParseLink(l); err == nil && p.DialerProxy == "" && p.Tag != "" {
+			batchTransits[p.Tag] = l
+		}
+	}
+	if len(batchTransits) > 0 {
+		e.RegisterTransitNodes(batchTransits)
+	}
+
 	results := make([]*model.NodeProbeResult, len(req.Links))
 	groupCounts := make(map[model.Category]int)
 
@@ -457,7 +561,12 @@ func (e *Engine) SpeedTestOne(ctx context.Context, link string, isStream bool, d
 	sandboxCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	inst, err := e.sandboxMgr.Launch(sandboxCtx, parsed.RawOutbound)
+	launchOutbounds, finalTag, obErr := e.buildLaunchOutbounds(parsed)
+	if obErr != nil {
+		return nil, obErr
+	}
+
+	inst, err := e.sandboxMgr.LaunchWithOutbounds(sandboxCtx, launchOutbounds, finalTag)
 	if err != nil {
 		return nil, fmt.Errorf("launch sandbox: %w", err)
 	}
@@ -477,4 +586,118 @@ func (e *Engine) SpeedTestOne(ctx context.Context, link string, isStream bool, d
 		return speedtest.TestStream30S(sandboxCtx, inst.Port, "", durationSec, latency)
 	}
 	return speedtest.TestVPS10M(sandboxCtx, inst.Port, "", latency)
+}
+
+// ProbeChainFast 使用 sing-box detour 真实两跳拨号探测「线路机 ➔ 中转服务器 ➔ 家宽机」端到端连通性与延迟
+// 若直连家宽已获得出口归属信息则复用以节省配额；若直连受阻尚未获得 ExitIP 且链式拨号成功，则经两跳隧道实时探测出口与送中状态
+func (e *Engine) ProbeChainFast(ctx context.Context, chainLink string, inheritResi *model.NodeProbeResult, transitChinaExit bool, timeoutSec int) *model.NodeProbeResult {
+	if timeoutSec <= 0 {
+		timeoutSec = e.cfg.Probe.DefaultTimeout
+	}
+	if timeoutSec <= 0 {
+		timeoutSec = 8
+	}
+	timeout := time.Duration(timeoutSec) * time.Second
+
+	result := &model.NodeProbeResult{
+		ID:          uuid.New().String(),
+		OriginalURL: chainLink,
+		NodeType:    "chain",
+		IsSelf:      true,
+		TestedAt:    time.Now(),
+	}
+
+	parsed, err := ParseLink(chainLink)
+	if err != nil {
+		result.Online = false
+		result.ErrorMsg = fmt.Sprintf("parse error: %v", err)
+		result.Category = classifier.Classify(true, false, false)
+		return result
+	}
+	result.Protocol = parsed.Protocol
+	result.Name = parsed.Tag
+
+	launchOutbounds, finalTag, obErr := e.buildLaunchOutbounds(parsed)
+	if obErr != nil {
+		result.Online = false
+		result.StatusText = fmt.Sprintf("【链式配置异常】%v", obErr)
+		result.ErrorMsg = obErr.Error()
+		result.Category = classifier.Classify(true, false, false)
+		result.TopologyTrace = BuildNodeHopTrace(result, parsed, chainLink)
+		return result
+	}
+
+	sCtx, sCancel := context.WithTimeout(ctx, timeout+5*time.Second)
+	defer sCancel()
+
+	inst, launchErr := e.sandboxMgr.LaunchWithOutbounds(sCtx, launchOutbounds, finalTag)
+	if launchErr != nil {
+		result.Online = false
+		result.OfflineReason = "probe_engine_error"
+		result.StatusText = "【引擎异常】链式沙箱启动失败"
+		result.ErrorMsg = launchErr.Error()
+		result.Category = classifier.Classify(true, false, false)
+		result.TopologyTrace = BuildNodeHopTrace(result, parsed, chainLink)
+		return result
+	}
+	defer inst.Close(e.sandboxMgr)
+
+	online, latency, checkErr := CheckOnline(sCtx, inst.Port, e.cfg.Probe.LatencyCheckURL, timeout)
+	result.Online = online
+	result.LatencyMs = latency
+
+	if !online {
+		sbLog := inst.GetRecentLogs(3)
+		result.OfflineReason = "node_down"
+		result.StatusText = "【链式中断】线路机到中转/家宽拨号失败"
+		if sbLog != "" {
+			result.ErrorMsg = fmt.Sprintf("%v | sing-box: %s", checkErr, sbLog)
+		} else if checkErr != nil {
+			result.ErrorMsg = checkErr.Error()
+		}
+		if inheritResi != nil {
+			result.ExitIP = inheritResi.ExitIP
+			result.ExitCountry = inheritResi.ExitCountry
+			result.ExitCity = inheritResi.ExitCity
+			result.ExitISP = inheritResi.ExitISP
+			result.ExitIPType = inheritResi.ExitIPType
+			result.ChinaExit = transitChinaExit || inheritResi.ChinaExit
+		}
+		if result.ExitCountry == "" {
+			result.ExitCountry = model.ResolveCountry("", result.Name)
+		}
+		result.Category = classifier.Classify(true, false, false)
+		result.TopologyTrace = BuildNodeHopTrace(result, parsed, chainLink)
+		return result
+	}
+
+	result.StatusText = "链式全链路互通"
+	if inheritResi != nil && inheritResi.ExitIP != "" {
+		result.ExitIP = inheritResi.ExitIP
+		result.ExitCountry = inheritResi.ExitCountry
+		result.ExitCity = inheritResi.ExitCity
+		result.ExitISP = inheritResi.ExitISP
+		result.ExitIPType = inheritResi.ExitIPType
+		result.Split = inheritResi.Split
+		result.ChinaExit = transitChinaExit || inheritResi.ChinaExit
+	} else {
+		gfwCtx, gfwCancel := context.WithTimeout(ctx, timeout)
+		defer gfwCancel()
+		gfwRes := CheckGFW(gfwCtx, inst.Port, e.cfg.Probe.GoogleNCRURL, e.cfg.Probe.CloudflareTrace, timeout)
+		result.ChinaExit = transitChinaExit || gfwRes.IsChina
+		result.ExitIP = gfwRes.ExitIP
+		result.ExitCountry = gfwRes.ExitCountry
+		result.ExitCity = gfwRes.ExitCity
+		result.ExitISP = gfwRes.ExitISP
+		result.ExitIPType = DetermineIPType(result.ExitIP, result.ExitISP, "", true)
+	}
+	if result.ExitCountry == "" {
+		result.ExitCountry = model.ResolveCountry("", result.Name)
+	}
+	if result.ExitIPType == "" {
+		result.ExitIPType = "家宽"
+	}
+	result.Category = classifier.Classify(true, true, result.ChinaExit)
+	result.TopologyTrace = BuildNodeHopTrace(result, parsed, chainLink)
+	return result
 }

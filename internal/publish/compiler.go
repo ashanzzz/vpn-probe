@@ -169,11 +169,59 @@ function isDirtyLeakName(n) {
   return n === '自建-送中' || n === '自建-送中分组' || n === 'ashan-china-leak' || n === 'business-china-leak' || n.includes('送中') || n.includes('China-Leak');
 }
 
+function stripLeadingSymbols(s) {
+  return String(s || '').trim().replace(/^[^a-zA-Z0-9\u4e00-\u9fa5]+/, '').trim();
+}
+
+function normalizeChainName(name) {
+  const s = String(name || '').trim();
+  if (!s.includes('➔')) return s;
+  const idx = s.indexOf('➔');
+  let left = stripLeadingSymbols(s.slice(0, idx));
+  const pipeIdx = left.indexOf('|');
+  if (pipeIdx !== -1) left = left.slice(pipeIdx + 1).trim();
+  const right = s.slice(idx + 1).trim();
+  return left + ' ➔ ' + right;
+}
+
+function transitMatchesCandidate(candidate, query) {
+  const cClean = stripLeadingSymbols(candidate).toLowerCase();
+  const qClean = stripLeadingSymbols(query).toLowerCase();
+  if (!cClean || !qClean) return false;
+  if (cClean === qClean) return true;
+  const cUp = cClean.toUpperCase();
+  const qUp = qClean.toUpperCase();
+  if (cUp.includes('IIJ') && qUp.includes('IIJ')) return true;
+  if ((cUp.includes('4837') || cUp.includes('LAX') || cClean.includes('美西') || cClean.includes('洛杉矶')) &&
+      (qUp.includes('4837') || qUp.includes('LAX') || qClean.includes('美西') || qClean.includes('洛杉矶'))) return true;
+  if ((/(^|[-_\s])SB($|[-_\s])/.test(cUp) || cUp.includes('SOFTBANK') || cClean.includes('软银')) &&
+      (/(^|[-_\s])SB($|[-_\s])/.test(qUp) || qUp.includes('SOFTBANK') || qClean.includes('软银'))) return true;
+  return false;
+}
+
+function resolveTransitProxyName(rawTransit, nonChainNames) {
+  const t = String(rawTransit || '').trim();
+  if (!t) return null;
+  for (const name of nonChainNames) {
+    if (name === t) return name;
+  }
+  const tClean = stripLeadingSymbols(t).toLowerCase();
+  for (const name of nonChainNames) {
+    if (stripLeadingSymbols(name).toLowerCase() === tClean) return name;
+  }
+  for (const name of nonChainNames) {
+    if (transitMatchesCandidate(name, t)) return name;
+  }
+  return null;
+}
+
 function resolveProxyName(targetName, allNames) {
   const trimmed = (targetName || '').trim();
   if (trimmed === 'DIRECT' || trimmed === 'REJECT') return trimmed;
   if (allNames.has(trimmed)) return trimmed;
   if (allNames.has(targetName)) return targetName;
+  const normalizedTarget = normalizeChainName(trimmed);
+  if (allNames.has(normalizedTarget)) return normalizedTarget;
   if (!trimmed.includes('➔')) {
     const trimmedLower = trimmed.toLowerCase();
     for (const name of allNames) {
@@ -187,6 +235,11 @@ function resolveProxyName(targetName, allNames) {
         if (!/[a-zA-Z0-9\u4e00-\u9fa5]/.test(pfx)) return name;
       }
     }
+    for (const name of allNames) {
+      if (name && !String(name).includes('➔') && transitMatchesCandidate(name, trimmed)) {
+        return name;
+      }
+    }
   }
   if (trimmed.includes('➔')) {
     let raw = trimmed;
@@ -194,9 +247,25 @@ function resolveProxyName(targetName, allNames) {
     if (pipeIdx !== -1) raw = raw.slice(pipeIdx + 1);
     const parts = raw.split('➔');
     if (parts.length === 2) {
-      const transit = parts[0].trim();
+      const transit = stripLeadingSymbols(parts[0]);
       const resi = parts[1].trim();
       const transitUpper = transit.toUpperCase();
+      const resiLower = resi.toLowerCase();
+      // 1. Direct match against another '➔' chain node (handles emoji prefix / 链式| stripping / legacy transit name)
+      for (const name of allNames) {
+        if (!name || !name.includes('➔')) continue;
+        const nNorm = normalizeChainName(name);
+        const nParts = nNorm.split('➔');
+        if (nParts.length === 2) {
+          const nTransit = nParts[0].trim();
+          const nResi = nParts[1].trim().toLowerCase();
+          if ((nTransit.toLowerCase() === transit.toLowerCase() || transitMatchesCandidate(nTransit, transit)) &&
+              (nResi === resiLower || nResi.includes(resiLower) || resiLower.includes(nResi))) {
+            return name;
+          }
+        }
+      }
+      // 2. Legacy compact 3-part alias fallback
       let prefix = '';
       if (transitUpper.includes('4837') || transitUpper.includes('LAX') || transit.includes('洛杉矶') || transit.includes('美西')) prefix = 'LAX-';
       else if (transitUpper.includes('IIJ')) prefix = 'IIJ-';
@@ -228,6 +297,25 @@ function resolveProxyName(targetName, allNames) {
   return null;
 }
 
+function splitRuleTopLevel(rule) {
+  const parts = [];
+  let cur = '';
+  let depth = 0;
+  for (let i = 0; i < rule.length; i++) {
+    const ch = rule[i];
+    if (ch === '(') depth++;
+    else if (ch === ')' && depth > 0) depth--;
+    if (ch === ',' && depth === 0) {
+      parts.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  parts.push(cur);
+  return parts;
+}
+
 function processConfig(vpnCfg) {
   if (!vpnCfg || typeof vpnCfg !== 'object' || !Array.isArray(vpnCfg.proxies)) {
     return vpnCfg;
@@ -235,12 +323,24 @@ function processConfig(vpnCfg) {
 
   const purgedNodeNames = new Set();
   const seenNodeNames = new Set();
+  const renamedMap = new Map();
   const dedupedProxies = [];
   for (const p of vpnCfg.proxies) {
     if (!p) continue;
     if (isInformationalOrUnsupportedNode(p)) {
       if (p.name) purgedNodeNames.add(p.name);
       continue;
+    }
+    const origName = String(p.name);
+    if (origName.includes('➔')) {
+      const normName = normalizeChainName(origName);
+      if (normName && normName !== origName) {
+        renamedMap.set(origName, normName);
+        p.name = normName;
+      }
+    }
+    if (String(p.type || '').toLowerCase() === 'vless' && p['reality-opts'] && !p['client-fingerprint']) {
+      p['client-fingerprint'] = 'chrome';
     }
     if (seenNodeNames.has(p.name)) {
       continue;
@@ -249,6 +349,31 @@ function processConfig(vpnCfg) {
     dedupedProxies.push(p);
   }
   vpnCfg.proxies = dedupedProxies;
+
+  // Enforce dialer-proxy binding & alignment for all chain proxies in Clash YAML
+  const nonChainNames = vpnCfg.proxies
+    .filter(p => p && p.name && !String(p.name).includes('➔'))
+    .map(p => String(p.name));
+  for (const p of vpnCfg.proxies) {
+    if (!p || !p.name) continue;
+    const pName = String(p.name);
+    const existingDialer = p['dialer-proxy'] ? String(p['dialer-proxy']).trim() : '';
+    if (pName.includes('➔')) {
+      let resolvedDialer = existingDialer ? resolveTransitProxyName(existingDialer, nonChainNames) : null;
+      if (!resolvedDialer) {
+        const transitPart = pName.split('➔')[0].trim();
+        resolvedDialer = resolveTransitProxyName(transitPart, nonChainNames);
+      }
+      if (resolvedDialer && resolvedDialer !== pName) {
+        p['dialer-proxy'] = resolvedDialer;
+      }
+    } else if (existingDialer) {
+      const resolvedDialer = resolveTransitProxyName(existingDialer, nonChainNames);
+      if (resolvedDialer && resolvedDialer !== pName) {
+        p['dialer-proxy'] = resolvedDialer;
+      }
+    }
+  }
 
   const vpnExisting = Array.isArray(vpnCfg['proxy-groups']) ? vpnCfg['proxy-groups'] : [];
   const vpnNames = new Set(vpnCfg.proxies.map(p => p && p.name).filter(Boolean));
@@ -265,7 +390,9 @@ function processConfig(vpnCfg) {
   });
   for (const g of vpnGroups) {
     if (Array.isArray(g.proxies)) {
-      g.proxies = g.proxies.filter(p => !purgedNodeNames.has(p));
+      g.proxies = g.proxies
+        .map(p => renamedMap.get(p) || p)
+        .filter(p => !purgedNodeNames.has(p));
       if (g.proxies.length === 0) {
         g.proxies = ['DIRECT'];
       }
@@ -340,6 +467,12 @@ function processConfig(vpnCfg) {
       }
     }
     if (allowedSelfProxies.size > 0) {
+      // Preserve any dialer-proxy transit targets referenced by retained chain proxies
+      for (const p of vpnCfg.proxies) {
+        if (p && p.name && allowedSelfProxies.has(p.name) && p['dialer-proxy'] && vpnNames.has(p['dialer-proxy'])) {
+          allowedSelfProxies.add(p['dialer-proxy']);
+        }
+      }
       vpnCfg.proxies = vpnCfg.proxies.filter(p => p && allowedSelfProxies.has(p.name));
       vpnNames.clear();
       for (const p of vpnCfg.proxies) {
@@ -354,6 +487,28 @@ function processConfig(vpnCfg) {
         g.proxies = g.proxies.filter(p => builtinControls.has(p) || validGroupSet.has(p) || vpnNames.has(p));
         if (g.proxies.length === 0) g.proxies = ['DIRECT'];
       }
+    }
+    if (Array.isArray(vpnCfg.rules)) {
+      const validRuleTargets = new Set([...validGroupSet, 'DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE', 'GLOBAL']);
+      const fallbackProxyTarget = validGroupSet.has('选择代理') ? '选择代理' : (validGroupSet.has('Final') ? 'Final' : 'DIRECT');
+      const fallbackDirectTarget = validGroupSet.has('全球直连') ? '全球直连' : 'DIRECT';
+      const fallbackRejectTarget = validGroupSet.has('广告拦截') ? '广告拦截' : 'REJECT';
+      vpnCfg.rules = vpnCfg.rules.map(rule => {
+        if (typeof rule !== 'string') return rule;
+        const parts = splitRuleTopLevel(rule);
+        const targetIdx = parts.length === 2 ? 1 : (parts.length >= 3 ? 2 : -1);
+        if (targetIdx === -1) return rule;
+        const target = String(parts[targetIdx] || '').trim();
+        if (!target || validRuleTargets.has(target)) return rule;
+        if (/国内|直连|静态资源|哔哩哔哩|新浪微博/i.test(target)) {
+          parts[targetIdx] = fallbackDirectTarget;
+        } else if (/广告|拦截|reject/i.test(target)) {
+          parts[targetIdx] = fallbackRejectTarget;
+        } else {
+          parts[targetIdx] = fallbackProxyTarget;
+        }
+        return parts.join(',');
+      });
     }
   }
 

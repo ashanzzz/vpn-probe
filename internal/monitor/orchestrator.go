@@ -156,10 +156,11 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 		})
 	}
 
-	// 3. 线路拉家宽链式中继原子 (方案B通用区域池化 + 显式定制绑定)
+	// 3. 线路拉家宽链式中继原子 (方案B通用区域池化 + 显式定制绑定，优先叠加真实两跳探测结果)
 	if o.scheduler.healer != nil {
 		fullMesh := o.scheduler.healer.BuildFullMeshRegionalChains(activeTransits, uniqueResis)
 		chains := mergeCustomChains(fullMesh)
+		chainProbedMap := o.scheduler.GetChainResultMap()
 
 		for _, ch := range chains {
 			chainName := ch
@@ -233,6 +234,29 @@ func (o *Orchestrator) CollectAtoms() []model.AtomNode {
 			// 如果显式指定了中转专线但未在已有中转节点中找到，或者显式指定了落地端但未在已有住宅节点中找到，判定链式离线
 			if (transitPart != "" && !transitFound) || (targetPart != "" && !targetFound) {
 				chainOnline = false
+			}
+
+			// 若已存在真实两跳 sing-box detour 探测结果，以实测连通性与真实端到端延迟为准
+			if probed := chainProbedMap[ch]; probed != nil {
+				chainOnline = probed.Online
+				chainLatency = probed.LatencyMs
+				testedAt = probed.TestedAt
+				if probed.ChinaExit {
+					chainChinaExit = true
+				}
+				if probed.ExitCountry != "" && probed.ExitCountry != "OTHER" {
+					country = probed.ExitCountry
+				}
+			} else if probed := chainProbedMap[chainName]; probed != nil {
+				chainOnline = probed.Online
+				chainLatency = probed.LatencyMs
+				testedAt = probed.TestedAt
+				if probed.ChinaExit {
+					chainChinaExit = true
+				}
+				if probed.ExitCountry != "" && probed.ExitCountry != "OTHER" {
+					country = probed.ExitCountry
+				}
 			}
 
 			atoms = append(atoms, model.AtomNode{
@@ -934,7 +958,7 @@ func (o *Orchestrator) BindExplicitChain(transitName, resiName string) (CustomCh
 		separator = "&"
 	}
 
-	chainName := fmt.Sprintf("链式|%s ➔ %s", transitNode.Name, resiLabel)
+	chainName := fmt.Sprintf("%s ➔ %s", transitNode.Name, resiLabel)
 	chainURL := fmt.Sprintf("%s%sdialerProxy=%s#%s", base, separator, url.QueryEscape(transitNode.Name), chainName)
 
 	bind := CustomChainBind{

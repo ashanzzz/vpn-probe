@@ -14,8 +14,11 @@ func TestDetectRegionFromName(t *testing.T) {
 		expected string
 	}{
 		{"Tokyo Reality", "JP-Tokyo-IIJ-Reality", "JP"},
+		{"AKILE IIJ", "JP-AKILE-IIJ", "JP"},
 		{"Softbank", "JP--ACCK-SB", "JP"},
+		{"ACCK SB", "JP-ACCK-SB", "JP"},
 		{"US 4837", "US-LAX-ACCK-4837-Reality", "US"},
+		{"ACCK 4837", "US-ACCK-4837", "US"},
 		{"US Pavlov", "LZ-US-Pavlov-家宽", "US"},
 		{"Taiwan HiNet", "LZ-TW-HiNet-家宽", "TW"},
 		{"Singapore StarHub", "LZ-SG-StarHub-家宽", "SG"},
@@ -168,5 +171,67 @@ func TestBuildTopologyOverview(t *testing.T) {
 	if overview1.Summary.TotalLandings != len(overview1.Landings) {
 		t.Errorf("summary total landings (%d) != len(landings) (%d)",
 			overview1.Summary.TotalLandings, len(overview1.Landings))
+	}
+}
+
+func TestBuildTopologyOverview_TransitIsolationAndMultiRegionNAT(t *testing.T) {
+	results := []*model.NodeProbeResult{
+		{
+			Name:        "US-ACCK-4837",
+			OriginalURL: "vless://u@38.175.222.44:36564?security=reality#US-ACCK-4837",
+			Protocol:    "vless",
+			NodeType:    "transit",
+			Online:      true,
+			LatencyMs:   120,
+			ExitCountry: "US",
+		},
+		{
+			Name:        "JP-AKILE-IIJ",
+			OriginalURL: "vless://u@156.231.113.91:33339?security=reality#JP-AKILE-IIJ",
+			Protocol:    "vless",
+			NodeType:    "transit",
+			Online:      true,
+			LatencyMs:   75,
+			ExitCountry: "JP",
+		},
+		{
+			Name:        "US-ACCK-4837 ➔ LZ-US-Pavlov-家宽",
+			OriginalURL: "vless://u@167.104.167.151:49040?security=reality&dialerProxy=US-ACCK-4837#US-ACCK-4837%20%E2%9E%94%20LZ-US-Pavlov-%E5%AE%B6%E5%AE%BD",
+			Protocol:    "vless",
+			NodeType:    "chain",
+			Online:      true,
+			LatencyMs:   180,
+			ExitIP:      "96.63.208.40",
+			ExitCountry: "US",
+			ExitIPType:  "家宽",
+		},
+		{
+			Name:        "JP-AKILE-IIJ ➔ LZ-JP-SoftBank-家宽",
+			OriginalURL: "vless://u@167.104.167.151:40981?security=reality&dialerProxy=JP-AKILE-IIJ#JP-AKILE-IIJ%20%E2%9E%94%20LZ-JP-SoftBank-%E5%AE%B6%E5%AE%BD",
+			Protocol:    "vless",
+			NodeType:    "chain",
+			Online:      true,
+			LatencyMs:   140,
+			ExitIP:      "126.1.2.3",
+			ExitCountry: "JP",
+			ExitIPType:  "家宽",
+		},
+	}
+
+	overview := BuildTopologyOverview(results)
+	if len(overview.Transits) != 2 {
+		t.Fatalf("expected 2 transit nodes, got %d", len(overview.Transits))
+	}
+	if len(overview.NATRelays) != 1 {
+		t.Fatalf("expected 1 aggregated NAT relay (transit nodes must NOT leak into NATRelays), got %d: %+v", len(overview.NATRelays), overview.NATRelays)
+	}
+	if overview.NATRelays[0].Region != "MULTI" {
+		t.Errorf("expected multi-region NAT relay region 'MULTI', got %q", overview.NATRelays[0].Region)
+	}
+	if len(overview.NATRelays[0].Ports) != 2 {
+		t.Errorf("expected 2 NAT ports on aggregated relay, got %d", len(overview.NATRelays[0].Ports))
+	}
+	if len(overview.Landings) != 2 {
+		t.Errorf("expected 2 landings (transit nodes must NOT leak into Landings), got %d", len(overview.Landings))
 	}
 }

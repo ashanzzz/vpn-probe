@@ -42,9 +42,10 @@ type TopologyNATRelayNode struct {
 
 // TopologyNATPortItem 单个 NAT 映射端口状态
 type TopologyNATPortItem struct {
-	Port        int    `json:"port"`        // 外部映射端口 (如 41360)
-	TargetProto string `json:"proto"`       // vless, ss, trojan
-	TargetNode  string `json:"target_node"` // 对应目标家宽标签
+	Port        int    `json:"port"`             // 外部映射端口 (如 41360)
+	Region      string `json:"region,omitempty"` // 对应家宽落地国家代码 (如 US, JP, TW)
+	TargetProto string `json:"proto"`            // vless, ss, trojan
+	TargetNode  string `json:"target_node"`      // 对应目标家宽标签
 	Online      bool   `json:"online"`
 	LatencyMs   int    `json:"latency_ms"`
 }

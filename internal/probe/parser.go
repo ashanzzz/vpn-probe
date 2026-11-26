@@ -12,8 +12,9 @@ import (
 
 // ParsedNode 统一解析后的节点结构
 type ParsedNode struct {
-	Tag      string         `json:"tag"`
-	Protocol string         `json:"protocol"`
+	Tag         string         `json:"tag"`
+	Protocol    string         `json:"protocol"`
+	DialerProxy string         `json:"dialer_proxy,omitempty"`
 	RawOutbound map[string]any `json:"raw_outbound"`
 }
 
@@ -58,22 +59,37 @@ func ParseLink(raw string) (*ParsedNode, error) {
 		}
 	}
 
+	q := u.Query()
+	dialerProxy := strings.TrimSpace(q.Get("dialerProxy"))
+	if dialerProxy == "" {
+		dialerProxy = strings.TrimSpace(q.Get("dialer-proxy"))
+	}
+
+	var parsed *ParsedNode
+	var parseErr error
 	switch scheme {
 	case "ss":
-		return parseShadowsocks(u, tag)
+		parsed, parseErr = parseShadowsocks(u, tag)
 	case "trojan":
-		return parseTrojan(u, tag)
+		parsed, parseErr = parseTrojan(u, tag)
 	case "vless":
-		return parseVLESS(u, tag)
+		parsed, parseErr = parseVLESS(u, tag)
 	case "vmess":
-		return parseVMess(raw, tag)
+		parsed, parseErr = parseVMess(raw, tag)
 	case "hysteria2", "hy2":
-		return parseHysteria2(u, tag)
+		parsed, parseErr = parseHysteria2(u, tag)
 	case "socks", "socks5":
-		return parseSocks(u, tag)
+		parsed, parseErr = parseSocks(u, tag)
 	default:
 		return nil, fmt.Errorf("unsupported protocol: %s", scheme)
 	}
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	if parsed != nil && dialerProxy != "" {
+		parsed.DialerProxy = dialerProxy
+	}
+	return parsed, nil
 }
 
 func parseShadowsocks(u *url.URL, tag string) (*ParsedNode, error) {

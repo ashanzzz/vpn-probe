@@ -280,6 +280,33 @@ func main() {
 		report.Fail(fmt.Sprintf("存在 %d 个不支持或未知的协议类型", invalidProtocols))
 	}
 
+	// 2.5 链式代理 dialer-proxy 闭环校验 (确保「线路机 ➔ 中转服务器 ➔ 家宽机」前置引用存在且无悬空)
+	chainProxyCount := 0
+	brokenDialerCount := 0
+	for _, p := range config.Proxies {
+		name, _ := p["name"].(string)
+		dialer, _ := p["dialer-proxy"].(string)
+		isChain := strings.Contains(name, "➔")
+		if isChain || dialer != "" {
+			chainProxyCount++
+			if dialer == "" {
+				brokenDialerCount++
+				report.Fail(fmt.Sprintf("链式节点【%s】缺少 dialer-proxy 前置线路绑定", name))
+			} else if dialer == name {
+				brokenDialerCount++
+				report.Fail(fmt.Sprintf("链式节点【%s】存在自环 dialer-proxy 引用", name))
+			} else if !proxyNameSet[dialer] {
+				brokenDialerCount++
+				report.Fail(fmt.Sprintf("链式节点【%s】的 dialer-proxy 目标 '%s' 不存在于 proxies 列表中", name, dialer))
+			}
+		}
+	}
+	if chainProxyCount > 0 && brokenDialerCount == 0 {
+		report.Pass(fmt.Sprintf("全部 %d 个链式代理 dialer-proxy 前置绑定闭环有效 (前置线路机均真实存在)", chainProxyCount))
+	} else if chainProxyCount == 0 {
+		report.Pass("当前订阅无链式代理节点 (纯直连/骨干模式)")
+	}
+
 	// 3. 策略组类型合法性检测
 	validGroupTypes := map[string]bool{
 		"select": true, "url-test": true, "fallback": true, "load-balance": true, "relay": true,
@@ -348,6 +375,22 @@ func main() {
 		report.Pass("策略组拓扑结构无死循环引用 (DAG 拓扑检测通过)")
 	}
 
+	// 6. 路由规则目标引用检查 (防止规则指向已被裁剪的策略组导致 Mihomo 内核加载失败)
+	danglingRuleCount := 0
+	ruleBuiltins := map[string]bool{
+		"DIRECT": true, "REJECT": true, "REJECT-DROP": true, "PASS": true, "COMPATIBLE": true, "GLOBAL": true,
+	}
+	for _, r := range config.Rules {
+		target := extractRuleTarget(r)
+		if target != "" && !groupNameSet[target] && !proxyNameSet[target] && !ruleBuiltins[target] {
+			report.Fail(fmt.Sprintf("路由规则引用了不存在的策略/节点 '%s': %s", target, r))
+			danglingRuleCount++
+		}
+	}
+	if danglingRuleCount == 0 {
+		report.Pass(fmt.Sprintf("全部 %d 条路由规则目标引用有效 (零悬空规则目标)", len(config.Rules)))
+	}
+
 	fmt.Println()
 
 	// =========================================================================
@@ -355,9 +398,26 @@ func main() {
 	// =========================================================================
 	fmt.Printf("%s【模块 1: 分组结构完整性验收 (上级分组与自定分组)】%s\n", Bold, Reset)
 
+	isQ := false
+	isBusiness := false
+	if *profileFlag != "" {
+		isQ = strings.EqualFold(*profileFlag, "q")
+		isBusiness = strings.EqualFold(*profileFlag, "business")
+	} else {
+		targetLower := strings.ToLower(sourceName)
+		if strings.HasSuffix(targetLower, "/q") || strings.Contains(targetLower, "/q?") || strings.HasSuffix(targetLower, "q.yaml") {
+			isQ = true
+		} else if strings.Contains(targetLower, "business") {
+			isBusiness = true
+		}
+	}
+
 	// 1. 上级决策/分流策略组检查
 	requiredParentGroups := []string{
 		"选择代理", "手动选择", "AI服务", "巴哈姆特", "谷歌服务", "Youtube",
+	}
+	if isBusiness {
+		requiredParentGroups = []string{"选择代理", "手动选择"}
 	}
 	missingParents := 0
 	for _, p := range requiredParentGroups {
@@ -376,20 +436,6 @@ func main() {
 			report.Fail(fmt.Sprintf("违规检测到未授权特定业务策略组【%s】(违反铁律 #19 严禁私加流媒体/游戏组)", u))
 		} else {
 			report.Pass(fmt.Sprintf("未授权特定业务策略组拦截合规: 未包含【%s】(符合铁律 #19)", u))
-		}
-	}
-
-	isQ := false
-	isBusiness := false
-	if *profileFlag != "" {
-		isQ = strings.EqualFold(*profileFlag, "q")
-		isBusiness = strings.EqualFold(*profileFlag, "business")
-	} else {
-		targetLower := strings.ToLower(sourceName)
-		if strings.HasSuffix(targetLower, "/q") || strings.Contains(targetLower, "/q?") || strings.HasSuffix(targetLower, "q.yaml") {
-			isQ = true
-		} else if strings.Contains(targetLower, "business") {
-			isBusiness = true
 		}
 	}
 
@@ -486,7 +532,7 @@ func main() {
 		}
 	}
 
-	aiGroup := groupMap["AI服务"]
+	aiGroup, hasAIGroup := groupMap["AI服务"]
 	hasUSInAI := false
 	for _, p := range aiGroup.Proxies {
 		if p == "自建-美国家宽" || p == "自建-美国和美国家宽" || p == "自建-美国家宽分组" || (isQ && (p == "自建-美国线路" || p == "自建-线路机")) {
@@ -494,7 +540,9 @@ func main() {
 			break
 		}
 	}
-	if hasUSInAI {
+	if !hasAIGroup && isBusiness {
+		report.Pass("【AI服务】Business 纯自建订阅已按规范隔离商业分流组")
+	} else if hasUSInAI {
 		if isQ {
 			report.Pass("【AI服务】业务分流已注入自建美区专线 (符合 Q 纯骨干规范)")
 		} else {
@@ -749,6 +797,41 @@ func main() {
 	}
 
 	printSummary(report, sourceName)
+	if report.Failed > 0 {
+		os.Exit(1)
+	}
+}
+
+func extractRuleTarget(rule string) string {
+	trimmed := strings.TrimSpace(rule)
+	if trimmed == "" {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	var cur strings.Builder
+	depth := 0
+	for i := 0; i < len(trimmed); i++ {
+		ch := trimmed[i]
+		if ch == '(' {
+			depth++
+		} else if ch == ')' && depth > 0 {
+			depth--
+		}
+		if ch == ',' && depth == 0 {
+			parts = append(parts, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		} else {
+			cur.WriteByte(ch)
+		}
+	}
+	parts = append(parts, strings.TrimSpace(cur.String()))
+	if len(parts) == 2 && strings.EqualFold(parts[0], "MATCH") {
+		return parts[1]
+	}
+	if len(parts) >= 3 {
+		return parts[2]
+	}
+	return ""
 }
 
 func printSummary(report *VerifyReport, sourceName string) {

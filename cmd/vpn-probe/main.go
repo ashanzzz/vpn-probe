@@ -83,10 +83,7 @@ func runServer(args []string) {
 	}
 
 	// 探针引擎预检：检查 sing-box 可用性
-	bin := cfg.Probe.SingboxBin
-	if bin == "" {
-		bin = "sing-box"
-	}
+	bin := probe.ResolveSingboxBinary(cfg.Probe.SingboxBin)
 	checkCmd := exec.Command(bin, "version")
 	if out, err := checkCmd.Output(); err != nil {
 		logger.Warnf("⚠️  [ENGINE PRE-CHECK] sing-box binary '%s' execution test failed: %v. Probes will report probe_engine_error until installed.", bin, err)

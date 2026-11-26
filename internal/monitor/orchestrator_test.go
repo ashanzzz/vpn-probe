@@ -107,7 +107,7 @@ func TestOrchestratorEvaluationAndQuery(t *testing.T) {
 
 	// 3. 测试原子查询：查询线路拉家宽链式中继 (全量网状挂载: 美西专线 + 东京软银 均拉取美国家宽，送中节点物理隔离排除)
 	usChains := orc.QueryAtoms(AtomQueryFilter{Country: "US", Kind: "chain"})
-	if len(usChains) != 2 || !strings.Contains(usChains[0].Name, "链式") {
+	if len(usChains) != 2 || !strings.Contains(usChains[0].Name, "➔") {
 		t.Fatalf("expected 2 clean US chains, got %v", usChains)
 	}
 
@@ -334,22 +334,22 @@ func TestOrchestrator_ChainChinaExitInheritance(t *testing.T) {
 			ID:              "bind-clean",
 			TransitName:     "US-Clean-Transit",
 			ResidentialName: "LZ-US-Clean-家宽",
-			ChainName:       "链式|US-Clean-Transit ➔ LZ-US-Clean-家宽",
-			ChainURL:        "vless://u2@2.2.2.2:443?dialerProxy=US-Clean-Transit#链式|US-Clean-Transit ➔ LZ-US-Clean-家宽",
+			ChainName:       "US-Clean-Transit ➔ LZ-US-Clean-家宽",
+			ChainURL:        "vless://u2@2.2.2.2:443?dialerProxy=US-Clean-Transit#US-Clean-Transit ➔ LZ-US-Clean-家宽",
 		},
 		{
 			ID:              "bind-leaked-landing",
 			TransitName:     "US-Clean-Transit",
 			ResidentialName: "LZ-US-Leaked-家宽",
-			ChainName:       "链式|US-Clean-Transit ➔ LZ-US-Leaked-家宽",
-			ChainURL:        "vless://u3@3.3.3.3:443?dialerProxy=US-Clean-Transit#链式|US-Clean-Transit ➔ LZ-US-Leaked-家宽",
+			ChainName:       "US-Clean-Transit ➔ LZ-US-Leaked-家宽",
+			ChainURL:        "vless://u3@3.3.3.3:443?dialerProxy=US-Clean-Transit#US-Clean-Transit ➔ LZ-US-Leaked-家宽",
 		},
 		{
 			ID:              "bind-leaked-relay",
 			TransitName:     "US-Leaked-Transit",
 			ResidentialName: "LZ-US-Clean-家宽",
-			ChainName:       "链式|US-Leaked-Transit ➔ LZ-US-Clean-家宽",
-			ChainURL:        "vless://u2@2.2.2.2:443?dialerProxy=US-Leaked-Transit#链式|US-Leaked-Transit ➔ LZ-US-Clean-家宽",
+			ChainName:       "US-Leaked-Transit ➔ LZ-US-Clean-家宽",
+			ChainURL:        "vless://u2@2.2.2.2:443?dialerProxy=US-Leaked-Transit#US-Leaked-Transit ➔ LZ-US-Clean-家宽",
 		},
 	}
 	if err := SaveCustomChains(customChains); err != nil {
@@ -362,11 +362,11 @@ func TestOrchestrator_ChainChinaExitInheritance(t *testing.T) {
 	var cleanChain, leakedLandingChain, leakedRelayChain *model.AtomNode
 	for i := range atoms {
 		switch atoms[i].Name {
-		case "链式|US-Clean-Transit ➔ LZ-US-Clean-家宽":
+		case "US-Clean-Transit ➔ LZ-US-Clean-家宽":
 			cleanChain = &atoms[i]
-		case "链式|US-Clean-Transit ➔ LZ-US-Leaked-家宽":
+		case "US-Clean-Transit ➔ LZ-US-Leaked-家宽":
 			leakedLandingChain = &atoms[i]
-		case "链式|US-Leaked-Transit ➔ LZ-US-Clean-家宽":
+		case "US-Leaked-Transit ➔ LZ-US-Clean-家宽":
 			leakedRelayChain = &atoms[i]
 		}
 	}
@@ -383,7 +383,7 @@ func TestOrchestrator_ChainChinaExitInheritance(t *testing.T) {
 
 	// 验证 QueryAtoms 过滤机制
 	cleanChains := orc.QueryAtoms(AtomQueryFilter{CleanOnly: true, Kind: "chain"})
-	if len(cleanChains) != 1 || cleanChains[0].Name != "链式|US-Clean-Transit ➔ LZ-US-Clean-家宽" {
+	if len(cleanChains) != 1 || cleanChains[0].Name != "US-Clean-Transit ➔ LZ-US-Clean-家宽" {
 		t.Fatalf("expected only 1 clean chain, got %d: %v", len(cleanChains), cleanChains)
 	}
 
@@ -400,10 +400,10 @@ func TestOrchestrator_ChainChinaExitInheritance(t *testing.T) {
 	foundLeakedLanding := false
 	foundLeakedRelay := false
 	for _, a := range chinaLeaks {
-		if a.Name == "链式|US-Clean-Transit ➔ LZ-US-Leaked-家宽" {
+		if a.Name == "US-Clean-Transit ➔ LZ-US-Leaked-家宽" {
 			foundLeakedLanding = true
 		}
-		if a.Name == "链式|US-Leaked-Transit ➔ LZ-US-Clean-家宽" {
+		if a.Name == "US-Leaked-Transit ➔ LZ-US-Clean-家宽" {
 			foundLeakedRelay = true
 		}
 	}
@@ -473,7 +473,7 @@ func TestOrchestrator_ChainNameAndURLQuerySafety(t *testing.T) {
 	if matched == nil {
 		t.Fatal("expected chain atom to be created")
 	}
-	if matched.Name != "链式|JP-SoftBank ➔ LZ-JP-KDDI-家宽" {
+	if matched.Name != "JP-SoftBank ➔ LZ-JP-KDDI-家宽" {
 		t.Fatalf("expected exact name, got: %s", matched.Name)
 	}
 	if matched.Country != "JP" {
@@ -1060,8 +1060,8 @@ func TestOrchestrator_ChainCountry_TransitFallbackWhenTargetHasNoCountry(t *test
 			ID:              "fallback-chain",
 			TransitName:     "东京软银-专线",
 			ResidentialName: "原生家宽-01",
-			ChainName:       "链式|东京软银-专线 ➔ 原生家宽-01",
-			ChainURL:        "socks5://u2:p@2.2.2.2:10001?dialerProxy=东京软银-专线#链式|东京软银-专线 ➔ 原生家宽-01",
+			ChainName:       "东京软银-专线 ➔ 原生家宽-01",
+			ChainURL:        "socks5://u2:p@2.2.2.2:10001?dialerProxy=东京软银-专线#东京软银-专线 ➔ 原生家宽-01",
 		},
 	}
 	if err := SaveCustomChains(customChains); err != nil {
@@ -1073,7 +1073,7 @@ func TestOrchestrator_ChainCountry_TransitFallbackWhenTargetHasNoCountry(t *test
 
 	var fallbackAtom *model.AtomNode
 	for i := range atoms {
-		if atoms[i].Name == "链式|东京软银-专线 ➔ 原生家宽-01" {
+		if atoms[i].Name == "东京软银-专线 ➔ 原生家宽-01" {
 			fallbackAtom = &atoms[i]
 			break
 		}

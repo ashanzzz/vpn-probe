@@ -92,3 +92,35 @@ func TestParseLink(t *testing.T) {
 		})
 	}
 }
+
+func TestParseLink_DialerProxyAndDetour(t *testing.T) {
+	link := "vless://813d55b2-fca7-42be-ae66-0bfe14b80f80@167.104.167.151:49040?security=reality&sni=www.apple.com&pbk=abc&sid=def&dialerProxy=US-ACCK-4837#US-ACCK-4837%20%E2%9E%94%20LZ-US-Pavlov-%E5%AE%B6%E5%AE%BD"
+	parsed, err := ParseLink(link)
+	if err != nil {
+		t.Fatalf("ParseLink failed: %v", err)
+	}
+	if parsed.DialerProxy != "US-ACCK-4837" {
+		t.Fatalf("expected DialerProxy 'US-ACCK-4837', got %q", parsed.DialerProxy)
+	}
+
+	eng := &Engine{
+		transitLinks: map[string]string{
+			"US-ACCK-4837": "vless://5b84d275-d328-4565-9b47-20e9121fee7e@38.175.222.44:36564?security=reality&sni=aws.amazon.com&pbk=xyz&sid=1234#US-ACCK-4837",
+		},
+	}
+	obs, finalTag, err := eng.buildLaunchOutbounds(parsed)
+	if err != nil {
+		t.Fatalf("buildLaunchOutbounds failed: %v", err)
+	}
+	if len(obs) != 2 {
+		t.Fatalf("expected 2 outbounds (landing + transit), got %d", len(obs))
+	}
+	if finalTag != parsed.Tag {
+		t.Fatalf("expected finalTag %q, got %q", parsed.Tag, finalTag)
+	}
+	detour, _ := obs[0]["detour"].(string)
+	transitTag, _ := obs[1]["tag"].(string)
+	if detour == "" || detour != transitTag {
+		t.Fatalf("expected landing outbound detour %q to match transit tag %q", detour, transitTag)
+	}
+}

@@ -415,13 +415,13 @@ func TestChainAtomsHealthAndLatencyAccuracy(t *testing.T) {
 
 	var foundDownChain, foundBlockedChain bool
 	for _, a := range body.Atoms {
-		if a.Name == "链式|美西 ACCK 洛杉矶 4837 — VLESS Reality ➔ LZ-US-Down-家宽" {
+		if a.Name == "美西 ACCK 洛杉矶 4837 — VLESS Reality ➔ LZ-US-Down-家宽" {
 			foundDownChain = true
 			if a.Online {
 				t.Errorf("expected chain for tunnel offline residential node to be offline (Online=false), got true")
 			}
 		}
-		if a.Name == "链式|美西 ACCK 洛杉矶 4837 — VLESS Reality ➔ LZ-US-DirectBlocked-家宽" {
+		if a.Name == "美西 ACCK 洛杉矶 4837 — VLESS Reality ➔ LZ-US-DirectBlocked-家宽" {
 			foundBlockedChain = true
 			if !a.Online {
 				t.Errorf("expected chain for direct-blocked residential node with abroad reachable to be Online=true, got false")

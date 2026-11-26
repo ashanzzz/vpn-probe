@@ -612,6 +612,20 @@ function processConfig(vpnCfg) {
   vpnGroups.length = 0;
   vpnGroups.push(...topGroups, ...middleGroups, ...selfGroups);
 
+  // Sync GLOBAL.proxies with deterministic group ordering (top -> middle -> self)
+  // so Clash/Mihomo WebUIs (e.g. MetaCubeXD sorting by GLOBAL.all) also place selfGroups at the bottom.
+  const globalGroup = vpnGroups.find(g => g.name === 'GLOBAL');
+  if (globalGroup) {
+    const orderedGroupNames = vpnGroups
+      .filter(g => g.name !== 'GLOBAL')
+      .map(g => g.name);
+    const orderedGroupSet = new Set(orderedGroupNames);
+    const extraEntries = Array.isArray(globalGroup.proxies)
+      ? globalGroup.proxies.filter(p => p && p !== 'GLOBAL' && !orderedGroupSet.has(p) && !purgedNodeNames.has(p))
+      : [];
+    globalGroup.proxies = [...orderedGroupNames, ...extraEntries];
+  }
+
   for (const g of vpnGroups) {
     delete g._order;
     if (!Array.isArray(g.proxies) || g.proxies.length === 0) {

@@ -770,3 +770,103 @@ func TestCompileScript_EnforcesDialerProxyAndNormalizesChainName(t *testing.T) {
 		t.Errorf("expected legacy dialer-proxy realigned to '🇯🇵 JP-ACCK-SB', got %q", dialers["JP-ACCK-SB ➔ LZ-TW-HiNet-家宽"])
 	}
 }
+
+func TestCompileScript_GlobalGroupIncludesSelfGroupsAtEnd(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed on PATH")
+	}
+
+	groups := model.DefaultCustomGroups("ashan")
+	atoms := []model.AtomNode{
+		{Name: "US-ACCK-4837", Kind: "transit", Country: "US"},
+		{Name: "US-ACCK-4837 ➔ LZ-US-Pavlov-家宽", Kind: "chain", Country: "US"},
+	}
+
+	script, err := CompileScript(groups, atoms, "ashan")
+	if err != nil {
+		t.Fatalf("CompileScript failed: %v", err)
+	}
+
+	mockCfg := map[string]any{
+		"proxies": []any{
+			map[string]any{"name": "US-ACCK-4837", "type": "vless"},
+			map[string]any{"name": "US-ACCK-4837 ➔ LZ-US-Pavlov-家宽", "type": "vless"},
+			map[string]any{"name": "Airport-HK-01", "type": "trojan"},
+		},
+		"proxy-groups": []any{
+			map[string]any{"name": "选择代理", "type": "select", "proxies": []any{"自动选择", "香港节点"}},
+			map[string]any{"name": "手动选择", "type": "select", "proxies": []any{"Airport-HK-01"}},
+			map[string]any{"name": "AI服务", "type": "select", "proxies": []any{"选择代理", "Airport-HK-01"}},
+			map[string]any{"name": "自动选择", "type": "url-test", "proxies": []any{"Airport-HK-01"}},
+			map[string]any{"name": "香港节点", "type": "select", "proxies": []any{"Airport-HK-01"}},
+			map[string]any{"name": "GLOBAL", "type": "select", "include-all": true, "proxies": []any{"选择代理", "手动选择", "AI服务", "自动选择", "香港节点", "DIRECT"}},
+		},
+	}
+	cfgBytes, _ := json.Marshal(mockCfg)
+	jsCode := script + "\nconst res = processConfig(" + string(cfgBytes) + "); console.log(JSON.stringify(res));"
+
+	cmd := exec.Command("node", "-e", jsCode)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("node execution failed: %v, out: %s", err, string(out))
+	}
+
+	var processed struct {
+		Groups []struct {
+			Name    string   `json:"name"`
+			Proxies []string `json:"proxies"`
+		} `json:"proxy-groups"`
+	}
+	if err := json.Unmarshal(out, &processed); err != nil {
+		t.Fatalf("unmarshal processed: %v", err)
+	}
+
+	var globalProxies []string
+	for _, g := range processed.Groups {
+		if g.Name == "GLOBAL" {
+			globalProxies = g.Proxies
+			break
+		}
+	}
+	if len(globalProxies) == 0 {
+		t.Fatalf("expected GLOBAL group to exist")
+	}
+
+	// Simulate MetaCubeXD sorting: a = [...GLOBAL.all, 'GLOBAL']; sort((e, t) => a.indexOf(e.name) - a.indexOf(t.name))
+	indexMap := make(map[string]int, len(globalProxies)+1)
+	for i, name := range globalProxies {
+		indexMap[name] = i
+	}
+	indexMap["GLOBAL"] = len(globalProxies)
+
+	for _, g := range processed.Groups {
+		if _, ok := indexMap[g.Name]; !ok {
+			t.Fatalf("group %q missing from GLOBAL.proxies (would sort to index -1 at top in MetaCubeXD!): %v", g.Name, globalProxies)
+		}
+	}
+
+	if globalProxies[0] != "选择代理" || globalProxies[1] != "自动选择" {
+		t.Fatalf("expected GLOBAL.proxies to start with 选择代理, 自动选择; got %v", globalProxies)
+	}
+
+	seenSelf := false
+	seenExtra := false
+	for _, p := range globalProxies {
+		if p == "DIRECT" {
+			seenExtra = true
+			continue
+		}
+		if seenExtra {
+			t.Fatalf("expected extra entry DIRECT at tail after groups, got %v", globalProxies)
+		}
+		isSelf := strings.HasPrefix(p, "自建-") || p == "不送中"
+		if isSelf {
+			seenSelf = true
+		} else if seenSelf {
+			t.Fatalf("expected all self groups at tail of GLOBAL.proxies, found %q after self group in %v", p, globalProxies)
+		}
+	}
+	if !seenSelf {
+		t.Fatalf("expected self groups in GLOBAL.proxies, got %v", globalProxies)
+	}
+}

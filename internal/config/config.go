@@ -51,14 +51,23 @@ type MonitoredNode struct {
 	IsSelf bool   `yaml:"is_self" json:"is_self"`
 }
 
+type ResidentialSourceConfig struct {
+	Enabled         bool   `yaml:"enabled" json:"enabled"`
+	URL             string `yaml:"url" json:"url"`
+	Token           string `yaml:"token,omitempty" json:"token,omitempty"`
+	RefreshInterval string `yaml:"refresh_interval,omitempty" json:"refresh_interval,omitempty"`
+	CachePath       string `yaml:"cache_path,omitempty" json:"cache_path,omitempty"`
+}
+
 type MonitorConfig struct {
-	Enabled              bool            `yaml:"enabled"`
-	HealthCheckInterval  string          `yaml:"health_check_interval"`  // e.g. "2m" (常规在线与延迟)
-	GFWCheckInterval     string          `yaml:"gfw_check_interval"`     // e.g. "15m" (送中检测)
-	SplitCheckInterval   string          `yaml:"split_check_interval"`   // e.g. "30m" (ChatGPT/Claude分流探测)
-	AutoSyncSubStore     bool            `yaml:"auto_sync_substore"`
-	Nodes                []MonitoredNode `yaml:"nodes"`
-	ResidentialNodes     []MonitoredNode `yaml:"residential_nodes,omitempty" json:"residential_nodes,omitempty"`
+	Enabled              bool                    `yaml:"enabled"`
+	HealthCheckInterval  string                  `yaml:"health_check_interval"`  // e.g. "2m" (常规在线与延迟)
+	GFWCheckInterval     string                  `yaml:"gfw_check_interval"`     // e.g. "15m" (送中检测)
+	SplitCheckInterval   string                  `yaml:"split_check_interval"`   // e.g. "30m" (ChatGPT/Claude分流探测)
+	AutoSyncSubStore     bool                    `yaml:"auto_sync_substore"`
+	Nodes                []MonitoredNode         `yaml:"nodes"`
+	ResidentialNodes     []MonitoredNode         `yaml:"residential_nodes,omitempty" json:"residential_nodes,omitempty"`
+	ResidentialSource    ResidentialSourceConfig `yaml:"residential_source,omitempty" json:"residential_source,omitempty"`
 }
 
 type LogConfig struct {
@@ -136,6 +145,11 @@ func DefaultConfig() *Config {
 			SplitCheckInterval:  "30m",
 			AutoSyncSubStore:    true,
 			Nodes:               nil,
+			ResidentialSource: ResidentialSourceConfig{
+				Enabled:         false,
+				RefreshInterval: "5m",
+				CachePath:       "./data/residential_nodes.json",
+			},
 		},
 		SubStore: SubStoreConfig{
 			Enabled:              false,
@@ -223,6 +237,24 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if env := os.Getenv("VPS_HUB_PASS"); env != "" {
 		cfg.VPSHub.Password = env
+	}
+	if env := os.Getenv("VPN_PROBE_RESIDENTIAL_SOURCE_ENABLED"); env != "" {
+		cfg.Monitor.ResidentialSource.Enabled = env == "true" || env == "1"
+	}
+	if env := os.Getenv("VPN_PROBE_RESIDENTIAL_SOURCE_URL"); env != "" {
+		cfg.Monitor.ResidentialSource.URL = env
+		if os.Getenv("VPN_PROBE_RESIDENTIAL_SOURCE_ENABLED") == "" {
+			cfg.Monitor.ResidentialSource.Enabled = true
+		}
+	}
+	if env := os.Getenv("VPN_PROBE_RESIDENTIAL_SOURCE_TOKEN"); env != "" {
+		cfg.Monitor.ResidentialSource.Token = env
+	}
+	if env := os.Getenv("VPN_PROBE_RESIDENTIAL_SOURCE_INTERVAL"); env != "" {
+		cfg.Monitor.ResidentialSource.RefreshInterval = env
+	}
+	if env := os.Getenv("VPN_PROBE_RESIDENTIAL_CACHE_PATH"); env != "" {
+		cfg.Monitor.ResidentialSource.CachePath = env
 	}
 
 	return cfg, nil

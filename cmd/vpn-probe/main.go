@@ -109,24 +109,27 @@ func runServer(args []string) {
 	}
 
 	vpsMgr := vpsmgr.NewManager(cfg, subClient, *configPath)
+	sched := monitor.NewScheduler(cfg, engine, st, subClient)
 	vpsMgr.SetProbeFunc(func(ctx context.Context, target string) *model.NodeProbeResult {
 		targetURL := target
-		for _, n := range cfg.Monitor.Nodes {
-			if n.Name == target || strings.Contains(n.Name, target) || n.URL == target {
-				targetURL = n.URL
-				break
+		if resolved, ok := sched.GetMonitoredNodeURL(target); ok && resolved != "" {
+			targetURL = resolved
+		} else {
+			for _, n := range cfg.Monitor.Nodes {
+				if n.Name == target || strings.Contains(n.Name, target) || n.URL == target {
+					targetURL = n.URL
+					break
+				}
 			}
-		}
-		for _, n := range cfg.Monitor.ResidentialNodes {
-			if n.Name == target || strings.Contains(n.Name, target) || n.URL == target {
-				targetURL = n.URL
-				break
+			for _, n := range cfg.Monitor.ResidentialNodes {
+				if n.Name == target || strings.Contains(n.Name, target) || n.URL == target {
+					targetURL = n.URL
+					break
+				}
 			}
 		}
 		return engine.ProbeOne(ctx, targetURL, true, false, 10)
 	})
-
-	sched := monitor.NewScheduler(cfg, engine, st, subClient)
 	sched.SetVPSManager(vpsMgr)
 	if cfg.Monitor.Enabled {
 		sched.Start(context.Background())

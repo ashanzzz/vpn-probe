@@ -735,18 +735,77 @@ func (s *APIServer) setupRoutes() {
 		})
 	})
 
-	// 5.1.8 动态触发从 SubStore 重新拉取待测节点列表 (包含自建与蜂窝云)
+	// 5.1.8 动态触发从 SubStore 与 personal-vps-monitor 重新拉取待测节点列表
 	s.app.Post("/api/monitor/refresh", func(c *fiber.Ctx) error {
 		if s.scheduler == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
 		}
+		resiChanged, resiErr := s.scheduler.RefreshResidentialNodes(c.Context())
 		if err := s.scheduler.RefreshNodesFromSubStore(c.Context()); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 		}
-		customlog.Audit("refresh_monitor_nodes", c.IP(), "/api/monitor/refresh", "success", "Refreshed monitor nodes from SubStore")
+		if resiErr != nil {
+			customlog.Warnf("[MONITOR] Residential refresh during /api/monitor/refresh failed (cache preserved): %v", resiErr)
+		}
+		customlog.Audit("refresh_monitor_nodes", c.IP(), "/api/monitor/refresh", "success", "Refreshed monitor nodes from SubStore & residential source")
 		return c.JSON(fiber.Map{
-			"status":  "ok",
-			"message": "Monitored nodes refreshed dynamically from SubStore",
+			"status":              "ok",
+			"message":             "Monitored nodes refreshed dynamically",
+			"residential_updated": resiChanged,
+			"residential_status":  s.scheduler.GetResidentialSyncStatus(),
+		})
+	})
+
+	// 5.1.9 懒猫云动态家宽出口源状态查询与手动触发刷新
+	s.app.Get("/api/monitor/residential/status", func(c *fiber.Ctx) error {
+		if s.scheduler == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
+		}
+		reveal := c.QueryBool("reveal", false)
+		nodes := s.scheduler.GetResidentialNodes()
+		if reveal {
+			role, _ := c.Locals("role").(Role)
+			if role != RoleAdmin {
+				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "admin privilege required to reveal unmasked urls"})
+			}
+		} else {
+			for i := range nodes {
+				nodes[i].URL = MaskNodeURL(nodes[i].URL)
+			}
+		}
+		return c.JSON(fiber.Map{
+			"status": "ok",
+			"sync":   s.scheduler.GetResidentialSyncStatus(),
+			"nodes":  nodes,
+		})
+	})
+
+	s.app.Post("/api/monitor/residential/refresh", func(c *fiber.Ctx) error {
+		if s.scheduler == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "scheduler not initialized"})
+		}
+		changed, err := s.scheduler.RefreshResidentialNodes(c.Context())
+		syncStatus := s.scheduler.GetResidentialSyncStatus()
+		if err != nil {
+			return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
+				"status":             "fallback",
+				"error":              err.Error(),
+				"residential_status": syncStatus,
+			})
+		}
+		if changed || c.QueryBool("probe", false) {
+			go func() {
+				checkCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				defer cancel()
+				s.scheduler.RunAllChecks(checkCtx, false)
+			}()
+		}
+		customlog.Audit("refresh_residential_nodes", c.IP(), "/api/monitor/residential/refresh", "success",
+			fmt.Sprintf("changed=%v count=%d", changed, syncStatus.NodeCount))
+		return c.JSON(fiber.Map{
+			"status":             "ok",
+			"changed":            changed,
+			"residential_status": syncStatus,
 		})
 	})
 

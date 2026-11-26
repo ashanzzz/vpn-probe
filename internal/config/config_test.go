@@ -32,6 +32,56 @@ func TestLoadConfigEnvOverride(t *testing.T) {
 	}
 }
 
+func TestLoadConfigResidentialSourceEnvAndYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.yaml")
+	yamlContent := `
+monitor:
+  enabled: true
+  residential_source:
+    enabled: true
+    url: "http://192.168.8.11:3338/api/lazycat/egress-subscriptions?instance_id=11433&format=json&only_mapped=true"
+    token: "yaml-token"
+    refresh_interval: "3m"
+    cache_path: "/tmp/resi.json"
+`
+	if err := os.WriteFile(cfgPath, []byte(yamlContent), 0600); err != nil {
+		t.Fatalf("write yaml: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !cfg.Monitor.ResidentialSource.Enabled {
+		t.Fatalf("expected residential_source.enabled=true")
+	}
+	if cfg.Monitor.ResidentialSource.Token != "yaml-token" {
+		t.Fatalf("expected token 'yaml-token', got %q", cfg.Monitor.ResidentialSource.Token)
+	}
+	if cfg.Monitor.ResidentialSource.RefreshInterval != "3m" {
+		t.Fatalf("expected refresh_interval '3m', got %q", cfg.Monitor.ResidentialSource.RefreshInterval)
+	}
+
+	os.Setenv("VPN_PROBE_RESIDENTIAL_SOURCE_TOKEN", "env-resi-token")
+	os.Setenv("VPN_PROBE_RESIDENTIAL_SOURCE_INTERVAL", "10m")
+	defer func() {
+		os.Unsetenv("VPN_PROBE_RESIDENTIAL_SOURCE_TOKEN")
+		os.Unsetenv("VPN_PROBE_RESIDENTIAL_SOURCE_INTERVAL")
+	}()
+
+	cfg2, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("load config with env: %v", err)
+	}
+	if cfg2.Monitor.ResidentialSource.Token != "env-resi-token" {
+		t.Fatalf("expected env override token 'env-resi-token', got %q", cfg2.Monitor.ResidentialSource.Token)
+	}
+	if cfg2.Monitor.ResidentialSource.RefreshInterval != "10m" {
+		t.Fatalf("expected env override interval '10m', got %q", cfg2.Monitor.ResidentialSource.RefreshInterval)
+	}
+}
+
 func TestSaveConfigAtomicAndBackup(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "config-test-*")
 	if err != nil {

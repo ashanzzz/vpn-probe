@@ -28,6 +28,14 @@ monitor:
       url: "ss://2022-blake3-aes-128-gcm:ZXhhbXBsZQ==@1.2.3.4:24443#JP-Tokyo-Softbank-SS2022"
       is_self: true
 
+  # 懒猫云多出口家宽动态聚合订阅源 (对接 personal-vps-monitor，替代静态 residential_nodes)
+  residential_source:
+    enabled: true
+    url: "http://192.168.8.11:3338/api/lazycat/egress-subscriptions?instance_id=11433&format=json&only_mapped=true"
+    token: "YOUR_PERSONAL_VPS_MONITOR_PUBLIC_READ_TOKEN" # 推荐配置 personal-vps-monitor 的 PUBLIC_READ_TOKEN 只读令牌
+    refresh_interval: "5m"
+    cache_path: "./data/residential_nodes.json"
+
 substore:
   enabled: true
   url: "https://substore.example.com/api"

@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -30,24 +29,27 @@ type NodeState struct {
 }
 
 type Scheduler struct {
-	cfg            *config.Config
-	engine         *probe.Engine
-	store          *store.Store
-	substoreClient *substore.Client
-	healer         *healer.Healer
-	vpsMgr         *vpsmgr.Manager
-	onSubStoreSync func()
-	quotaMu        sync.Mutex
-	quotaDate      string
-	speedTestCount int
-	splitCheckCount int
-	mu             sync.RWMutex
-	checkMu        sync.Mutex            // 保证 RunAllChecks 串行执行，防止沙箱探针与系统资源竞争
-	speedMu        sync.Mutex            // 保证 RunSpeedTestAll 串行执行，避免并发测速带宽互相挤占
-	syncMu         sync.Mutex            // 保证五维策略组向 SubStore 同步串行化
-	nodeStates     map[string]*NodeState // node name -> state
-	chainResults   map[string]*model.NodeProbeResult // chain URL -> 真实两跳探测结果
-	cancel         context.CancelFunc
+	cfg                   *config.Config
+	engine                *probe.Engine
+	store                 *store.Store
+	substoreClient        *substore.Client
+	healer                *healer.Healer
+	vpsMgr                *vpsmgr.Manager
+	onSubStoreSync        func()
+	quotaMu               sync.Mutex
+	quotaDate             string
+	speedTestCount        int
+	splitCheckCount       int
+	mu                    sync.RWMutex
+	checkMu               sync.Mutex // 保证 RunAllChecks 串行执行，防止沙箱探针与系统资源竞争
+	speedMu               sync.Mutex // 保证 RunSpeedTestAll 串行执行，避免并发测速带宽互相挤占
+	syncMu                sync.Mutex // 保证五维策略组向 SubStore 同步串行化
+	residentialMu         sync.Mutex // 保证动态家宽源拉取与缓存更新串行化
+	nodeStates            map[string]*NodeState
+	chainResults          map[string]*model.NodeProbeResult
+	residentialNodes      []config.MonitoredNode
+	residentialSyncStatus ResidentialSyncStatus
+	cancel                context.CancelFunc
 }
 
 func (s *Scheduler) SetVPSManager(m *vpsmgr.Manager) {
@@ -128,25 +130,38 @@ func NewScheduler(
 		}
 	}
 
-	// 载入家宽节点 (优先从 config.yaml 的 residential_nodes，其次从 data/residential_nodes.json)
+	// 载入家宽节点：若启用了动态源 (personal-vps-monitor)，优先从本地缓存文件恢复作为启动兜底，再由启动任务异步拉取刷新；
+	// 未启用动态源时兼容旧配置 (config.yaml residential_nodes -> data/residential_nodes.json)。
+	cachePath := s.residentialCachePath()
 	var resiNodes []config.MonitoredNode
-	resiNodes = append(resiNodes, cfg.Monitor.ResidentialNodes...)
-	if len(resiNodes) == 0 {
-		if data, err := os.ReadFile("./data/residential_nodes.json"); err == nil {
-			var loaded []config.MonitoredNode
-			if err := json.Unmarshal(data, &loaded); err == nil {
+	usingCache := false
+	if cfg.Monitor.ResidentialSource.Enabled && strings.TrimSpace(cfg.Monitor.ResidentialSource.URL) != "" {
+		if loaded, err := loadResidentialCache(cachePath); err == nil && len(loaded) > 0 {
+			resiNodes = append(resiNodes, loaded...)
+			usingCache = true
+		} else if len(cfg.Monitor.ResidentialNodes) > 0 {
+			resiNodes = append(resiNodes, cfg.Monitor.ResidentialNodes...)
+		}
+	} else {
+		resiNodes = append(resiNodes, cfg.Monitor.ResidentialNodes...)
+		if len(resiNodes) == 0 {
+			if loaded, err := loadResidentialCache(cachePath); err == nil {
 				resiNodes = append(resiNodes, loaded...)
+				usingCache = len(loaded) > 0
 			}
 		}
 	}
 
-	for _, r := range resiNodes {
-		if r.IsSelf || r.Name != "" {
+	for i := range resiNodes {
+		r := resiNodes[i]
+		if r.IsSelf || r.Name != "" || r.URL != "" {
 			r.IsSelf = true
 			nodeName := r.Name
 			if parsed, err := probe.ParseLink(r.URL); err == nil && parsed.Tag != "" {
 				nodeName = parsed.Tag
 			}
+			r.Name = nodeName
+			resiNodes[i] = r
 			s.nodeStates[nodeName] = &NodeState{
 				Config: r,
 				LastResult: &model.NodeProbeResult{
@@ -154,6 +169,7 @@ func NewScheduler(
 					Name:        nodeName,
 					OriginalURL: r.URL,
 					NodeType:    "residential",
+					IsSelf:      true,
 					Online:      false,
 					StatusText:  "待巡检",
 					ExitCountry: model.ResolveCountry("", nodeName),
@@ -161,8 +177,70 @@ func NewScheduler(
 			}
 		}
 	}
+	s.residentialNodes = append([]config.MonitoredNode(nil), resiNodes...)
+	s.residentialSyncStatus = ResidentialSyncStatus{
+		Enabled:            cfg.Monitor.ResidentialSource.Enabled && strings.TrimSpace(cfg.Monitor.ResidentialSource.URL) != "",
+		SourceURL:          cfg.Monitor.ResidentialSource.URL,
+		CachePath:          cachePath,
+		RefreshInterval:    cfg.Monitor.ResidentialSource.RefreshInterval,
+		NodeCount:          len(resiNodes),
+		UsingCacheFallback: usingCache,
+	}
 
 	return s
+}
+
+func (s *Scheduler) residentialCachePath() string {
+	if s != nil && s.cfg != nil && strings.TrimSpace(s.cfg.Monitor.ResidentialSource.CachePath) != "" {
+		return strings.TrimSpace(s.cfg.Monitor.ResidentialSource.CachePath)
+	}
+	return defaultResidentialCachePath
+}
+
+func (s *Scheduler) isKnownResidentialLocked(name, rawURL string) bool {
+	if st, ok := s.nodeStates[name]; ok && st != nil && st.LastResult != nil && st.LastResult.NodeType == "residential" {
+		return true
+	}
+	for _, r := range s.residentialNodes {
+		if (name != "" && r.Name == name) || (rawURL != "" && r.URL == rawURL) {
+			return true
+		}
+	}
+	return false
+}
+
+// GetResidentialSyncStatus returns a snapshot of the dynamic residential source sync status.
+func (s *Scheduler) GetResidentialSyncStatus() ResidentialSyncStatus {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.residentialSyncStatus
+}
+
+// GetResidentialNodes returns a copy of the currently active residential nodes.
+func (s *Scheduler) GetResidentialNodes() []config.MonitoredNode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]config.MonitoredNode, len(s.residentialNodes))
+	copy(out, s.residentialNodes)
+	return out
+}
+
+// GetMonitoredNodeURL resolves a monitored node URL by exact/partial name or URL.
+func (s *Scheduler) GetMonitoredNodeURL(target string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if st, ok := s.nodeStates[target]; ok && st != nil && st.Config.URL != "" {
+		return st.Config.URL, true
+	}
+	for _, st := range s.nodeStates {
+		if st == nil {
+			continue
+		}
+		if st.Config.Name == target || strings.Contains(st.Config.Name, target) || st.Config.URL == target {
+			return st.Config.URL, true
+		}
+	}
+	return "", false
 }
 
 func (s *Scheduler) Start(ctx context.Context) {
@@ -214,8 +292,42 @@ func (s *Scheduler) Start(ctx context.Context) {
 	logger.Infof("Monitor Scheduler started: %d nodes monitored", len(s.cfg.Monitor.Nodes))
 	logger.Infof("Intervals: Health/Latency=%s | GFW/送中=%s | Split/分流=%s", healthDur, gfwDur, splitDur)
 
-	// 启动后立即异步跑第一轮巡检
-	go s.RunAllChecks(runCtx, false)
+	// 启动后立即拉取一次动态家宽源（若启用），再跑第一轮巡检
+	go func() {
+		if s.cfg.Monitor.ResidentialSource.Enabled && strings.TrimSpace(s.cfg.Monitor.ResidentialSource.URL) != "" {
+			initCtx, cancel := context.WithTimeout(runCtx, 20*time.Second)
+			_, _ = s.RefreshResidentialNodes(initCtx)
+			cancel()
+		}
+		s.RunAllChecks(runCtx, false)
+	}()
+
+	// 定时器 5: 周期性从 personal-vps-monitor 拉取懒猫云动态家宽出口订阅 (变更后原子更新缓存并触发巡检，失败则保留本地缓存)
+	if s.cfg.Monitor.ResidentialSource.Enabled && strings.TrimSpace(s.cfg.Monitor.ResidentialSource.URL) != "" {
+		resiDur, _ := time.ParseDuration(s.cfg.Monitor.ResidentialSource.RefreshInterval)
+		if resiDur <= 0 {
+			resiDur = 5 * time.Minute
+		}
+		logger.Infof("[RESIDENTIAL-SYNC] Dynamic residential source enabled: interval=%s cache=%s", resiDur, s.residentialCachePath())
+		go func() {
+			ticker := time.NewTicker(resiDur)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-runCtx.Done():
+					return
+				case <-ticker.C:
+					syncCtx, cancel := context.WithTimeout(runCtx, 25*time.Second)
+					changed, err := s.RefreshResidentialNodes(syncCtx)
+					cancel()
+					if err == nil && changed {
+						logger.Infof("[RESIDENTIAL-SYNC] Node list/URLs changed; triggering immediate probe check...")
+						go s.RunAllChecks(runCtx, false)
+					}
+				}
+			}
+		}()
+	}
 
 	// 定时器 1: 常规在线与延迟巡检
 	go func() {
@@ -300,6 +412,195 @@ func (s *Scheduler) Start(ctx context.Context) {
 			_ = s.RefreshNodesFromSubStore(runCtx)
 		}()
 	}
+}
+
+// RefreshResidentialNodes pulls dynamic LazyCat residential egress nodes from personal-vps-monitor,
+// compares against the cached list, atomically updates residential_nodes.json & nodeStates on change,
+// skips when unchanged, and preserves local cache on upstream failure.
+func (s *Scheduler) RefreshResidentialNodes(ctx context.Context) (bool, error) {
+	if s == nil || s.cfg == nil || !s.cfg.Monitor.ResidentialSource.Enabled || strings.TrimSpace(s.cfg.Monitor.ResidentialSource.URL) == "" {
+		return false, nil
+	}
+
+	s.residentialMu.Lock()
+	defer s.residentialMu.Unlock()
+
+	cachePath := s.residentialCachePath()
+	fetched, err := FetchResidentialNodes(ctx, s.cfg.Monitor.ResidentialSource)
+	now := time.Now()
+	if err != nil {
+		s.mu.Lock()
+		s.residentialSyncStatus.LastSyncAt = now
+		s.residentialSyncStatus.LastError = err.Error()
+		s.residentialSyncStatus.UsingCacheFallback = len(s.residentialNodes) > 0
+		s.residentialSyncStatus.NodeCount = len(s.residentialNodes)
+		cachedCount := len(s.residentialNodes)
+		s.mu.Unlock()
+		logger.Warnf("[RESIDENTIAL-SYNC] ⚠️ Pull failed (%v); preserving local cache (%d nodes at %s)", err, cachedCount, cachePath)
+		return false, err
+	}
+
+	s.mu.RLock()
+	prevNodes := append([]config.MonitoredNode(nil), s.residentialNodes...)
+	statesInSync := true
+	for _, n := range fetched {
+		st, ok := s.nodeStates[n.Name]
+		if !ok || st == nil || st.Config.URL != n.URL || !st.Config.IsSelf {
+			statesInSync = false
+			break
+		}
+	}
+	s.mu.RUnlock()
+
+	_, statErr := os.Stat(cachePath)
+	cacheMissing := statErr != nil
+	listEqual := monitoredNodesEqual(prevNodes, fetched)
+
+	if listEqual && statesInSync && !cacheMissing {
+		s.mu.Lock()
+		s.residentialSyncStatus.LastSyncAt = now
+		s.residentialSyncStatus.LastSuccessAt = now
+		s.residentialSyncStatus.LastError = ""
+		s.residentialSyncStatus.UsingCacheFallback = false
+		s.residentialSyncStatus.NodeCount = len(fetched)
+		s.mu.Unlock()
+		logger.Debugf("[RESIDENTIAL-SYNC] No changes in residential_nodes (%d nodes), skipping update", len(fetched))
+		return false, nil
+	}
+
+	if err := saveResidentialCacheAtomic(cachePath, fetched); err != nil {
+		logger.Warnf("[RESIDENTIAL-SYNC] ⚠️ Failed to write atomic cache %s: %v", cachePath, err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	getEndpoint := func(rawURL string) string {
+		h, p, sch := parseEndpoint(rawURL)
+		if h != "" {
+			return fmt.Sprintf("%s:%d:%s", h, p, sch)
+		}
+		return rawURL
+	}
+
+	prevResiNames := make(map[string]bool, len(s.residentialNodes))
+	for _, r := range s.residentialNodes {
+		if r.Name != "" {
+			prevResiNames[r.Name] = true
+		}
+	}
+	staticResiSet := make(map[string]bool, len(s.cfg.Monitor.ResidentialNodes))
+	for _, r := range s.cfg.Monitor.ResidentialNodes {
+		if r.Name != "" {
+			staticResiSet[r.Name] = true
+		}
+	}
+	staticTransitSet := make(map[string]bool, len(s.cfg.Monitor.Nodes))
+	for _, n := range s.cfg.Monitor.Nodes {
+		if n.Name != "" {
+			staticTransitSet[n.Name] = true
+		}
+	}
+
+	fetchedNames := make(map[string]bool, len(fetched))
+	for _, n := range fetched {
+		fetchedNames[n.Name] = true
+		ep := getEndpoint(n.URL)
+
+		matchedKey := ""
+		if st, ok := s.nodeStates[n.Name]; ok && st != nil {
+			matchedKey = n.Name
+		} else {
+			for key, st := range s.nodeStates {
+				if st == nil {
+					continue
+				}
+				isResiState := (st.LastResult != nil && st.LastResult.NodeType == "residential") || prevResiNames[key] || model.IsResidentialNode(key, st.Config.URL, "")
+				if isResiState && getEndpoint(st.Config.URL) == ep {
+					matchedKey = key
+					break
+				}
+			}
+		}
+
+		if matchedKey != "" {
+			st := s.nodeStates[matchedKey]
+			if matchedKey != n.Name {
+				delete(s.nodeStates, matchedKey)
+				s.nodeStates[n.Name] = st
+			}
+			urlChanged := st.Config.URL != n.URL
+			st.Config = n
+			if st.LastResult == nil {
+				st.LastResult = &model.NodeProbeResult{
+					ID:          n.Name,
+					Name:        n.Name,
+					OriginalURL: n.URL,
+					NodeType:    "residential",
+					IsSelf:      true,
+					Online:      false,
+					StatusText:  "待巡检",
+					ExitCountry: model.ResolveCountry("", n.Name),
+				}
+			} else {
+				st.LastResult.ID = n.Name
+				st.LastResult.Name = n.Name
+				st.LastResult.OriginalURL = n.URL
+				st.LastResult.NodeType = "residential"
+				st.LastResult.IsSelf = true
+				st.LastResult.ExitCountry = model.ResolveCountry(st.LastResult.ExitCountry, n.Name)
+				if urlChanged {
+					st.LastResult.StatusText = "待巡检(配置已更新)"
+					st.LastChecked = time.Time{}
+				}
+			}
+		} else {
+			s.nodeStates[n.Name] = &NodeState{
+				Config: n,
+				LastResult: &model.NodeProbeResult{
+					ID:          n.Name,
+					Name:        n.Name,
+					OriginalURL: n.URL,
+					NodeType:    "residential",
+					IsSelf:      true,
+					Online:      false,
+					StatusText:  "待巡检",
+					ExitCountry: model.ResolveCountry("", n.Name),
+				},
+			}
+		}
+	}
+
+	pruned := 0
+	for name, st := range s.nodeStates {
+		if st == nil {
+			delete(s.nodeStates, name)
+			continue
+		}
+		if fetchedNames[name] || staticResiSet[name] || staticTransitSet[name] {
+			continue
+		}
+		isResiState := (st.LastResult != nil && st.LastResult.NodeType == "residential") || prevResiNames[name] || model.IsResidentialNode(name, st.Config.URL, "")
+		if isResiState {
+			delete(s.nodeStates, name)
+			pruned++
+		}
+	}
+
+	s.residentialNodes = append([]config.MonitoredNode(nil), fetched...)
+	s.residentialSyncStatus.Enabled = true
+	s.residentialSyncStatus.SourceURL = s.cfg.Monitor.ResidentialSource.URL
+	s.residentialSyncStatus.CachePath = cachePath
+	s.residentialSyncStatus.RefreshInterval = s.cfg.Monitor.ResidentialSource.RefreshInterval
+	s.residentialSyncStatus.NodeCount = len(fetched)
+	s.residentialSyncStatus.UsingCacheFallback = false
+	s.residentialSyncStatus.LastSyncAt = now
+	s.residentialSyncStatus.LastSuccessAt = now
+	s.residentialSyncStatus.LastChangedAt = now
+	s.residentialSyncStatus.LastError = ""
+
+	logger.Sync("[RESIDENTIAL-SYNC] ✅ Atomically updated %d dynamic residential nodes (pruned=%d, cache=%s)", len(fetched), pruned, cachePath)
+	return true, nil
 }
 
 // RefreshNodesFromSubStore 从 SubStore 动态同步待监控的自建节点 (核心原则：外部连接绝不检测，仅检测自有服务)
@@ -417,9 +718,26 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 		return rawURL
 	}
 
+	dynamicResiByName := make(map[string]bool, len(s.residentialNodes))
+	dynamicResiByEndpoint := make(map[string]bool, len(s.residentialNodes))
+	if s.cfg.Monitor.ResidentialSource.Enabled {
+		for _, r := range s.residentialNodes {
+			if r.Name != "" {
+				dynamicResiByName[r.Name] = true
+			}
+			if r.URL != "" {
+				dynamicResiByEndpoint[getEndpoint(r.URL)] = true
+			}
+		}
+	}
+
 	validSelfSet := make(map[string]bool)
 	for _, n := range dynamicNodes {
 		ep := getEndpoint(n.URL)
+		if s.cfg.Monitor.ResidentialSource.Enabled && (dynamicResiByName[n.Name] || dynamicResiByEndpoint[ep]) {
+			// 动态家宽源启用时，以 personal-vps-monitor 同步结果为准，不被 SubStore 旧副本覆盖
+			continue
+		}
 		matchedKey := ""
 		if _, ok := s.nodeStates[n.Name]; ok {
 			matchedKey = n.Name
@@ -432,7 +750,7 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 			}
 		}
 
-		isResi := model.IsResidentialNode(n.Name, n.URL, "")
+		isResi := model.IsResidentialNode(n.Name, n.URL, "") || s.isKnownResidentialLocked(n.Name, n.URL)
 		nodeType := "transit"
 		if isResi {
 			nodeType = "residential"
@@ -477,6 +795,11 @@ func (s *Scheduler) RefreshNodesFromSubStore(ctx context.Context) error {
 	}
 	for _, n := range s.cfg.Monitor.ResidentialNodes {
 		if n.IsSelf {
+			validSelfSet[n.Name] = true
+		}
+	}
+	for _, n := range s.residentialNodes {
+		if n.IsSelf && n.Name != "" {
 			validSelfSet[n.Name] = true
 		}
 	}
@@ -557,8 +880,20 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 	var resiNodes []*model.NodeProbeResult
 	var healthyTransits []*model.NodeProbeResult
 
+	s.mu.RLock()
+	knownResi := make(map[string]bool, len(s.residentialNodes))
+	for _, r := range s.residentialNodes {
+		if r.Name != "" {
+			knownResi[r.Name] = true
+		}
+		if r.URL != "" {
+			knownResi[r.URL] = true
+		}
+	}
+	s.mu.RUnlock()
+
 	for _, res := range resp.Results {
-		isResi := model.IsResidentialNode(res.Name, res.OriginalURL, res.Protocol)
+		isResi := model.IsResidentialNode(res.Name, res.OriginalURL, res.Protocol) || knownResi[res.Name] || knownResi[res.OriginalURL]
 		if isResi {
 			res.NodeType = "residential"
 			resiNodes = append(resiNodes, res)

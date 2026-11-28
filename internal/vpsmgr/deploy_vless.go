@@ -523,7 +523,8 @@ func buildVLESSLink(uuid, ip string, port int, sni, pbk, sid, remark string) str
 	q.Set("encryption", "none")
 	q.Set("security", "reality")
 	q.Set("sni", sni)
-	q.Set("fp", "chrome")
+	// 使用 ios 指纹避免 sing-box 1.14.6+ Chrome X25519MLKEM768 超大 ClientHello 在 NAT/旧核心上触发 Reality 握手失败
+	q.Set("fp", "ios")
 	q.Set("pbk", pbk)
 	q.Set("sid", sid)
 	q.Set("type", "tcp")

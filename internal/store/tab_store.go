@@ -58,8 +58,8 @@ func (s *Store) seedDefaultTabsAndProfiles() error {
 			Name:        "线路机",
 			Type:        model.TabTypeAtomic,
 			Icon:        "🚀",
-			Description: "自建骨干专线线路机 (美西4837, 东京IIJ, 东京软银)",
-			Keywords:    []string{"线路机", "4837", "IIJ", "SoftBank", "JPSB", "LAX"},
+			Description: "自建骨干专线线路机 (美西4837, 东京IIJ, 东京软银, 香港HKG)",
+			Keywords:    transitTabKeywords(),
 			IsSystem:    true,
 			OrderIdx:    1,
 			CreatedAt:   now,
@@ -118,8 +118,8 @@ func (s *Store) seedDefaultTabsAndProfiles() error {
 			Name:        "其他区",
 			Type:        model.TabTypeAtomic,
 			Icon:        "🌏",
-			Description: "台湾/新加坡/韩国等亚太落地与中继",
-			Keywords:    []string{"TW", "台", "HiNet", "KR", "韩", "KT", "SG", "新", "StarHub"},
+			Description: "台湾/新加坡/韩国/香港等亚太落地与中继",
+			Keywords:    otherRegionTabKeywords(),
 			IsSystem:    true,
 			OrderIdx:    6,
 			CreatedAt:   now,
@@ -557,4 +557,14 @@ func deduplicateStrings(in []string) []string {
 		}
 	}
 	return out
+}
+
+// transitTabKeywords 线路机选项卡关键字（香港 HKG-3 必须在此，否则新线路机不会出现在线路机 Tab）。
+func transitTabKeywords() []string {
+	return []string{"线路机", "4837", "IIJ", "SoftBank", "JPSB", "LAX", "HK", "HKG", "香港"}
+}
+
+// otherRegionTabKeywords 其他区选项卡关键字。
+func otherRegionTabKeywords() []string {
+	return []string{"TW", "台", "HiNet", "KR", "韩", "KT", "SG", "新", "StarHub", "HK", "HKG", "香港"}
 }

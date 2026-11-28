@@ -145,6 +145,9 @@ func DetectNATRegion(host, tag string) string {
 	if strings.HasPrefix(host, "45.192.") || strings.HasPrefix(host, "47.141.") {
 		return "US"
 	}
+	if strings.HasPrefix(host, "216.236.") {
+		return "HK"
+	}
 	return "JP" // 默认中转区
 }
 

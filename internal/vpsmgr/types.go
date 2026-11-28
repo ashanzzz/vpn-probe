@@ -13,9 +13,11 @@ type VPSInstance struct {
 	SSHKey      string `json:"ssh_key,omitempty"`
 	ProviderID  string `json:"provider_id"`
 	IsNAT       bool   `json:"is_nat"`
+	ExecMode    string `json:"exec_mode,omitempty"` // "ssh" | "hub"（hub = 经 :3338 WebSocket PTY 执行）
 	NATPorts    []int  `json:"nat_ports,omitempty"`
 	Status      string `json:"status"`
 	Region      string `json:"region"`
+	Category    string `json:"category,omitempty"` // 懒猫云分类：固定出口 | 全球家宽
 }
 
 // BackupSnapshot VPS 配置文件或数据库的历史快照
@@ -150,15 +152,16 @@ type RegisterInstanceRequest struct {
 	SSHKey      string `json:"ssh_key,omitempty"`
 	ProviderID  string `json:"provider_id,omitempty"`
 	IsNAT       bool   `json:"is_nat"`
+	ExecMode    string `json:"exec_mode,omitempty"` // "ssh" | "hub"（hub = 经 :3338 WebSocket PTY 执行）
 	NATPorts    []int  `json:"nat_ports,omitempty"`
 	Region      string `json:"region,omitempty"`
 }
 
 // UninstallRequest 彻底卸载指定 VPS 代理容器请求
 type UninstallRequest struct {
-	VPSID          string `json:"vps_id"`
-	CleanSubStore  bool   `json:"clean_substore"`   // 默认 true
-	RemoveData     bool   `json:"remove_data"`      // 默认 true
+	VPSID         string `json:"vps_id"`
+	CleanSubStore bool   `json:"clean_substore"` // 默认 true
+	RemoveData    bool   `json:"remove_data"`    // 默认 true
 }
 
 // UninstallResponse 卸载响应

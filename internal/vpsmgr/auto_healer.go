@@ -173,7 +173,7 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 		NodeName: nodeName,
 	}
 
-	if model.IsResidentialNode(nodeName, targetURL, "") || (inst != nil && inst.ProviderID == "lazycat") {
+	if model.IsResidentialNode(nodeName, targetURL, "") || (inst != nil && inst.ProviderID == "lazycat" && inst.Category != "固定出口") {
 		resp.Message = "住宅家宽节点严禁执行换端口操作：家宽物理上为链式代理，请核查中转机或家庭端连通性"
 		return resp, fmt.Errorf("port heal is forbidden on residential nodes")
 	}
@@ -192,6 +192,11 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 	}
 	oldPort, _ := strconv.Atoi(portStr)
 	resp.OldPort = oldPort
+
+	// NAT 固定出口（懒猫云）：只重发布公网映射，宿机 sing-box 配置与进程零改动
+	if inst != nil && inst.IsNAT && inst.Category == "固定出口" {
+		return h.healNATPublicPort(ctx, inst, nodeName, targetURL, oldPort, resp)
+	}
 
 	// 选定新端口
 	newPort := targetPort
@@ -604,4 +609,35 @@ func atomicWriteFile(filename string, data []byte, perm os.FileMode) error {
 	}
 
 	return nil
+}
+
+// healNATPublicPort 通过 :3338 控制面重发布 NAT 公网端口。
+// 私网端口与宿机进程保持不变，仅切换公网映射；失败由 RepublishNATPort 内部回滚。
+func (h *AutoHealer) healNATPublicPort(ctx context.Context, inst *VPSInstance, nodeName, targetURL string, oldPort int, resp *PortHealResponse) (*PortHealResponse, error) {
+	newPub, newID, err := h.detector.RepublishNATPortViaHub(ctx, inst.ID, oldPort, oldPort, "vless-heal")
+	if err != nil {
+		resp.Message = fmt.Sprintf("NAT 端口重发布失败: %v", err)
+		return resp, err
+	}
+	resp.NewPort = newPub
+	resp.NewURL = replaceURLPort(targetURL, newPub)
+	resp.Success = true
+	resp.Message = fmt.Sprintf("NAT 公网端口已切换 %d -> %d（mapping=%d，私网端口与宿机配置未改动）", oldPort, newPub, newID)
+	logger.Infof("[AUTO-HEAL] %s: %s", nodeName, resp.Message)
+	return resp, nil
+}
+
+// replaceURLPort 仅替换 URL 中 authority 的端口，保留 UUID、参数与 fragment。
+func replaceURLPort(raw string, newPort int) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	port := strconv.Itoa(newPort)
+	if u.Port() != "" {
+		u.Host = net.JoinHostPort(u.Hostname(), port)
+	} else {
+		u.Host = net.JoinHostPort(u.Hostname(), port)
+	}
+	return u.String()
 }

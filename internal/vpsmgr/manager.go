@@ -159,8 +159,13 @@ func NewManager(cfg *config.Config, sc *substore.Client, configPath string) *Man
 		configPath:     configPath,
 	}
 
-	// 若配置了 VPS Hub，异步拉取最新实例与缓存状态（无任何源码硬编码凭据）
+	// 若配置了 VPS Hub，注入 WebSocket PTY 执行器并异步同步实例（无任何源码硬编码凭据）
 	if vpsHubURL != "" {
+		hubClient := NewHubClient(vpsHubURL, vpsHubUser, vpsHubPass)
+		det.SetHubClient(hubClient)
+		det.SetHubExecutor(func(ctx context.Context, instanceID, cmd string, timeout time.Duration) (string, error) {
+			return hubClient.Exec(ctx, instanceID, cmd, timeout)
+		})
 		go m.refreshFromVPSHub()
 	}
 
@@ -218,16 +223,17 @@ func (m *Manager) refreshFromVPSHub() {
 
 	var hubData struct {
 		Instances []*struct {
-			ID          string `json:"id"`
-			Name        string `json:"name"`
-			IP          string `json:"ip"`
-			SSHPort     int    `json:"ssh_port"`
-			SSHUser     string `json:"ssh_user"`
-			SSHPassword string `json:"ssh_password"`
+			ID           string `json:"id"`
+			Name         string `json:"name"`
+			IP           string `json:"ip"`
+			SSHPort      int    `json:"ssh_port"`
+			SSHUser      string `json:"ssh_user"`
+			SSHPassword  string `json:"ssh_password"`
 			RootPassword string `json:"root_password"`
-			ProviderID  string `json:"provider_id"`
-			Status      string `json:"status"`
-			Region      string `json:"region"`
+			ProviderID   string `json:"provider_id"`
+			Status       string `json:"status"`
+			Region       string `json:"region"`
+			Category     string `json:"category"`
 		} `json:"instances"`
 	}
 	if err := json.NewDecoder(instResp.Body).Decode(&hubData); err != nil {
@@ -241,15 +247,15 @@ func (m *Manager) refreshFromVPSHub() {
 		if hi == nil {
 			continue
 		}
-		if hi.ProviderID == "lazycat" {
-			continue // 家宽网关不属于标准 root SSH 托管机
+		if hi.ProviderID == "lazycat" && hi.Category != "固定出口" {
+			continue // 全球家宽网关不属于可托管线路机；固定出口（如 HKG-3）必须纳入
 		}
 		pass := hi.SSHPassword
 		if pass == "" {
 			pass = hi.RootPassword
 		}
 		sshPort := hi.SSHPort
-		if sshPort <= 0 {
+		if sshPort <= 0 && hi.ProviderID != "lazycat" {
 			sshPort = 22
 		}
 		sshUser := hi.SSHUser
@@ -270,12 +276,14 @@ func (m *Manager) refreshFromVPSHub() {
 				}
 				updatedInst.Status = hi.Status
 				updatedInst.Region = hi.Region
+				updatedInst.IsNAT = hi.ProviderID == "lazycat"
+				updatedInst.ExecMode = execModeFor(hi.ProviderID, sshPort)
 				m.instances[idx] = &updatedInst
 				updated = true
 				break
 			}
 		}
-		if !updated && hi.IP != "" && pass != "" {
+		if !updated && hi.IP != "" && (pass != "" || hi.ProviderID == "lazycat") {
 			m.instances = append(m.instances, &VPSInstance{
 				ID:          hi.ID,
 				Name:        hi.Name,
@@ -284,6 +292,8 @@ func (m *Manager) refreshFromVPSHub() {
 				SSHUser:     sshUser,
 				SSHPassword: pass,
 				ProviderID:  hi.ProviderID,
+				IsNAT:       hi.ProviderID == "lazycat",
+				ExecMode:    execModeFor(hi.ProviderID, sshPort),
 				Status:      hi.Status,
 				Region:      hi.Region,
 			})
@@ -827,4 +837,12 @@ func (m *Manager) DailyCheckUpdates(ctx context.Context) []*SoftwareInfo {
 		}
 	}
 	return infos
+}
+
+// execModeFor 决定远程命令通道：无公网 SSH 映射的懒猫云 NAT 实例走 :3338 WebSocket PTY。
+func execModeFor(providerID string, sshPort int) string {
+	if providerID == "lazycat" && sshPort <= 0 {
+		return "hub"
+	}
+	return "ssh"
 }

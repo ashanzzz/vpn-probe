@@ -23,9 +23,9 @@ import (
 )
 
 type NodeState struct {
-	Config      config.MonitoredNode    `json:"config"`
-	LastResult  *model.NodeProbeResult  `json:"last_result,omitempty"`
-	LastChecked time.Time               `json:"last_checked"`
+	Config      config.MonitoredNode   `json:"config"`
+	LastResult  *model.NodeProbeResult `json:"last_result,omitempty"`
+	LastChecked time.Time              `json:"last_checked"`
 }
 
 type Scheduler struct {
@@ -1398,6 +1398,10 @@ func getHostGroupKey(res *model.NodeProbeResult) string {
 	// 2. 东京 IIJ / AKILE-IIJ 主机 (156.231.113.91 / tokyo-free.1992004.xyz)
 	if strings.Contains(host, "tokyo-free") || strings.Contains(name, "JP-AKILE-IIJ") || strings.Contains(name, "JP-Tokyo-IIJ") || strings.Contains(name, "东京 IIJ") || strings.Contains(name, "东京IIJ") || host == "156.231.113.91" {
 		return "JP-AKILE-IIJ"
+	}
+	// 2.5 香港 HKG-3 主机 (216.236.60.76) —— 懒猫云固定出口线路机
+	if host == "216.236.60.76" || strings.Contains(host, "216.236.") || strings.Contains(strings.ToUpper(name), "HKG-3") {
+		return "HKG-3"
 	}
 	// 3. 东京软银 / ACCK-SB 主机 (45.192.242.72)
 	if strings.Contains(name, "JP-ACCK-SB") || strings.Contains(name, "JP-Tokyo-Softbank") || strings.Contains(name, "JP--ACCK-SB") || strings.Contains(name, "ACCK-SB") || strings.Contains(name, "东京软银") || host == "45.192.242.72" {

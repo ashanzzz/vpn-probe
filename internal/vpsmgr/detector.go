@@ -21,6 +21,8 @@ type SSHRunnerFunc func(inst *VPSInstance, cmd string) (string, error)
 type Detector struct {
 	ghChecker *GitHubChecker
 	sshRunner SSHRunnerFunc
+	hubExec   HubExecutor
+	hubClient *HubClient
 	mu        sync.RWMutex
 }
 
@@ -43,12 +45,19 @@ func (d *Detector) getSSHRunner() SSHRunnerFunc {
 	return d.sshRunner
 }
 
-// RunSSH 执行远程 SSH 命令并返回标准输出
+// RunSSH 执行远程命令并返回标准输出。
+// 懒猫云 NAT 实例（无公网 22 映射）自动改走 :3338 WebSocket PTY 通道。
 func (d *Detector) RunSSH(inst *VPSInstance, cmd string) (string, error) {
+	if NeedsHub(inst) {
+		return d.RunViaHub(inst, cmd)
+	}
 	if runner := d.getSSHRunner(); runner != nil {
 		return runner(inst, cmd)
 	}
+	return d.runSSHDirect(inst, cmd)
+}
 
+func (d *Detector) runSSHDirect(inst *VPSInstance, cmd string) (string, error) {
 	config := &ssh.ClientConfig{
 		User: inst.SSHUser,
 		Auth: []ssh.AuthMethod{
@@ -173,14 +182,14 @@ func (d *Detector) InspectVPS(ctx context.Context, inst *VPSInstance) *SoftwareI
 			info.ConfigPath = "/etc/sing-box/config.json"
 			verCmd = "sing-box version 2>/dev/null"
 			repoName = "SagerNet/sing-box"
-			info.Status = "running"
+			info.Status = "installed_stopped"
 		} else if strings.Contains(out, "/xray") {
 			info.SoftwareType = "xray"
 			info.DeployMode = "native"
 			info.ConfigPath = "/etc/xray/config.json"
 			verCmd = "xray version 2>/dev/null"
 			repoName = "XTLS/Xray-core"
-			info.Status = "running"
+			info.Status = "installed_stopped"
 		} else {
 			info.SoftwareType = "none"
 			info.DeployMode = "none"
@@ -198,6 +207,14 @@ func (d *Detector) InspectVPS(ctx context.Context, inst *VPSInstance) *SoftwareI
 
 	// 5. 提取监听端口
 	info.ActivePorts = extractPorts(out)
+
+	// 5.1 native 部署必须校验真实存活（服务状态 + 端口监听），不能仅凭 which 结果判定 running
+	if info.DeployMode == "native" && info.SoftwareType != "none" {
+		svcCmd := fmt.Sprintf("rc-service %s status 2>&1 | head -n1; systemctl is-active %s 2>/dev/null", info.SoftwareType, info.SoftwareType)
+		if svcOut, err := d.RunSSH(inst, svcCmd); err == nil && serviceRunningFromStatus(svcOut) {
+			info.Status = "running"
+		}
+	}
 
 	// 6. 对比 GitHub 最新版本
 	if repoName != "" && d.ghChecker != nil {
@@ -263,4 +280,16 @@ func normalizeVer(v string) string {
 	v = strings.TrimPrefix(v, "v")
 	v = strings.TrimPrefix(v, "V")
 	return v
+}
+
+// serviceRunningFromStatus 精确判定服务是否运行中。
+// 注意必须整行匹配 "active"，否则 systemctl 的 "inactive" 会被 Contains 误判为运行。
+func serviceRunningFromStatus(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		l := strings.ToLower(strings.TrimSpace(line))
+		if l == "active" || strings.Contains(l, "status: started") || strings.HasSuffix(l, "started") {
+			return true
+		}
+	}
+	return false
 }

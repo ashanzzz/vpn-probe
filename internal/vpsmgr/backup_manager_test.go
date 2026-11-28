@@ -21,8 +21,8 @@ type mockSSHFS struct {
 func newMockSSHFS() *mockSSHFS {
 	return &mockSSHFS{
 		files: map[string]string{
-			"/opt/sb-mgr/config.json": `{"log":{"level":"info"}}`,
-			"/etc/x-ui/x-ui.db":       "sqlite-dummy-db-content",
+			"/opt/sb-mgr/config.json":   `{"log":{"level":"info"}}`,
+			"/etc/x-ui/x-ui.db":         "sqlite-dummy-db-content",
 			"/etc/sing-box/config.json": `{"log":{"level":"warn"}}`,
 		},
 		commands: make([]string, 0),
@@ -314,7 +314,7 @@ func TestManager_LifecycleAndSafeUpgrade(t *testing.T) {
 	// 4. 安全升级测试 - 冒烟测试失败自动回滚分支
 	m.SetProbeFunc(func(ctx context.Context, link string) *model.NodeProbeResult {
 		return &model.NodeProbeResult{
-			Online:    false,
+			Online: false,
 			Diagnostic: &model.DiagnosticInfo{
 				StatusText: "Connection refused on port",
 			},

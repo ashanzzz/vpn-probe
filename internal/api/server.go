@@ -986,6 +986,9 @@ func (s *APIServer) setupRoutes() {
 		if s.substoreClient != nil {
 			s.substoreClient.UpdateConfig(&newCfg.SubStore)
 		}
+		if s.scheduler != nil {
+			s.scheduler.ReloadMonitoredNodes(newCfg.Monitor.Nodes)
+		}
 		customlog.Audit("reload_config", c.IP(), cfgPath, "success", "Configuration reloaded from disk")
 
 		return c.JSON(fiber.Map{
@@ -2112,6 +2115,9 @@ func (s *APIServer) handleVPSDeployVLESS(c *fiber.Ctx) error {
 	res, err := s.vpsMgr.DeployVLESS(c.Context(), &req)
 	if err != nil {
 		if res != nil {
+			if strings.TrimSpace(res.Message) == "" {
+				res.Message = err.Error()
+			}
 			return c.Status(fiber.StatusInternalServerError).JSON(res)
 		}
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "error", "success": false, "message": err.Error()})

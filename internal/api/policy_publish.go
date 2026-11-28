@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"vpn-probe/internal/logger"
 	"vpn-probe/internal/model"
 	"vpn-probe/internal/monitor"
 	"vpn-probe/internal/publish"
@@ -43,6 +44,14 @@ func (s *APIServer) applyPolicyGroups(ctx context.Context, step func(string)) er
 	groupsBusiness, err := monitor.LoadCustomGroups("business")
 	if err != nil {
 		return err
+	}
+	if s.scheduler != nil && s.cfg != nil && s.cfg.SubStore.Enabled {
+		if step != nil {
+			step("syncing_substore_groups")
+		}
+		if syncErr := s.scheduler.SyncFiveGroupsNow(ctx); syncErr != nil {
+			logger.Warnf("[POLICY-PUBLISH] Pre-publish SyncFiveGroupsNow failed (continuing with existing Sub-Store collections): %v", syncErr)
+		}
 	}
 	atoms := s.orchestrator.CollectAtoms()
 

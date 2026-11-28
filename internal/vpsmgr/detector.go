@@ -117,11 +117,17 @@ func (d *Detector) InspectVPS(ctx context.Context, inst *VPSInstance) *SoftwareI
 		LastCheckedAt: time.Now().Format("2006-01-02 15:04:05"),
 	}
 
+	if IsLazyCatResidential(inst) {
+		info.Status = "forbidden"
+		info.ErrorMessage = errLazyCatResidentialForbidden
+		return info
+	}
+
 	// 1. 测试 SSH 连通性并获取容器列表
 	out, err := d.RunSSH(inst, "docker ps --format '{{.Names}}|{{.Image}}|{{.Status}}' 2>/dev/null; which sing-box xray 2>/dev/null; ss -tulpn 2>/dev/null || netstat -tlnp 2>/dev/null")
 	if err != nil && len(out) == 0 {
 		info.Status = "unreachable"
-		info.ErrorMessage = err.Error()
+		info.ErrorMessage = formatVPSHubError(inst, err)
 		return info
 	}
 

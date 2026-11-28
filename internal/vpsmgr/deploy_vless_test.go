@@ -408,3 +408,121 @@ func TestInspectVPS_MultiAppsAndSubStoreSafeUpgrade(t *testing.T) {
 		t.Fatalf("expected Sub-Store smoke failure to trigger automatic rollback, got resp=%+v restored=%v", resp, restored)
 	}
 }
+
+func TestLazyCat_ResidentialVsFixedExitIsolation(t *testing.T) {
+	var hubExecCalled atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			_ = json.NewEncoder(w).Encode(map[string]string{"token": "tok"})
+		case "/api/instances":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"instances": []map[string]any{
+					{
+						"id":          "11433",
+						"name":        "0.1折 全球家宽 大杯02",
+						"ip":          "167.104.167.151",
+						"provider_id": "lazycat",
+						"category":    "全球家宽",
+						"ssh_port":    0,
+						"port_limit":  10,
+						"port_count":  10,
+					},
+					{
+						"id":          "10674",
+						"name":        "HKG 0.1折",
+						"ip":          "216.236.60.76",
+						"provider_id": "lazycat",
+						"category":    "固定出口",
+						"ssh_port":    0,
+						"port_limit":  10,
+						"port_count":  1,
+					},
+				},
+			})
+		case "/api/lazycat/terminal/exec":
+			hubExecCalled.Add(1)
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "lazycat terminal ws connect wss://lazycat.cloud/v1/host/10674/ws_pty failed: websocket: close 4001: Unauthorized",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	det := NewDetector(nil)
+	det.SetHubClient(NewHubClient(server.URL, "admin", "pass"))
+	det.SetHubExecutor(NewHubExecutor(server.URL, "admin", "pass"))
+
+	m := NewManager(&config.Config{}, nil, "")
+	m.SetVPSHubConfig(server.URL, "admin", "pass")
+	m.SetDetectorForTest(det)
+
+	// Refresh 只应纳入 10674 (固定出口)，绝不能纳入 11433 (全球家宽)
+	infos := m.RefreshVPSInstances(context.Background())
+	if len(infos) != 1 || infos[0].InstanceID != "10674" {
+		t.Fatalf("expected only 10674 fixed-exit transit instance after hub refresh, got %+v", infos)
+	}
+	if infos[0].Status != "unreachable" || !strings.Contains(infos[0].ErrorMessage, "4001") || !strings.Contains(infos[0].ErrorMessage, "2FA") {
+		t.Fatalf("expected clear 4001/2FA error on 10674 inspect, got status=%q err=%q", infos[0].Status, infos[0].ErrorMessage)
+	}
+	callsFor10674Only := hubExecCalled.Load()
+
+	// 即使显式注入全球家宽实例 11433，所有探查、部署、软件与生命周期操作均必须直接拦截且绝不触发远程执行
+	resiInst := &VPSInstance{
+		ID:         "11433",
+		Name:       "0.1折 全球家宽 大杯02",
+		IP:         "167.104.167.151",
+		ProviderID: "lazycat",
+		Category:   "全球家宽",
+		IsNAT:      true,
+		ExecMode:   "hub",
+	}
+	if !IsLazyCatResidential(resiInst) || IsLazyCatTransit(resiInst) {
+		t.Fatalf("classification mismatch for 11433 residential gateway")
+	}
+
+	m.SetInstancesForTest([]*VPSInstance{resiInst, {
+		ID: "10674", Name: "HKG 0.1折", IP: "216.236.60.76",
+		ProviderID: "lazycat", Category: "固定出口", IsNAT: true, ExecMode: "hub",
+	}})
+
+	if info := det.InspectVPS(context.Background(), resiInst); info.Status != "forbidden" {
+		t.Fatalf("expected InspectVPS on residential 11433 to return forbidden without SSH, got %+v", info)
+	}
+	if _, err := m.DeployVLESS(context.Background(), &DeployVLESSRequest{VPSID: "11433"}); err == nil {
+		t.Fatalf("expected DeployVLESS on 11433 residential gateway to fail")
+	}
+	if _, err := m.InstallSoftware(context.Background(), "11433", "sing-box"); err == nil {
+		t.Fatalf("expected InstallSoftware on 11433 residential gateway to fail")
+	}
+	if _, err := m.UpdateTargetSoftware(context.Background(), "11433", "sing-box", ""); err == nil {
+		t.Fatalf("expected UpdateTargetSoftware on 11433 residential gateway to fail")
+	}
+	if _, err := m.CreateBackup(context.Background(), "11433"); err == nil {
+		t.Fatalf("expected CreateBackup on 11433 residential gateway to fail")
+	}
+	if _, err := m.ListBackups(context.Background(), "11433"); err == nil {
+		t.Fatalf("expected ListBackups on 11433 residential gateway to fail")
+	}
+	if err := m.RestoreBackup(context.Background(), "11433", "snap-1"); err == nil {
+		t.Fatalf("expected RestoreBackup on 11433 residential gateway to fail")
+	}
+	if _, err := m.PerformLifecycleAction(context.Background(), &LifecycleActionRequest{VPSID: "11433", Action: "restart"}); err == nil {
+		t.Fatalf("expected PerformLifecycleAction on 11433 residential gateway to fail")
+	}
+	if _, err := m.PerformSafeUpgrade(context.Background(), &SafeUpgradeRequest{VPSID: "11433"}); err == nil {
+		t.Fatalf("expected PerformSafeUpgrade on 11433 residential gateway to fail")
+	}
+	if hubExecCalled.Load() != callsFor10674Only {
+		t.Fatalf("expected zero hub exec calls for residential 11433, got %d extra calls", hubExecCalled.Load()-callsFor10674Only)
+	}
+
+	// 验证 10674 部署失败时 resp.Message 必定包含可行动提示而不是空串
+	resp10674, err10674 := m.DeployVLESS(context.Background(), &DeployVLESSRequest{VPSID: "10674", NodeName: "HK-HKG3-NAT"})
+	if err10674 == nil || resp10674 == nil || resp10674.Message == "" || !strings.Contains(resp10674.Message, "4001") {
+		t.Fatalf("expected non-empty 4001 diagnostic in DeployVLESS response for 10674, got resp=%+v err=%v", resp10674, err10674)
+	}
+}

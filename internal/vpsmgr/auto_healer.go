@@ -179,7 +179,7 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 		NodeName: nodeName,
 	}
 
-	if model.IsResidentialNode(nodeName, targetURL, "") || (inst != nil && inst.ProviderID == "lazycat" && inst.Category != "固定出口") {
+	if model.IsResidentialNode(nodeName, targetURL, "") || IsLazyCatResidential(inst) {
 		resp.Message = "住宅家宽节点严禁执行换端口操作：家宽物理上为链式代理，请核查中转机或家庭端连通性"
 		return resp, fmt.Errorf("port heal is forbidden on residential nodes")
 	}
@@ -200,7 +200,7 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 	resp.OldPort = oldPort
 
 	// NAT 固定出口（懒猫云）：只重发布公网映射，宿机 sing-box 配置与进程零改动
-	if inst != nil && inst.IsNAT && inst.Category == "固定出口" {
+	if IsLazyCatTransit(inst) && inst.IsNAT {
 		return h.healNATPublicPort(ctx, inst, nodeName, targetURL, oldPort, resp)
 	}
 

@@ -73,7 +73,16 @@ async function request<T>(endpoint: string, options: RequestOptions = {}): Promi
 
   if (!resp.ok) {
     const errorBody = await resp.text().catch(() => '');
-    throw new Error(`HTTP ${resp.status}: ${errorBody || resp.statusText}`);
+    let parsedMsg = '';
+    if (errorBody) {
+      try {
+        const parsed = JSON.parse(errorBody);
+        parsedMsg = parsed?.message || parsed?.error || '';
+      } catch {
+        parsedMsg = '';
+      }
+    }
+    throw new Error(parsedMsg ? `HTTP ${resp.status}: ${parsedMsg}` : `HTTP ${resp.status}: ${errorBody || resp.statusText}`);
   }
 
   const contentType = resp.headers.get('content-type') || '';

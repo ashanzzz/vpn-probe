@@ -117,8 +117,8 @@ func (m *Manager) DeployVLESS(ctx context.Context, req *DeployVLESSRequest) (*De
 	if inst == nil {
 		return nil, fmt.Errorf("未找到托管实例 %q", req.VPSID)
 	}
-	if inst.ProviderID == "lazycat" && inst.Category == "全球家宽" {
-		return nil, errors.New("懒猫云全球家宽实例禁止部署为线路机")
+	if err := ensureTransitManageable(inst); err != nil {
+		return nil, err
 	}
 
 	nodeName := strings.TrimSpace(req.NodeName)
@@ -141,13 +141,17 @@ func (m *Manager) DeployVLESS(ctx context.Context, req *DeployVLESSRequest) (*De
 	}
 
 	var err error
-	if inst.ProviderID == "lazycat" && inst.IsNAT {
+	if inst.ProviderID == "lazycat" && (inst.IsNAT || NeedsHub(inst)) {
 		err = m.deployVLESSViaHub(ctx, inst, req.ListenPort, sni, nodeName, resp)
 	} else {
 		err = m.deployVLESSViaSSH(ctx, inst, req.ListenPort, sni, nodeName, resp)
 	}
 	if err != nil {
-		return resp, err
+		errMsg := formatVPSHubError(inst, err)
+		if resp.Message == "" {
+			resp.Message = errMsg
+		}
+		return resp, errors.New(errMsg)
 	}
 
 	// 真实出网冒烟校验（NAT 端口映射不通时自动切换一次映射重试）

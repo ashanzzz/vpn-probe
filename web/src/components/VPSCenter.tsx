@@ -608,13 +608,22 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
                   const targetKey = appTargetKey(inst, primaryApp?.app_type, primaryApp?.container_name);
                   const isUpdating = updatingNode === targetKey;
                   const isRestarting = operatingNode === `${targetKey}:restart`;
-                  const isResidential = inst.category === '全球家宽';
+                  const isResidential =
+                    inst.category === '全球家宽' ||
+                    (inst.provider_id === 'lazycat' && inst.category !== '固定出口' && Boolean(inst.category)) ||
+                    (inst.provider_id === 'lazycat' && /全球家宽|家宽|大杯|residential/i.test(inst.instance_name || ''));
+                  const isLazyCatTransit = inst.provider_id === 'lazycat' && !isResidential;
                   const isUninstalled = (inst.software_type === 'none' || inst.status === 'not_installed') && apps.length === 0;
                   return (
                     <React.Fragment key={idx}>
                       <tr className="hover:bg-slate-50/80 transition">
                         <td className="px-4 py-3 font-semibold text-slate-900">
-                          <div>{inst.instance_name || inst.instance_id}</div>
+                          <div className="flex items-center gap-1.5">
+                            <span>{inst.instance_name || inst.instance_id}</span>
+                            {inst.instance_id && (
+                              <span className="text-2xs font-mono font-normal text-slate-400">#{inst.instance_id}</span>
+                            )}
+                          </div>
                           <div className="flex flex-wrap items-center gap-1 mt-1">
                             {inst.is_nat && (
                               <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 text-2xs font-medium">
@@ -626,7 +635,17 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
                                 Hub通道
                               </span>
                             )}
-                            {inst.category && (
+                            {isLazyCatTransit && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 text-2xs font-medium">
+                                固定出口·线路机
+                              </span>
+                            )}
+                            {isResidential && (
+                              <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-2xs font-medium">
+                                全球家宽·禁止部署线路机
+                              </span>
+                            )}
+                            {inst.category && !isLazyCatTransit && !isResidential && (
                               <span className="px-1.5 py-0.5 rounded bg-slate-50 text-slate-600 border border-slate-200 text-2xs">
                                 {inst.category}
                               </span>
@@ -681,10 +700,17 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
                               running
                             </span>
                           ) : inst.status === 'unreachable' ? (
-                            <span className="inline-flex items-center text-red-700" title={inst.error_message}>
-                              <AlertTriangle className="w-3.5 h-3.5 mr-1 text-red-500" />
-                              unreachable
-                            </span>
+                            <div className="space-y-0.5 whitespace-normal max-w-xs">
+                              <span className="inline-flex items-center text-red-700" title={inst.error_message}>
+                                <AlertTriangle className="w-3.5 h-3.5 mr-1 text-red-500 shrink-0" />
+                                unreachable
+                              </span>
+                              {inst.error_message && (
+                                <div className="text-2xs text-red-600/90 leading-snug break-all">
+                                  {inst.error_message}
+                                </div>
+                              )}
+                            </div>
                           ) : (
                             <span className="inline-flex items-center text-amber-700">
                               <AlertTriangle className="w-3.5 h-3.5 mr-1 text-amber-500" />
@@ -710,7 +736,16 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
                               </button>
                             )}
 
-                            {!isUninstalled && apps.length <= 1 && (
+                            {isResidential && (
+                              <span
+                                className="inline-flex items-center px-2 py-1 text-2xs rounded bg-amber-50 text-amber-800 border border-amber-200"
+                                title="全球家宽网关仅通过 egress-subscriptions 提供家宽出口，禁止部署/运维为线路机"
+                              >
+                                家宽只读（非线路机）
+                              </span>
+                            )}
+
+                            {!isResidential && !isUninstalled && apps.length <= 1 && (
                               <>
                                 {/* 重启服务 */}
                                 <button

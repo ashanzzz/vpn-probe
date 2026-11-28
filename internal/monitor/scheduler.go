@@ -1400,7 +1400,7 @@ func getHostGroupKey(res *model.NodeProbeResult) string {
 		return "JP-AKILE-IIJ"
 	}
 	// 2.5 香港 HKG-3 主机 (216.236.60.76) —— 懒猫云固定出口线路机
-	if host == "216.236.60.76" || strings.Contains(host, "216.236.") || strings.Contains(strings.ToUpper(name), "HKG-3") {
+	if host == "216.236.60.76" || strings.Contains(host, "216.236.") || strings.Contains(strings.ToUpper(name), "HKG-3") || strings.Contains(strings.ToUpper(name), "HKG3") {
 		return "HKG-3"
 	}
 	// 3. 东京软银 / ACCK-SB 主机 (45.192.242.72)
@@ -1749,6 +1749,50 @@ func (s *Scheduler) UpdateNodeURL(oldURL, newURL string) {
 			st.Config.URL = newURL
 			if st.LastResult != nil {
 				st.LastResult.OriginalURL = newURL
+			}
+		}
+	}
+}
+
+// ReloadMonitoredNodes 在 /api/config/reload 后将最新配置中的节点列表热同步至调度器内存。
+func (s *Scheduler) ReloadMonitoredNodes(nodes []config.MonitoredNode) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.cfg.Monitor.Nodes = append([]config.MonitoredNode(nil), nodes...)
+	for _, n := range nodes {
+		nodeName := strings.TrimSpace(n.Name)
+		if nodeName == "" {
+			if parsed, err := probe.ParseLink(n.URL); err == nil && parsed.Tag != "" {
+				nodeName = parsed.Tag
+			}
+		}
+		if nodeName == "" {
+			nodeName = n.URL
+		}
+		if st, ok := s.nodeStates[nodeName]; ok && st != nil {
+			st.Config = n
+			if st.LastResult != nil && n.URL != "" {
+				st.LastResult.OriginalURL = n.URL
+				st.LastResult.IsSelf = n.IsSelf
+			}
+		} else {
+			nodeType := "transit"
+			if model.IsResidentialNode(nodeName, n.URL, "") {
+				nodeType = "residential"
+			}
+			s.nodeStates[nodeName] = &NodeState{
+				Config: n,
+				LastResult: &model.NodeProbeResult{
+					ID:          nodeName,
+					Name:        nodeName,
+					OriginalURL: n.URL,
+					NodeType:    nodeType,
+					IsSelf:      n.IsSelf,
+					Online:      false,
+					StatusText:  "待巡检",
+					ExitCountry: model.ResolveCountry("", nodeName),
+				},
 			}
 		}
 	}

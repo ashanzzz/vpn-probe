@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -296,6 +297,15 @@ func (m *Manager) refreshFromVPSHub() {
 			continue
 		}
 		if hi.ProviderID == "lazycat" && hi.Category != "固定出口" {
+			// 若历史上曾混入同 ID/IP 的非固定出口懒猫云实例（如全球家宽），立即从可托管列表剔除
+			filtered := m.instances[:0]
+			for _, existing := range m.instances {
+				if existing != nil && existing.ProviderID == "lazycat" && ((hi.ID != "" && existing.ID == hi.ID) || (hi.IP != "" && existing.IP == hi.IP)) {
+					continue
+				}
+				filtered = append(filtered, existing)
+			}
+			m.instances = filtered
 			continue // 全球家宽网关不属于可托管线路机；固定出口（如 HKG-3）必须纳入
 		}
 		pass := hi.SSHPassword
@@ -552,6 +562,9 @@ func (m *Manager) InstallSoftware(ctx context.Context, vpsID string, software st
 	if inst == nil {
 		return "", fmt.Errorf("VPS instance '%s' not found", vpsID)
 	}
+	if err := ensureTransitManageable(inst); err != nil {
+		return "", err
+	}
 
 	if software == "" || software == "sing-box" {
 		if NeedsHub(inst) {
@@ -696,6 +709,9 @@ func (m *Manager) UpdateTargetSoftware(ctx context.Context, vpsID, software, con
 	if inst == nil {
 		return "", fmt.Errorf("VPS instance '%s' not found", vpsID)
 	}
+	if err := ensureTransitManageable(inst); err != nil {
+		return "", err
+	}
 
 	baseInfo := m.detector.InspectVPS(ctx, inst)
 	softInfo := resolveTargetSoftInfo(baseInfo, software, containerName)
@@ -817,6 +833,9 @@ func (m *Manager) CreateBackup(ctx context.Context, vpsID string, target ...stri
 	if inst == nil {
 		return nil, fmt.Errorf("VPS instance '%s' not found", vpsID)
 	}
+	if err := ensureTransitManageable(inst); err != nil {
+		return nil, err
+	}
 	sw, cn := extractTargetArgs(target)
 	softInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), sw, cn)
 	return m.backupMgr.CreateBackup(inst, softInfo)
@@ -828,6 +847,9 @@ func (m *Manager) ListBackups(ctx context.Context, vpsID string, target ...strin
 	if inst == nil {
 		return nil, fmt.Errorf("VPS instance '%s' not found", vpsID)
 	}
+	if err := ensureTransitManageable(inst); err != nil {
+		return nil, err
+	}
 	sw, cn := extractTargetArgs(target)
 	softInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), sw, cn)
 	return m.backupMgr.ListBackups(inst, softInfo)
@@ -838,6 +860,9 @@ func (m *Manager) RestoreBackup(ctx context.Context, vpsID string, snapshotID st
 	inst := m.findInstance(vpsID)
 	if inst == nil {
 		return fmt.Errorf("VPS instance '%s' not found", vpsID)
+	}
+	if err := ensureTransitManageable(inst); err != nil {
+		return err
 	}
 	sw, cn := extractTargetArgs(target)
 	softInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), sw, cn)
@@ -863,6 +888,9 @@ func (m *Manager) PerformLifecycleAction(ctx context.Context, req *LifecycleActi
 	inst := m.findInstance(req.VPSID)
 	if inst == nil {
 		return "", fmt.Errorf("VPS instance '%s' not found", req.VPSID)
+	}
+	if err := ensureTransitManageable(inst); err != nil {
+		return "", err
 	}
 
 	softInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), req.Software, req.ContainerName)
@@ -919,6 +947,9 @@ func (m *Manager) PerformSafeUpgrade(ctx context.Context, req *SafeUpgradeReques
 	inst := m.findInstance(req.VPSID)
 	if inst == nil {
 		return nil, fmt.Errorf("VPS instance '%s' not found", req.VPSID)
+	}
+	if err := ensureTransitManageable(inst); err != nil {
+		return nil, err
 	}
 
 	softInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), req.Software, req.ContainerName)
@@ -1052,6 +1083,55 @@ func (m *Manager) DailyCheckUpdates(ctx context.Context) []*SoftwareInfo {
 		}
 	}
 	return infos
+}
+
+const errLazyCatResidentialForbidden = "懒猫云全球家宽网关禁止当作线路机执行部署、软件运维或生命周期操作（请通过 egress-subscriptions 消费家宽出口）"
+
+// IsLazyCatResidential 判断是否为懒猫云“全球家宽”多出口网关实例（仅作终端家宽出口消费，禁止当作线路机部署/运维）。
+func IsLazyCatResidential(inst *VPSInstance) bool {
+	if inst == nil || inst.ProviderID != "lazycat" {
+		return false
+	}
+	cat := strings.TrimSpace(inst.Category)
+	if cat == "固定出口" {
+		return false
+	}
+	if cat != "" {
+		return true
+	}
+	lowerName := strings.ToLower(inst.Name)
+	for _, kw := range []string{"全球家宽", "家宽", "residential", "global", "大杯"} {
+		if strings.Contains(lowerName, kw) {
+			return true
+		}
+	}
+	return model.IsResidentialNode(inst.Name, "", "")
+}
+
+// IsLazyCatTransit 判断是否为懒猫云“固定出口”NAT 线路机。
+func IsLazyCatTransit(inst *VPSInstance) bool {
+	return inst != nil && inst.ProviderID == "lazycat" && !IsLazyCatResidential(inst)
+}
+
+func ensureTransitManageable(inst *VPSInstance) error {
+	if IsLazyCatResidential(inst) {
+		return errors.New(errLazyCatResidentialForbidden)
+	}
+	return nil
+}
+
+func formatVPSHubError(inst *VPSInstance, err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if inst != nil && inst.ProviderID == "lazycat" {
+		lower := strings.ToLower(msg)
+		if strings.Contains(msg, "4001") || strings.Contains(lower, "unauthorized") {
+			return fmt.Sprintf("懒猫云 :3338 WS-PTY 鉴权失败（Upstream Session 已过期，通常因懒猫云需要 2FA 动态码且 Vaultwarden 尚未保存 TOTP 密钥）: %s", msg)
+		}
+	}
+	return msg
 }
 
 // execModeFor 决定远程命令通道：无公网 SSH 映射的懒猫云 NAT 实例走 :3338 WebSocket PTY。

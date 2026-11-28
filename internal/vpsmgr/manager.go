@@ -39,9 +39,38 @@ type Manager struct {
 	healer         *AutoHealer
 	backupMgr      *BackupManager
 	substoreClient *substore.Client
-	configPath     string
-	probeFunc      NodeProbeFunc
-	probeMu        sync.RWMutex
+	configPath        string
+	probeFunc         NodeProbeFunc
+	probeMu           sync.RWMutex
+	onNodeAdded       func(node config.MonitoredNode)
+	substoreSmokeFunc func(ctx context.Context) error
+}
+
+// SetSubStoreSmokeFunc 注册 Sub-Store 升级后的真实健康校验函数。
+func (m *Manager) SetSubStoreSmokeFunc(fn func(ctx context.Context) error) {
+	m.probeMu.Lock()
+	defer m.probeMu.Unlock()
+	m.substoreSmokeFunc = fn
+}
+
+func (m *Manager) getSubStoreSmokeFunc() func(ctx context.Context) error {
+	m.probeMu.RLock()
+	defer m.probeMu.RUnlock()
+	return m.substoreSmokeFunc
+}
+
+// SetOnNodeAdded 注册新部署线路机的热上线回调（写入 Scheduler 与触发五维同步）。
+func (m *Manager) SetOnNodeAdded(fn func(node config.MonitoredNode)) {
+	m.hubMu.Lock()
+	defer m.hubMu.Unlock()
+	m.onNodeAdded = fn
+}
+
+// SetOnURLUpdated 注册换端口后的热更新回调。
+func (m *Manager) SetOnURLUpdated(fn func(oldURL, newURL string)) {
+	if m.healer != nil {
+		m.healer.SetOnURLUpdated(fn)
+	}
 }
 
 // SetProbeFunc 注入沙箱冒烟测试函数
@@ -83,10 +112,18 @@ func (m *Manager) getProbeFunc() NodeProbeFunc {
 // SetVPSHubConfig 设置 VPS Hub 访问参数 (线程安全，支持动态热修改与单测注入)
 func (m *Manager) SetVPSHubConfig(url, user, pass string) {
 	m.hubMu.Lock()
-	defer m.hubMu.Unlock()
 	m.vpsHubURL = url
 	m.vpsHubUser = user
 	m.vpsHubPass = pass
+	m.hubMu.Unlock()
+
+	if url != "" && m.detector != nil {
+		hubClient := NewHubClient(url, user, pass)
+		m.detector.SetHubClient(hubClient)
+		m.detector.SetHubExecutor(func(ctx context.Context, instanceID, cmd string, timeout time.Duration) (string, error) {
+			return hubClient.Exec(ctx, instanceID, cmd, timeout)
+		})
+	}
 }
 
 func (m *Manager) getVPSHubConfig() (string, string, string) {
@@ -178,23 +215,29 @@ func (m *Manager) refreshFromVPSHub() {
 	if hubURL == "" {
 		return
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 12 * time.Second}
 	defer client.CloseIdleConnections()
 
 	// 1. 登录 VPS Hub 获取 Token
-	loginBody := strings.NewReader(fmt.Sprintf(`{"username":"%s","password":"%s"}`, hubUser, hubPass))
-	req, err := http.NewRequest("POST", hubURL+"/api/auth/login", loginBody)
+	loginPayload, _ := json.Marshal(map[string]string{
+		"username": hubUser,
+		"password": hubPass,
+	})
+	req, err := http.NewRequest("POST", strings.TrimRight(hubURL, "/")+"/api/auth/login", strings.NewReader(string(loginPayload)))
 	if err != nil {
+		logger.Warnf("[VPS-HUB] Build login request failed: %v", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
+		logger.Warnf("[VPS-HUB] Login failed (%s): %v", hubURL, err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		logger.Warnf("[VPS-HUB] Login returned HTTP %d", resp.StatusCode)
 		return
 	}
 
@@ -202,11 +245,12 @@ func (m *Manager) refreshFromVPSHub() {
 		Token string `json:"token"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&loginRes); err != nil || loginRes.Token == "" {
+		logger.Warnf("[VPS-HUB] Login decode empty token: %v", err)
 		return
 	}
 
 	// 2. 拉取实例列表
-	instReq, err := http.NewRequest("GET", hubURL+"/api/instances", nil)
+	instReq, err := http.NewRequest("GET", strings.TrimRight(hubURL, "/")+"/api/instances", nil)
 	if err != nil {
 		return
 	}
@@ -214,10 +258,12 @@ func (m *Manager) refreshFromVPSHub() {
 
 	instResp, err := client.Do(instReq)
 	if err != nil {
+		logger.Warnf("[VPS-HUB] Fetch /api/instances failed: %v", err)
 		return
 	}
 	defer instResp.Body.Close()
 	if instResp.StatusCode != http.StatusOK {
+		logger.Warnf("[VPS-HUB] Fetch /api/instances HTTP %d", instResp.StatusCode)
 		return
 	}
 
@@ -234,6 +280,8 @@ func (m *Manager) refreshFromVPSHub() {
 			Status       string `json:"status"`
 			Region       string `json:"region"`
 			Category     string `json:"category"`
+			PortLimit    int    `json:"port_limit"`
+			PortCount    int    `json:"port_count"`
 		} `json:"instances"`
 	}
 	if err := json.NewDecoder(instResp.Body).Decode(&hubData); err != nil {
@@ -264,26 +312,34 @@ func (m *Manager) refreshFromVPSHub() {
 		}
 
 		// 更新或追加 (采用 Copy-on-Write 替换指针，避免与其他并发读取的 Goroutine 发生 Data Race)
+		// 只要实例来自 VPS Hub（:3338），全部统一设为 hub 执行模式，vpn-probe 无需持有任何主机 SSH 密码。
 		var updated bool
 		for idx, inst := range m.instances {
-			if inst.ID == hi.ID || inst.IP == hi.IP {
+			if (hi.ID != "" && inst.ID == hi.ID) || (hi.IP != "" && inst.IP == hi.IP) {
 				updatedInst := *inst
+				if hi.ID != "" {
+					updatedInst.ID = hi.ID
+				}
 				updatedInst.Name = hi.Name
 				updatedInst.SSHPort = sshPort
 				updatedInst.SSHUser = sshUser
 				if pass != "" {
 					updatedInst.SSHPassword = pass
 				}
+				updatedInst.ProviderID = hi.ProviderID
 				updatedInst.Status = hi.Status
 				updatedInst.Region = hi.Region
+				updatedInst.Category = hi.Category
+				updatedInst.PortLimit = hi.PortLimit
+				updatedInst.PortCount = hi.PortCount
 				updatedInst.IsNAT = hi.ProviderID == "lazycat"
-				updatedInst.ExecMode = execModeFor(hi.ProviderID, sshPort)
+				updatedInst.ExecMode = "hub"
 				m.instances[idx] = &updatedInst
 				updated = true
 				break
 			}
 		}
-		if !updated && hi.IP != "" && (pass != "" || hi.ProviderID == "lazycat") {
+		if !updated && hi.IP != "" && hi.ID != "" {
 			m.instances = append(m.instances, &VPSInstance{
 				ID:          hi.ID,
 				Name:        hi.Name,
@@ -293,9 +349,12 @@ func (m *Manager) refreshFromVPSHub() {
 				SSHPassword: pass,
 				ProviderID:  hi.ProviderID,
 				IsNAT:       hi.ProviderID == "lazycat",
-				ExecMode:    execModeFor(hi.ProviderID, sshPort),
+				ExecMode:    "hub",
 				Status:      hi.Status,
 				Region:      hi.Region,
+				Category:    hi.Category,
+				PortLimit:   hi.PortLimit,
+				PortCount:   hi.PortCount,
 			})
 		}
 	}
@@ -332,12 +391,15 @@ func (m *Manager) RefreshVPSInstancesAsync() {
 	}()
 }
 
-// RefreshVPSInstances 同步执行有界超时(<=6s) VPS 状态探查并更新缓存
+// RefreshVPSInstances 同步执行有界超时(<=25s) VPS 状态探查并更新缓存
 func (m *Manager) RefreshVPSInstances(ctx context.Context) []*SoftwareInfo {
+	if hubURL, _, _ := m.getVPSHubConfig(); hubURL != "" {
+		m.refreshFromVPSHub()
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	boundedCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	boundedCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	return m.inspectAndCacheVPS(boundedCtx)
 }
@@ -385,6 +447,16 @@ func cloneSoftwareInfos(in []*SoftwareInfo) []*SoftwareInfo {
 		c := *item
 		if item.ActivePorts != nil {
 			c.ActivePorts = append([]int(nil), item.ActivePorts...)
+		}
+		if item.ManagedApps != nil {
+			c.ManagedApps = make([]*ManagedAppInfo, len(item.ManagedApps))
+			for j, app := range item.ManagedApps {
+				if app == nil {
+					continue
+				}
+				ac := *app
+				c.ManagedApps[j] = &ac
+			}
 		}
 		out[i] = &c
 	}
@@ -474,7 +546,7 @@ func generateShortID() string {
 	return hex.EncodeToString(b)
 }
 
-// InstallSoftware 在指定 VPS 上全自动一键部署 sing-box 或 3x-ui（动态生成 UUID、ShortID 与 Reality 密钥对）
+// InstallSoftware 在指定 VPS 上全自动一键部署 sing-box 或 3x-ui（懒猫云 NAT 机走 :3338 原生部署，普通主机支持 Docker/原生自动适配）
 func (m *Manager) InstallSoftware(ctx context.Context, vpsID string, software string) (string, error) {
 	inst := m.findInstance(vpsID)
 	if inst == nil {
@@ -482,11 +554,39 @@ func (m *Manager) InstallSoftware(ctx context.Context, vpsID string, software st
 	}
 
 	if software == "" || software == "sing-box" {
+		if NeedsHub(inst) {
+			res, err := m.DeployVLESS(ctx, &DeployVLESSRequest{VPSID: inst.ID})
+			if err != nil {
+				return "", err
+			}
+			return res.Message, nil
+		}
+		// 非懒猫云普通主机：兼容原有 Docker / 无 Docker 原生回退逻辑
 		newUUID := generateRandomUUID()
 		newSID := generateShortID()
 		installPort := 36564
 		if inst.IsNAT && len(inst.NATPorts) > 0 {
 			installPort = inst.NATPorts[0]
+		}
+		if envOut, envErr := m.detector.RunSSH(inst, "command -v docker >/dev/null 2>&1 && echo HAS_DOCKER || echo NO_DOCKER; uname -m"); envErr == nil && strings.Contains(envOut, "NO_DOCKER") {
+			arch := "x86_64"
+			if strings.Contains(envOut, "aarch64") || strings.Contains(envOut, "arm64") {
+				arch = "aarch64"
+			}
+			nativeCmd, buildErr := buildNativeSingBoxInstallCmd(installPort, newUUID, newSID, defaultRealitySNI, arch)
+			if buildErr != nil {
+				return "", buildErr
+			}
+			out, err := m.detector.RunSSH(inst, nativeCmd)
+			if err != nil {
+				return out, fmt.Errorf("install native sing-box failed: %w", err)
+			}
+			if pubKey := extractOutputKV(out, "PUBLIC_KEY"); pubKey != "" {
+				nodeName := BuildSafeTransitNodeName(inst)
+				vlessURL := buildVLESSLink(newUUID, inst.IP, installPort, defaultRealitySNI, pubKey, newSID, nodeName)
+				m.onboardDeployedTransitNode(ctx, nodeName, &DeployVLESSResponse{VPSID: inst.ID, IP: inst.IP, NodeName: nodeName, ListenPort: installPort, PublicPort: installPort, VLESSURL: vlessURL})
+			}
+			return fmt.Sprintf("Successfully installed native sing-box VLESS Reality on %s (port %d)\n%s", inst.IP, installPort, strings.TrimSpace(out)), nil
 		}
 		installCmd := fmt.Sprintf(`
 command -v docker >/dev/null 2>&1 || curl -fsSL https://get.docker.com | sh
@@ -552,14 +652,53 @@ echo "PUBLIC_KEY=${PUB_KEY}"
 	return "", fmt.Errorf("unsupported software '%s'", software)
 }
 
-// UpdateSoftware 升级指定 VPS 上的代理软件至最新版本或镜像并平滑重启（Docker 模式下执行容器重建事务，Native 模式下触发脚本更新）
+// resolveTargetSoftInfo 当同主机存在多个共存组件（如 23712 上同时有 sing-box、3x-ui、sub-store）时，
+// 按指定的 software / containerName 定位目标组件并返回独立 SoftInfo 视图。
+func resolveTargetSoftInfo(softInfo *SoftwareInfo, software, containerName string) *SoftwareInfo {
+	if softInfo == nil {
+		return nil
+	}
+	sw := strings.ToLower(strings.TrimSpace(software))
+	cn := strings.TrimSpace(containerName)
+	if sw == "" && cn == "" {
+		return softInfo
+	}
+	for _, app := range softInfo.ManagedApps {
+		if app == nil {
+			continue
+		}
+		if (cn != "" && app.ContainerName == cn) || (sw != "" && strings.EqualFold(app.AppType, sw)) {
+			focused := *softInfo
+			focused.SoftwareType = app.AppType
+			focused.DeployMode = app.DeployMode
+			focused.ContainerName = app.ContainerName
+			focused.ConfigPath = app.ConfigPath
+			focused.CurrentVersion = app.CurrentVersion
+			focused.LatestVersion = app.LatestVersion
+			focused.HasUpdate = app.HasUpdate
+			if app.Status != "" {
+				focused.Status = app.Status
+			}
+			return &focused
+		}
+	}
+	return softInfo
+}
+
+// UpdateSoftware 升级指定 VPS 主软件至最新版本或镜像并平滑重启
 func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, error) {
+	return m.UpdateTargetSoftware(ctx, vpsID, "", "")
+}
+
+// UpdateTargetSoftware 升级指定 VPS 上某个具体组件（sing-box / 3x-ui / xray / sub-store）
+func (m *Manager) UpdateTargetSoftware(ctx context.Context, vpsID, software, containerName string) (string, error) {
 	inst := m.findInstance(vpsID)
 	if inst == nil {
 		return "", fmt.Errorf("VPS instance '%s' not found", vpsID)
 	}
 
-	softInfo := m.detector.InspectVPS(ctx, inst)
+	baseInfo := m.detector.InspectVPS(ctx, inst)
+	softInfo := resolveTargetSoftInfo(baseInfo, software, containerName)
 	if softInfo == nil || softInfo.SoftwareType == "none" || softInfo.Status == "not_installed" {
 		return "", fmt.Errorf("instance %s does not have manageable proxy software installed", inst.IP)
 	}
@@ -568,14 +707,33 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 	if softInfo.DeployMode == "docker" {
 		cName := softInfo.ContainerName
 		if cName == "" {
-			if softInfo.SoftwareType == "3x-ui" {
+			switch softInfo.SoftwareType {
+			case "3x-ui":
 				cName = "3x-ui"
-			} else {
+			case "sub-store":
+				cName = "sub-store"
+			default:
 				cName = "sb-mgr"
 			}
 		}
 
-		if softInfo.SoftwareType == "3x-ui" {
+		if softInfo.SoftwareType == "sub-store" {
+			updateCmd = fmt.Sprintf(`set -e
+COMPOSE_FILE=$(docker inspect %s --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' 2>/dev/null || true)
+COMPOSE_SVC=$(docker inspect %s --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
+if [ -n "$COMPOSE_FILE" ] && [ -f "$COMPOSE_FILE" ] && [ -n "$COMPOSE_SVC" ]; then
+  docker compose -f "$COMPOSE_FILE" pull "$COMPOSE_SVC" && docker compose -f "$COMPOSE_FILE" up -d "$COMPOSE_SVC"
+else
+  BIND_FLAGS=$(docker inspect %s --format '{{range .Mounts}}{{if eq .Type "bind"}} -v {{.Source}}:{{.Destination}}{{end}}{{end}}' 2>/dev/null || true)
+  PORT_FLAGS=$(docker inspect %s --format '{{range $p, $conf := .HostConfig.PortBindings}}{{if $conf}} -p {{(index $conf 0).HostPort}}:{{$p}}{{end}}{{end}}' 2>/dev/null || true)
+  NET_MODE=$(docker inspect %s --format '{{.HostConfig.NetworkMode}}' 2>/dev/null || echo "bridge")
+  NET_FLAG="--network=${NET_MODE}"
+  docker pull xream/sub-store:latest && docker rm -f %s-old 2>/dev/null || true
+  docker rename %s %s-old && docker stop %s-old
+  (docker run -d --name %s --restart always ${NET_FLAG} ${PORT_FLAGS} ${BIND_FLAGS} xream/sub-store:latest || (docker rm -f %s 2>/dev/null; docker rename %s-old %s; docker start %s; exit 1))
+  docker rm -f %s-old 2>/dev/null || true
+fi`, cName, cName, cName, cName, cName, cName, cName, cName, cName, cName, cName, cName, cName, cName, cName)
+		} else if softInfo.SoftwareType == "3x-ui" {
 			cfgDir := "/etc/x-ui"
 			if softInfo.ConfigPath != "" {
 				cfgDir = path.Dir(softInfo.ConfigPath)
@@ -621,9 +779,17 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 		}
 	} else if softInfo.DeployMode == "native" {
 		if softInfo.SoftwareType == "sing-box" {
-			updateCmd = "bash -c \"$(curl -fsSL https://sing-box.app/deb-install.sh)\" 2>/dev/null || " +
+			updateCmd = "if command -v rc-service >/dev/null 2>&1; then " +
+				"ARCH=$(uname -m); DL_ARCH=amd64; [ \"$ARCH\" = \"aarch64\" ] && DL_ARCH=arm64; " +
+				"VER=$(wget -qO- https://api.github.com/repos/SagerNet/sing-box/releases/latest | sed -n 's/.*\"tag_name\": *\"v\\([^\"]*\\)\".*/\\1/p' | head -n1); " +
+				"[ -n \"$VER\" ] || VER=1.11.15; " +
+				"rm -rf /tmp/sb-upd && mkdir -p /tmp/sb-upd && wget -q -O /tmp/sb-upd/sb.tar.gz \"https://github.com/SagerNet/sing-box/releases/download/v${VER}/sing-box-${VER}-linux-${DL_ARCH}.tar.gz\" && " +
+				"tar -xzf /tmp/sb-upd/sb.tar.gz -C /tmp/sb-upd && cp \"$(find /tmp/sb-upd -type f -name sing-box | head -n1)\" /usr/local/bin/sing-box && chmod +x /usr/local/bin/sing-box && rm -rf /tmp/sb-upd && " +
+				"rc-service sing-box restart; " +
+				"else " +
+				"bash -c \"$(curl -fsSL https://sing-box.app/deb-install.sh)\" 2>/dev/null || " +
 				"bash -c \"$(curl -fsSL https://raw.githubusercontent.com/SagerNet/sing-box/main/install.sh)\" 2>/dev/null; " +
-				"systemctl restart sing-box 2>/dev/null || service sing-box restart 2>/dev/null"
+				"systemctl restart sing-box 2>/dev/null || service sing-box restart 2>/dev/null; fi"
 		} else if softInfo.SoftwareType == "3x-ui" {
 			updateCmd = "x-ui update 2>/dev/null || bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) 2>/dev/null; " +
 				"systemctl restart x-ui 2>/dev/null || service x-ui restart 2>/dev/null"
@@ -646,33 +812,46 @@ func (m *Manager) UpdateSoftware(ctx context.Context, vpsID string) (string, err
 }
 
 // CreateBackup 为指定 VPS 创建配置快照
-func (m *Manager) CreateBackup(ctx context.Context, vpsID string) (*BackupSnapshot, error) {
+func (m *Manager) CreateBackup(ctx context.Context, vpsID string, target ...string) (*BackupSnapshot, error) {
 	inst := m.findInstance(vpsID)
 	if inst == nil {
 		return nil, fmt.Errorf("VPS instance '%s' not found", vpsID)
 	}
-	softInfo := m.detector.InspectVPS(ctx, inst)
+	sw, cn := extractTargetArgs(target)
+	softInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), sw, cn)
 	return m.backupMgr.CreateBackup(inst, softInfo)
 }
 
 // ListBackups 列出指定 VPS 当前所有历史快照
-func (m *Manager) ListBackups(ctx context.Context, vpsID string) ([]*BackupSnapshot, error) {
+func (m *Manager) ListBackups(ctx context.Context, vpsID string, target ...string) ([]*BackupSnapshot, error) {
 	inst := m.findInstance(vpsID)
 	if inst == nil {
 		return nil, fmt.Errorf("VPS instance '%s' not found", vpsID)
 	}
-	softInfo := m.detector.InspectVPS(ctx, inst)
+	sw, cn := extractTargetArgs(target)
+	softInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), sw, cn)
 	return m.backupMgr.ListBackups(inst, softInfo)
 }
 
 // RestoreBackup 从指定快照还原配置
-func (m *Manager) RestoreBackup(ctx context.Context, vpsID string, snapshotID string) error {
+func (m *Manager) RestoreBackup(ctx context.Context, vpsID string, snapshotID string, target ...string) error {
 	inst := m.findInstance(vpsID)
 	if inst == nil {
 		return fmt.Errorf("VPS instance '%s' not found", vpsID)
 	}
-	softInfo := m.detector.InspectVPS(ctx, inst)
+	sw, cn := extractTargetArgs(target)
+	softInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), sw, cn)
 	return m.backupMgr.RestoreBackup(inst, softInfo, snapshotID)
+}
+
+func extractTargetArgs(args []string) (software, container string) {
+	if len(args) > 0 {
+		software = args[0]
+	}
+	if len(args) > 1 {
+		container = args[1]
+	}
+	return software, container
 }
 
 // PerformLifecycleAction 处理容器或服务的生命周期操作 (start, stop, restart, backup)
@@ -686,7 +865,7 @@ func (m *Manager) PerformLifecycleAction(ctx context.Context, req *LifecycleActi
 		return "", fmt.Errorf("VPS instance '%s' not found", req.VPSID)
 	}
 
-	softInfo := m.detector.InspectVPS(ctx, inst)
+	softInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), req.Software, req.ContainerName)
 	action := strings.ToLower(strings.TrimSpace(req.Action))
 
 	switch action {
@@ -704,13 +883,16 @@ func (m *Manager) PerformLifecycleAction(ctx context.Context, req *LifecycleActi
 			if svc == "3x-ui" {
 				svc = "x-ui"
 			}
-			cmd = fmt.Sprintf("systemctl %s %s 2>/dev/null || service %s %s 2>/dev/null", action, svc, svc, action)
+			cmd = fmt.Sprintf("rc-service %s %s 2>/dev/null || systemctl %s %s 2>/dev/null || service %s %s 2>/dev/null", svc, action, action, svc, svc, action)
 		} else {
 			cName := softInfo.ContainerName
 			if cName == "" {
-				if softInfo.SoftwareType == "3x-ui" {
+				switch softInfo.SoftwareType {
+				case "3x-ui":
 					cName = "3x-ui"
-				} else {
+				case "sub-store":
+					cName = "sub-store"
+				default:
 					cName = "sb-mgr"
 				}
 			}
@@ -728,7 +910,7 @@ func (m *Manager) PerformLifecycleAction(ctx context.Context, req *LifecycleActi
 	}
 }
 
-// PerformSafeUpgrade 安全升级：升级前自动创建配置快照，升级后执行真实出网冒烟测试，若冒烟失败则原子回滚！
+// PerformSafeUpgrade 安全升级：升级前自动创建配置快照，升级后执行真实出网/Sub-Store冒烟测试，若冒烟失败则原子回滚！
 func (m *Manager) PerformSafeUpgrade(ctx context.Context, req *SafeUpgradeRequest) (*SafeUpgradeResponse, error) {
 	if req == nil || req.VPSID == "" {
 		return nil, fmt.Errorf("vps_id is required")
@@ -739,7 +921,7 @@ func (m *Manager) PerformSafeUpgrade(ctx context.Context, req *SafeUpgradeReques
 		return nil, fmt.Errorf("VPS instance '%s' not found", req.VPSID)
 	}
 
-	softInfo := m.detector.InspectVPS(ctx, inst)
+	softInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), req.Software, req.ContainerName)
 	prevVer := softInfo.CurrentVersion
 
 	resp := &SafeUpgradeResponse{
@@ -758,7 +940,7 @@ func (m *Manager) PerformSafeUpgrade(ctx context.Context, req *SafeUpgradeReques
 	}
 
 	// 2. 执行升级更新
-	msg, updateErr := m.UpdateSoftware(ctx, req.VPSID)
+	msg, updateErr := m.UpdateTargetSoftware(ctx, req.VPSID, req.Software, req.ContainerName)
 	if updateErr != nil {
 		resp.Success = false
 		resp.Message = fmt.Sprintf("Update command failed: %v (output: %s)", updateErr, msg)
@@ -766,10 +948,43 @@ func (m *Manager) PerformSafeUpgrade(ctx context.Context, req *SafeUpgradeReques
 	}
 
 	// 3. 升级后重新探查版本
-	postInfo := m.detector.InspectVPS(ctx, inst)
+	postInfo := resolveTargetSoftInfo(m.detector.InspectVPS(ctx, inst), req.Software, req.ContainerName)
 	resp.CurrentVersion = postInfo.CurrentVersion
 
-	// 4. 执行出网冒烟测试 (Smoke Test)
+	// 4. 执行冒烟测试 (Sub-Store 校验 API 可用性；代理组件校验真实出网)
+	if softInfo.SoftwareType == "sub-store" {
+		if ssSmoke := m.getSubStoreSmokeFunc(); ssSmoke != nil {
+			start := time.Now()
+			ssErr := ssSmoke(ctx)
+			smoke := &SmokeTestResult{
+				Success:   ssErr == nil,
+				LatencyMs: time.Since(start).Milliseconds(),
+				TestedAt:  time.Now().Format("2006-01-02 15:04:05"),
+				ExitIP:    "Sub-Store API",
+			}
+			if ssErr != nil {
+				smoke.Error = ssErr.Error()
+			}
+			resp.SmokeTest = smoke
+			if !smoke.Success {
+				resp.Success = false
+				if snap != nil {
+					if rbErr := m.backupMgr.RestoreBackup(inst, softInfo, snap.ID); rbErr == nil {
+						resp.RolledBack = true
+						resp.RollbackReason = fmt.Sprintf("Sub-Store smoke check failed (%s), rolled back to %s", smoke.Error, snap.FileName)
+					} else {
+						resp.RollbackReason = fmt.Sprintf("Sub-Store smoke check failed (%s), rollback failed: %v", smoke.Error, rbErr)
+					}
+				}
+				resp.Message = resp.RollbackReason
+				return resp, nil
+			}
+		}
+		resp.Success = true
+		resp.Message = fmt.Sprintf("Successfully upgraded Sub-Store on %s (%s -> %s)", inst.IP, prevVer, resp.CurrentVersion)
+		return resp, nil
+	}
+
 	probeFn := m.getProbeFunc()
 	nodeTarget := req.NodeName
 	if nodeTarget == "" {

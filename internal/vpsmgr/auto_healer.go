@@ -23,6 +23,7 @@ type AutoHealer struct {
 	substoreClient *substore.Client
 	configPath     string
 	selfSubName    string
+	onURLUpdated   func(oldURL, newURL string)
 }
 
 func NewAutoHealer(d *Detector, sc *substore.Client, configPath string) *AutoHealer {
@@ -31,6 +32,11 @@ func NewAutoHealer(d *Detector, sc *substore.Client, configPath string) *AutoHea
 		substoreClient: sc,
 		configPath:     configPath,
 	}
+}
+
+// SetOnURLUpdated 注册节点 URL 热更新回调（同步通知 Scheduler 更新内存状态）。
+func (h *AutoHealer) SetOnURLUpdated(fn func(oldURL, newURL string)) {
+	h.onURLUpdated = fn
 }
 
 // SetSelfSubName 配置主自建订阅名称（避免硬编码遗留名称）
@@ -346,29 +352,33 @@ func (h *AutoHealer) ExecutePortHeal(ctx context.Context, inst *VPSInstance, nod
 	newURL := u.String()
 	resp.NewURL = newURL
 
-	// 3. 同步回写 SubStore 订阅
-	if h.substoreClient != nil {
-		syncErr := h.updateSubStoreSubscription(ctx, oldPort, newPort, targetURL, newURL)
-		if syncErr == nil {
-			resp.SubStoreSync = true
-		} else {
-			logger.Warnf("[AUTO-HEAL] SubStore sync warning: %v", syncErr)
-		}
-	}
-
-	// 4. 同步更新本地 config.yaml
-	if h.configPath != "" {
-		if err := h.updateLocalConfigYAML(targetURL, newURL); err == nil {
-			resp.ConfigSync = true
-		} else {
-			logger.Warnf("[AUTO-HEAL] Local config.yaml update warning: %v", err)
-		}
-	}
+	// 3. 同步回写 SubStore、本地 config.yaml 与内存调度器
+	h.syncHealedNodeURL(ctx, oldPort, newPort, targetURL, newURL, resp)
 
 	resp.Success = true
 	resp.Message = fmt.Sprintf("Successfully healed port %d -> %d on %s", oldPort, newPort, inst.IP)
 	logger.Infof("[AUTO-HEAL] %s", resp.Message)
 	return resp, nil
+}
+
+func (h *AutoHealer) syncHealedNodeURL(ctx context.Context, oldPort, newPort int, oldURL, newURL string, resp *PortHealResponse) {
+	if h.substoreClient != nil {
+		if syncErr := h.updateSubStoreSubscription(ctx, oldPort, newPort, oldURL, newURL); syncErr == nil {
+			resp.SubStoreSync = true
+		} else {
+			logger.Warnf("[AUTO-HEAL] SubStore sync warning: %v", syncErr)
+		}
+	}
+	if h.configPath != "" {
+		if err := h.updateLocalConfigYAML(oldURL, newURL); err == nil {
+			resp.ConfigSync = true
+		} else {
+			logger.Warnf("[AUTO-HEAL] Local config.yaml update warning: %v", err)
+		}
+	}
+	if h.onURLUpdated != nil {
+		h.onURLUpdated(oldURL, newURL)
+	}
 }
 
 // updateSubStoreSubscription 将换端口后的新节点同步至 SubStore 主订阅
@@ -611,18 +621,104 @@ func atomicWriteFile(filename string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// UpsertLocalConfigNode 将新部署或更新的线路机节点安全写入 config.yaml 的 monitor.nodes。
+func (h *AutoHealer) UpsertLocalConfigNode(name, nodeURL string) error {
+	if h.configPath == "" || strings.TrimSpace(nodeURL) == "" {
+		return nil
+	}
+	data, err := os.ReadFile(h.configPath)
+	if err != nil {
+		return fmt.Errorf("read config file: %w", err)
+	}
+
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("unmarshal yaml: %w", err)
+	}
+	if doc == nil {
+		doc = make(map[string]any)
+	}
+	monMap, ok := doc["monitor"].(map[string]any)
+	if !ok || monMap == nil {
+		monMap = make(map[string]any)
+		doc["monitor"] = monMap
+	}
+
+	var existing []any
+	if rawNodes, ok := monMap["nodes"].([]any); ok {
+		existing = rawNodes
+	}
+
+	var replaced bool
+	newHost, _, _ := parseHostPortFromURL(nodeURL)
+	for idx, item := range existing {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		itemName, _ := m["name"].(string)
+		itemURL, _ := m["url"].(string)
+		itemHost, _, _ := parseHostPortFromURL(itemURL)
+		if (name != "" && itemName == name) || (newHost != "" && itemHost == newHost) {
+			m["name"] = name
+			m["url"] = nodeURL
+			m["is_self"] = true
+			existing[idx] = m
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		existing = append(existing, map[string]any{
+			"name":    name,
+			"url":     nodeURL,
+			"is_self": true,
+		})
+	}
+	monMap["nodes"] = existing
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("marshal yaml: %w", err)
+	}
+	bakPath := fmt.Sprintf("%s.bak", h.configPath)
+	_ = os.WriteFile(bakPath, data, 0600)
+	return atomicWriteFile(h.configPath, out, 0644)
+}
+
+func parseHostPortFromURL(raw string) (string, int, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", 0, false
+	}
+	p, _ := strconv.Atoi(u.Port())
+	return u.Hostname(), p, true
+}
+
 // healNATPublicPort 通过 :3338 控制面重发布 NAT 公网端口。
-// 私网端口与宿机进程保持不变，仅切换公网映射；失败由 RepublishNATPort 内部回滚。
-func (h *AutoHealer) healNATPublicPort(ctx context.Context, inst *VPSInstance, nodeName, targetURL string, oldPort int, resp *PortHealResponse) (*PortHealResponse, error) {
-	newPub, newID, err := h.detector.RepublishNATPortViaHub(ctx, inst.ID, oldPort, oldPort, "vless-heal")
+// 私网端口与宿机进程保持不变，仅切换公网映射；失败由 RepublishNATPort 内部回滚，并同步回写 SubStore 与 config.yaml。
+func (h *AutoHealer) healNATPublicPort(ctx context.Context, inst *VPSInstance, nodeName, targetURL string, oldPublicPort int, resp *PortHealResponse) (*PortHealResponse, error) {
+	privatePort := oldPublicPort
+	if portsResp, err := h.detector.ListLazyCatPortsViaHub(ctx, inst.ID); err == nil && portsResp != nil {
+		for _, m := range portsResp.Ports {
+			if m.PublicPort == oldPublicPort && m.PrivatePort > 0 {
+				privatePort = m.PrivatePort
+				break
+			}
+		}
+	}
+
+	newPub, newID, err := h.detector.RepublishNATPortViaHub(ctx, inst.ID, privatePort, oldPublicPort, "vless-heal")
 	if err != nil {
 		resp.Message = fmt.Sprintf("NAT 端口重发布失败: %v", err)
 		return resp, err
 	}
+	newURL := replaceURLPort(targetURL, newPub)
 	resp.NewPort = newPub
-	resp.NewURL = replaceURLPort(targetURL, newPub)
+	resp.NewURL = newURL
+	h.syncHealedNodeURL(ctx, oldPublicPort, newPub, targetURL, newURL, resp)
 	resp.Success = true
-	resp.Message = fmt.Sprintf("NAT 公网端口已切换 %d -> %d（mapping=%d，私网端口与宿机配置未改动）", oldPort, newPub, newID)
+	resp.Message = fmt.Sprintf("NAT 公网端口已切换 %d -> %d（mapping=%d，私网端口 %d 与宿机配置未改动）", oldPublicPort, newPub, newID, privatePort)
 	logger.Infof("[AUTO-HEAL] %s: %s", nodeName, resp.Message)
 	return resp, nil
 }

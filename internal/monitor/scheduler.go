@@ -1671,6 +1671,89 @@ func (s *Scheduler) InjectNodeStateForTest(key string, res *model.NodeProbeResul
 	}
 }
 
+// UpsertTransitNode 运行时热注册或更新自建线路机监控节点（并同步内存配置列表）。
+func (s *Scheduler) UpsertTransitNode(node config.MonitoredNode) {
+	if strings.TrimSpace(node.URL) == "" {
+		return
+	}
+	node.IsSelf = true
+	nodeName := strings.TrimSpace(node.Name)
+	if parsed, err := probe.ParseLink(node.URL); err == nil && parsed.Tag != "" {
+		nodeName = parsed.Tag
+	}
+	if nodeName == "" {
+		nodeName = node.URL
+	}
+	node.Name = nodeName
+	newHost, _, _ := parseEndpoint(node.URL)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	replacedCfg := false
+	for idx, n := range s.cfg.Monitor.Nodes {
+		h, _, _ := parseEndpoint(n.URL)
+		if n.Name == nodeName || (newHost != "" && h == newHost) {
+			if n.Name != nodeName {
+				delete(s.nodeStates, n.Name)
+			}
+			s.cfg.Monitor.Nodes[idx] = node
+			replacedCfg = true
+			break
+		}
+	}
+	if !replacedCfg {
+		s.cfg.Monitor.Nodes = append(s.cfg.Monitor.Nodes, node)
+	}
+
+	if st, ok := s.nodeStates[nodeName]; ok && st != nil {
+		st.Config = node
+		if st.LastResult != nil {
+			st.LastResult.Name = nodeName
+			st.LastResult.OriginalURL = node.URL
+			st.LastResult.NodeType = "transit"
+			st.LastResult.IsSelf = true
+			st.LastResult.ExitCountry = model.ResolveCountry(st.LastResult.ExitCountry, nodeName)
+		}
+	} else {
+		s.nodeStates[nodeName] = &NodeState{
+			Config: node,
+			LastResult: &model.NodeProbeResult{
+				ID:          nodeName,
+				Name:        nodeName,
+				OriginalURL: node.URL,
+				NodeType:    "transit",
+				IsSelf:      true,
+				Online:      false,
+				StatusText:  "待巡检",
+				ExitCountry: model.ResolveCountry("", nodeName),
+			},
+		}
+	}
+}
+
+// UpdateNodeURL 在端口自愈后热更新调度器内存中的节点链接。
+func (s *Scheduler) UpdateNodeURL(oldURL, newURL string) {
+	if oldURL == "" || newURL == "" || oldURL == newURL {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for idx, n := range s.cfg.Monitor.Nodes {
+		if n.URL == oldURL {
+			s.cfg.Monitor.Nodes[idx].URL = newURL
+		}
+	}
+	for _, st := range s.nodeStates {
+		if st != nil && st.Config.URL == oldURL {
+			st.Config.URL = newURL
+			if st.LastResult != nil {
+				st.LastResult.OriginalURL = newURL
+			}
+		}
+	}
+}
+
 // MatchNodeName 精确匹配节点名称，安全兼容带有国旗/emoji 前缀的变体，杜绝子串碰撞误杀
 func MatchNodeName(a, b string) bool {
 	a = strings.TrimSpace(a)

@@ -19,6 +19,8 @@ import {
   CategoriesSummary,
   BackupSnapshot,
   SafeUpgradeResponse,
+  DeployVLESSRequest,
+  DeployVLESSResponse,
   SubscriptionInspectResponse,
   VerifySubscriptionResponse,
   TopologyOverviewResponse,
@@ -288,6 +290,13 @@ export const api = {
     });
   },
 
+  async deployVLESS(payload: DeployVLESSRequest): Promise<DeployVLESSResponse> {
+    return request<DeployVLESSResponse>('/api/vps/deploy-vless', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
   async updateVPSProxy(nodeName: string): Promise<any> {
     return request('/api/vps/manage/update', {
       method: 'POST',
@@ -295,28 +304,37 @@ export const api = {
     });
   },
 
-  async performVPSLifecycle(vpsId: string, action: 'start' | 'stop' | 'restart' | 'backup'): Promise<{ status: string; message: string }> {
+  async performVPSLifecycle(
+    vpsId: string,
+    action: 'start' | 'stop' | 'restart' | 'backup',
+    software?: string,
+    containerName?: string
+  ): Promise<{ status: string; message: string }> {
     return request<{ status: string; message: string }>('/api/vps/lifecycle', {
       method: 'POST',
-      body: JSON.stringify({ vps_id: vpsId, action }),
+      body: JSON.stringify({ vps_id: vpsId, action, software, container_name: containerName }),
     });
   },
 
-  async getVPSBackups(vpsId: string): Promise<{ status: string; total: number; backups: BackupSnapshot[] }> {
-    return request<{ status: string; total: number; backups: BackupSnapshot[] }>(`/api/vps/backups/${encodeURIComponent(vpsId)}`);
+  async getVPSBackups(vpsId: string, software?: string, containerName?: string): Promise<{ status: string; total: number; backups: BackupSnapshot[] }> {
+    const q = new URLSearchParams();
+    if (software) q.set('software', software);
+    if (containerName) q.set('container_name', containerName);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return request<{ status: string; total: number; backups: BackupSnapshot[] }>(`/api/vps/backups/${encodeURIComponent(vpsId)}${qs}`);
   },
 
-  async restoreVPSBackup(vpsId: string, snapshotId: string): Promise<{ status: string; message: string }> {
+  async restoreVPSBackup(vpsId: string, snapshotId: string, software?: string, containerName?: string): Promise<{ status: string; message: string }> {
     return request<{ status: string; message: string }>('/api/vps/restore', {
       method: 'POST',
-      body: JSON.stringify({ vps_id: vpsId, snapshot_id: snapshotId }),
+      body: JSON.stringify({ vps_id: vpsId, snapshot_id: snapshotId, software, container_name: containerName }),
     });
   },
 
-  async safeUpgradeVPS(vpsId: string, nodeName?: string): Promise<SafeUpgradeResponse> {
+  async safeUpgradeVPS(vpsId: string, nodeName?: string, software?: string, containerName?: string): Promise<SafeUpgradeResponse> {
     return request<SafeUpgradeResponse>('/api/vps/upgrade/safe', {
       method: 'POST',
-      body: JSON.stringify({ vps_id: vpsId, node_name: nodeName }),
+      body: JSON.stringify({ vps_id: vpsId, node_name: nodeName, software, container_name: containerName }),
     });
   },
 

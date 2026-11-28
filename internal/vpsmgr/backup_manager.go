@@ -35,7 +35,7 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 				activeFile = softInfo.ConfigPath
 			}
 			backupDir = path.Join(path.Dir(activeFile), "backups")
-			restartCmd = "systemctl restart sing-box 2>/dev/null || service sing-box restart 2>/dev/null"
+			restartCmd = "rc-service sing-box restart 2>/dev/null || systemctl restart sing-box 2>/dev/null || service sing-box restart 2>/dev/null"
 			return backupDir, activeFile, ".json", false, restartCmd, nil
 		} else if softInfo.SoftwareType == "xray" {
 			activeFile = "/etc/xray/config.json"
@@ -43,7 +43,7 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 				activeFile = softInfo.ConfigPath
 			}
 			backupDir = path.Join(path.Dir(activeFile), "backups")
-			restartCmd = "systemctl restart xray 2>/dev/null || service xray restart 2>/dev/null"
+			restartCmd = "rc-service xray restart 2>/dev/null || systemctl restart xray 2>/dev/null || service xray restart 2>/dev/null"
 			return backupDir, activeFile, ".json", false, restartCmd, nil
 		} else if softInfo.SoftwareType == "3x-ui" {
 			activeFile = "/etc/x-ui/x-ui.db"
@@ -51,7 +51,7 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 				activeFile = softInfo.ConfigPath
 			}
 			backupDir = path.Join(path.Dir(activeFile), "backups")
-			restartCmd = "systemctl restart x-ui 2>/dev/null || service x-ui restart 2>/dev/null"
+			restartCmd = "rc-service x-ui restart 2>/dev/null || systemctl restart x-ui 2>/dev/null || service x-ui restart 2>/dev/null"
 			return backupDir, activeFile, ".db", true, restartCmd, nil
 		}
 	}
@@ -95,9 +95,58 @@ func resolveBackupPaths(softInfo *SoftwareInfo) (backupDir, activeFile, fileExt 
 		restartCmd = fmt.Sprintf("docker restart %s", cName)
 		return backupDir, activeFile, ".json", false, restartCmd, nil
 
+	case "sub-store":
+		cName := softInfo.ContainerName
+		if cName == "" {
+			cName = "sub-store"
+		}
+		activeFile = "/opt/1panel/apps/sub-store/sub-store.json"
+		if softInfo.ConfigPath != "" {
+			activeFile = softInfo.ConfigPath
+			if !strings.HasSuffix(activeFile, ".json") {
+				activeFile = path.Join(activeFile, "sub-store.json")
+			}
+		}
+		backupDir = path.Join(path.Dir(activeFile), "backups")
+		restartCmd = fmt.Sprintf("docker restart %s", cName)
+		return backupDir, activeFile, ".json", false, restartCmd, nil
+
 	default:
 		return "", "", "", false, "", fmt.Errorf("unsupported software type for backup: %s", softInfo.SoftwareType)
 	}
+}
+
+// resolveEffectiveBackupPaths 解析备份路径，并针对 sub-store 等容器动态探测宿主机真实挂载路径
+func (bm *BackupManager) resolveEffectiveBackupPaths(inst *VPSInstance, softInfo *SoftwareInfo) (backupDir, activeFile, fileExt string, isSqlite bool, restartCmd string, err error) {
+	backupDir, activeFile, fileExt, isSqlite, restartCmd, err = resolveBackupPaths(softInfo)
+	if err != nil || softInfo == nil || inst == nil || bm.detector == nil {
+		return backupDir, activeFile, fileExt, isSqlite, restartCmd, err
+	}
+	if softInfo.SoftwareType == "sub-store" && (softInfo.ConfigPath == "" || softInfo.ConfigPath == "/opt/1panel/apps/sub-store/sub-store.json") {
+		cName := softInfo.ContainerName
+		if cName == "" {
+			cName = "sub-store"
+		}
+		probeCmd := fmt.Sprintf(
+			"for p in $(docker inspect -f '{{range .Mounts}}{{if eq .Type \"bind\"}}{{.Source}}{{\"\\n\"}}{{end}}{{end}}' %s 2>/dev/null); do "+
+				"if [ -f \"$p\" ] && echo \"$p\" | grep -q 'sub-store\\.json$'; then echo \"$p\"; break; fi; "+
+				"if [ -f \"$p/sub-store.json\" ]; then echo \"$p/sub-store.json\"; break; fi; "+
+				"if [ -f \"$p/data/sub-store.json\" ]; then echo \"$p/data/sub-store.json\"; break; fi; "+
+				"done",
+			cName,
+		)
+		if out, probeErr := bm.detector.RunSSH(inst, probeCmd); probeErr == nil {
+			for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+				cand := strings.TrimSpace(line)
+				if strings.HasPrefix(cand, "/") && strings.HasSuffix(cand, ".json") {
+					activeFile = cand
+					backupDir = path.Join(path.Dir(activeFile), "backups")
+					break
+				}
+			}
+		}
+	}
+	return backupDir, activeFile, fileExt, isSqlite, restartCmd, nil
 }
 
 // CreateBackup 为指定 VPS 上的代理软件创建轻量原子时间戳快照并滚动保留最近 3 份
@@ -106,7 +155,7 @@ func (bm *BackupManager) CreateBackup(inst *VPSInstance, softInfo *SoftwareInfo)
 		return nil, fmt.Errorf("instance or software info is nil")
 	}
 
-	backupDir, activeFile, fileExt, isSqlite, _, err := resolveBackupPaths(softInfo)
+	backupDir, activeFile, fileExt, isSqlite, _, err := bm.resolveEffectiveBackupPaths(inst, softInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +246,7 @@ func (bm *BackupManager) ListBackups(inst *VPSInstance, softInfo *SoftwareInfo) 
 		return nil, fmt.Errorf("instance or software info is nil")
 	}
 
-	backupDir, _, _, _, _, err := resolveBackupPaths(softInfo)
+	backupDir, _, _, _, _, err := bm.resolveEffectiveBackupPaths(inst, softInfo)
 	if err != nil {
 		return []*BackupSnapshot{}, nil
 	}
@@ -281,7 +330,7 @@ func (bm *BackupManager) RestoreBackup(inst *VPSInstance, softInfo *SoftwareInfo
 		return fmt.Errorf("snapshot '%s' not found on %s", snapshotID, inst.IP)
 	}
 
-	_, activeFile, _, _, restartCmd, err := resolveBackupPaths(softInfo)
+	_, activeFile, _, _, restartCmd, err := bm.resolveEffectiveBackupPaths(inst, softInfo)
 	if err != nil {
 		return err
 	}

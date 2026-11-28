@@ -18,6 +18,8 @@ type VPSInstance struct {
 	Status      string `json:"status"`
 	Region      string `json:"region"`
 	Category    string `json:"category,omitempty"` // 懒猫云分类：固定出口 | 全球家宽
+	PortLimit   int    `json:"port_limit,omitempty"`
+	PortCount   int    `json:"port_count,omitempty"`
 }
 
 // BackupSnapshot VPS 配置文件或数据库的历史快照
@@ -39,12 +41,30 @@ type SmokeTestResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// ManagedAppInfo 同主机上运行的单个受管组件详情（支持 sing-box / 3x-ui / xray / sub-store 共存）
+type ManagedAppInfo struct {
+	AppType        string `json:"app_type"` // "sing-box" | "3x-ui" | "xray" | "sub-store"
+	DeployMode     string `json:"deploy_mode"`
+	ContainerName  string `json:"container_name,omitempty"`
+	ConfigPath     string `json:"config_path,omitempty"`
+	CurrentVersion string `json:"current_version"`
+	LatestVersion  string `json:"latest_version"`
+	HasUpdate      bool   `json:"has_update"`
+	Status         string `json:"status"` // "running" | "installed_stopped" | "stopped"
+}
+
 // SoftwareInfo VPS 上运行的代理软件详情与生命周期信息
 type SoftwareInfo struct {
 	InstanceID     string            `json:"instance_id"`
 	InstanceName   string            `json:"instance_name"`
 	IP             string            `json:"ip"`
-	SoftwareType   string            `json:"software_type"` // "sing-box" | "3x-ui" | "xray" | "none"
+	ProviderID     string            `json:"provider_id,omitempty"`
+	Category       string            `json:"category,omitempty"`
+	ExecMode       string            `json:"exec_mode,omitempty"`
+	IsNAT          bool              `json:"is_nat,omitempty"`
+	PortLimit      int               `json:"port_limit,omitempty"`
+	PortCount      int               `json:"port_count,omitempty"`
+	SoftwareType   string            `json:"software_type"` // "sing-box" | "3x-ui" | "xray" | "sub-store" | "none"
 	DeployMode     string            `json:"deploy_mode"`   // "docker" | "native" | "none"
 	ContainerName  string            `json:"container_name,omitempty"`
 	ImageID        string            `json:"image_id,omitempty"`
@@ -59,6 +79,7 @@ type SoftwareInfo struct {
 	LastCheckedAt  string            `json:"last_checked_at"`
 	Backups        []*BackupSnapshot `json:"backups,omitempty"`
 	LastSmokeTest  *SmokeTestResult  `json:"last_smoke_test,omitempty"`
+	ManagedApps    []*ManagedAppInfo `json:"managed_apps,omitempty"`
 }
 
 // ReleaseInfo 上游 GitHub Release 信息
@@ -110,21 +131,26 @@ type PortHealResponse struct {
 
 // LifecycleActionRequest 容器生命周期操作请求 (start, stop, restart, backup)
 type LifecycleActionRequest struct {
-	VPSID  string `json:"vps_id"`
-	Action string `json:"action"` // "start" | "stop" | "restart" | "backup"
+	VPSID         string `json:"vps_id"`
+	Action        string `json:"action"` // "start" | "stop" | "restart" | "backup"
+	Software      string `json:"software,omitempty"`
+	ContainerName string `json:"container_name,omitempty"`
 }
 
 // LifecycleRestoreRequest 容器快照还原请求
 type LifecycleRestoreRequest struct {
-	VPSID      string `json:"vps_id"`
-	SnapshotID string `json:"snapshot_id"`
+	VPSID         string `json:"vps_id"`
+	SnapshotID    string `json:"snapshot_id"`
+	Software      string `json:"software,omitempty"`
+	ContainerName string `json:"container_name,omitempty"`
 }
 
 // SafeUpgradeRequest 安全升级请求
 type SafeUpgradeRequest struct {
-	VPSID    string `json:"vps_id"`
-	Software string `json:"software,omitempty"`
-	NodeName string `json:"node_name,omitempty"`
+	VPSID         string `json:"vps_id"`
+	Software      string `json:"software,omitempty"`
+	ContainerName string `json:"container_name,omitempty"`
+	NodeName      string `json:"node_name,omitempty"`
 }
 
 // SafeUpgradeResponse 安全升级响应
@@ -173,4 +199,32 @@ type UninstallResponse struct {
 	CleanedDirectories   []string `json:"cleaned_directories"`
 	SubStoreRemovedCount int      `json:"substore_removed_count"`
 	Message              string   `json:"message"`
+}
+
+// DeployVLESSRequest 一键部署 VLESS+Reality 线路机请求
+type DeployVLESSRequest struct {
+	VPSID      string `json:"vps_id"`
+	NodeName   string `json:"node_name,omitempty"`
+	ListenPort int    `json:"listen_port,omitempty"`
+	SNI        string `json:"sni,omitempty"`
+	SkipSmoke  bool   `json:"skip_smoke,omitempty"`
+}
+
+// DeployVLESSResponse 一键部署 VLESS+Reality 线路机响应
+type DeployVLESSResponse struct {
+	Success        bool             `json:"success"`
+	VPSID          string           `json:"vps_id"`
+	IP             string           `json:"ip"`
+	NodeName       string           `json:"node_name"`
+	ListenPort     int              `json:"listen_port"`
+	PublicPort     int              `json:"public_port"`
+	MappingID      int              `json:"mapping_id,omitempty"`
+	DeployMode     string           `json:"deploy_mode"` // "hub-native" | "ssh-docker" | "ssh-native"
+	VLESSURL       string           `json:"vless_url"`
+	SmokeTest      *SmokeTestResult `json:"smoke_test,omitempty"`
+	RetriedNAT     bool             `json:"retried_nat,omitempty"`
+	ConfigSynced   bool             `json:"config_synced"`
+	MonitorSynced  bool             `json:"monitor_synced"`
+	SubStoreSynced bool             `json:"substore_synced"`
+	Message        string           `json:"message"`
 }

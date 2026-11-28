@@ -153,4 +153,14 @@ func TestVPSAPIExtensions(t *testing.T) {
 	if !upgradeResp.Success || upgradeResp.RolledBack {
 		t.Fatalf("expected successful safe upgrade, got: %+v", upgradeResp)
 	}
+
+	// 7. handleVPSDeployVLESS 校验参数拦截与原生无 Docker 部署闭环
+	badDeployBody, _ := json.Marshal(map[string]any{"vps_id": "vps-01", "node_name": "LZ-错误命名"})
+	req = httptest.NewRequest(http.MethodPost, "/api/vps/deploy-vless", bytes.NewReader(badDeployBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-vps-token")
+	resp, err = app.Test(req, 5000)
+	if err != nil || resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for forbidden LZ- node name, got status=%d, err=%v", resp.StatusCode, err)
+	}
 }

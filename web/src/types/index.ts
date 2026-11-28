@@ -310,12 +310,31 @@ export interface SubStoreManifest {
   scripts: Record<string, any> | SubStoreScriptInfo[];
 }
 
+export interface ManagedAppInfo {
+  app_type: string;
+  deploy_mode: string;
+  container_name?: string;
+  config_path?: string;
+  current_version: string;
+  latest_version: string;
+  has_update: boolean;
+  status: string;
+}
+
 export interface SoftwareInfo {
   instance_id: string;
   instance_name: string;
   ip: string;
+  provider_id?: string;
+  category?: string;
+  exec_mode?: string;
+  is_nat?: boolean;
+  port_limit?: number;
+  port_count?: number;
   software_type: string;
   deploy_mode: string;
+  container_name?: string;
+  config_path?: string;
   current_version: string;
   latest_version: string;
   has_update: boolean;
@@ -325,6 +344,33 @@ export interface SoftwareInfo {
   last_checked_at: string;
   backups?: BackupSnapshot[];
   last_smoke_test?: SmokeTestResult;
+  managed_apps?: ManagedAppInfo[];
+}
+
+export interface DeployVLESSRequest {
+  vps_id: string;
+  node_name?: string;
+  listen_port?: number;
+  sni?: string;
+  skip_smoke?: boolean;
+}
+
+export interface DeployVLESSResponse {
+  success: boolean;
+  vps_id: string;
+  ip: string;
+  node_name: string;
+  listen_port: number;
+  public_port: number;
+  mapping_id?: number;
+  deploy_mode: string;
+  vless_url: string;
+  smoke_test?: SmokeTestResult;
+  retried_nat?: boolean;
+  config_synced: boolean;
+  monitor_synced: boolean;
+  substore_synced: boolean;
+  message: string;
 }
 
 export interface BackupSnapshot {

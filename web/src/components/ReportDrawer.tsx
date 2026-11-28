@@ -191,7 +191,15 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
     ? remoteHistory
     : (node.speed_history && node.speed_history.length > 0 ? node.speed_history : []);
 
-  const hasLatestInBase = !!(latestSpeed?.tested_at && baseHistory.some((h) => h.tested_at === latestSpeed.tested_at));
+  const hasLatestInBase = !!(
+    latestSpeed?.tested_at &&
+    baseHistory.some((h) => {
+      if (h.tested_at === latestSpeed.tested_at) return true;
+      const t1 = Date.parse(h.tested_at);
+      const t2 = Date.parse(latestSpeed.tested_at!);
+      return !Number.isNaN(t1) && !Number.isNaN(t2) && Math.abs(t1 - t2) < 2000;
+    })
+  );
   const historyList: SpeedTestHistoryItem[] =
     latestSpeedMBs > 0 && !hasLatestInBase
       ? [
@@ -209,6 +217,8 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
           ...baseHistory,
         ]
       : baseHistory;
+
+  const overviewSpeedMBs = latestSpeedMBs > 0 ? latestSpeedMBs : (historyList[0]?.speed_mb_s ?? 0);
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/40 backdrop-blur-2xs flex justify-end">
@@ -633,9 +643,9 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
                   <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl">
                     <div className="text-2xs text-slate-500 mb-1">自研 10M 吞吐</div>
                     <div className="font-mono font-bold text-sm text-blue-700">
-                      {latestSpeedMBs > 0 ? (
+                      {overviewSpeedMBs > 0 ? (
                         <span>
-                          {latestSpeedMBs.toFixed(1)}{' '}
+                          {overviewSpeedMBs.toFixed(1)}{' '}
                           <span className="text-xs font-normal text-slate-500">MB/s</span>
                         </span>
                       ) : (

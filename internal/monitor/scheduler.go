@@ -946,23 +946,27 @@ func (s *Scheduler) RunAllChecks(ctx context.Context, checkSplit bool) *model.Ba
 	}
 	chainLinks = mergeCustomChains(chainLinks)
 
-	// 4. 更新状态与持久化 (支持以 Node.Name 或 OriginalURL 精准匹配)
+	// 4. 更新状态与持久化 (支持以 Node.Name 或 OriginalURL 精准匹配，保留已有测速结果不被普通巡检覆盖)
 	s.mu.Lock()
 	for _, res := range resp.Results {
-		updated := false
+		var matched *NodeState
 		if state, ok := s.nodeStates[res.Name]; ok {
-			state.LastResult = res
-			state.LastChecked = time.Now()
-			updated = true
-		}
-		if !updated {
+			matched = state
+		} else {
 			for _, state := range s.nodeStates {
 				if state.Config.URL == res.OriginalURL {
-					state.LastResult = res
-					state.LastChecked = time.Now()
+					matched = state
 					break
 				}
 			}
+		}
+		if matched != nil {
+			if res.Speed == nil && matched.LastResult != nil && matched.LastResult.Speed != nil {
+				res.Speed = matched.LastResult.Speed
+				res.Score = speedtest.CalculateScore(res.Speed, res.LatencyMs, res.Online)
+			}
+			matched.LastResult = res
+			matched.LastChecked = time.Now()
 		}
 	}
 	s.mu.Unlock()

@@ -24,6 +24,8 @@ import {
   Terminal
 } from 'lucide-react';
 import { api } from '../api/client';
+import { ConfirmActionButton } from './ConfirmActionButton';
+import { useFeedback } from '../context/FeedbackContext';
 import type { CustomGroupDef, GroupFilter, AtomNode, PublishJob } from '../types';
 
 const blank = (isQ = false): CustomGroupDef => ({
@@ -98,6 +100,7 @@ const EXTERNAL_APP_INJECTIONS = [
 ];
 
 export const PolicyGroupStudio: React.FC = () => {
+  const { pushActivity } = useFeedback();
   const [groups, setGroups] = useState<CustomGroupDef[]>([]);
   const [atoms, setAtoms] = useState<AtomNode[]>([]);
   const [form, setForm] = useState<CustomGroupDef | null>(null);
@@ -107,6 +110,7 @@ export const PolicyGroupStudio: React.FC = () => {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<{ type: 'success' | 'info' | 'error'; text: string } | null>(null);
   const [isDirty, setIsDirty] = useState(false);
+  const [pendingPerspective, setPendingPerspective] = useState<'ashan' | 'q' | 'business' | null>(null);
 
   // 视角切换：ashan (全栈全家桶) vs Q (轻量骨干) vs business (纯自建商务)
   const [viewPerspective, setViewPerspective] = useState<'ashan' | 'q' | 'business'>('ashan');
@@ -151,13 +155,13 @@ export const PolicyGroupStudio: React.FC = () => {
   useEffect(() => { load(viewPerspective); }, [viewPerspective]);
 
   // 分轨切换（ashan vs Q vs business 物理隔离工作台）
-  const switchPerspective = async (next: 'ashan' | 'q' | 'business') => {
+  const switchPerspective = async (next: 'ashan' | 'q' | 'business', force: boolean = false) => {
     if (next === viewPerspective) return;
-    if (isDirty) {
-      if (!window.confirm(`当前工作台（${viewPerspective.toUpperCase()}）有未保存的暂存更改，切换分轨会导致未保存的内容丢失，确定切换到 ${next.toUpperCase()} 分轨吗？`)) {
-        return;
-      }
+    if (isDirty && !force) {
+      setPendingPerspective(next);
+      return;
     }
+    setPendingPerspective(null);
     setViewPerspective(next);
     setForm(null);
     setPreview(null);
@@ -200,82 +204,75 @@ export const PolicyGroupStudio: React.FC = () => {
         ? await api.updatePolicyGroup(g.name, g, viewPerspective) 
         : await api.createPolicyGroup(g, viewPerspective);
       setJob({ id: res.job_id, revision: res.revision, status: 'queued' });
-      setNotice({ type: 'success', text: `「${viewPerspective.toUpperCase()} 轨」策略组「${g.display_name}」保存成功，任务 #${res.revision} 已排队同步！` });
+      const msg = `「${viewPerspective.toUpperCase()} 轨」策略组「${g.display_name}」保存成功，任务 #${res.revision} 已排队同步！`;
+      setNotice({ type: 'success', text: msg });
+      pushActivity({ level: 'success', source: '策略编排', title: msg });
       setForm(null); setPreview(null); await load(viewPerspective);
-    } catch (e: any) { setError(e.message || '保存失败'); }
-    finally { setBusy(false); }
+    } catch (e: any) {
+      const errMsg = e.message || '保存失败';
+      setError(errMsg);
+      pushActivity({ level: 'error', source: '策略编排', title: '保存策略组失败', detail: errMsg });
+    } finally { setBusy(false); }
   };
 
   // 一键恢复官方基准组 (ashan 为 8 大组，Q 为专属纯骨干组)
   const handleResetDefaults = async () => {
-    const isQ = viewPerspective === 'q';
-    let trackLabel = 'ashan 全栈旗舰轨 8 大核心基准组（含全量家宽与骨干）';
-    if (viewPerspective === 'q') {
-      trackLabel = 'Q 极速轻量骨干轨专属基准组（天然 0 家宽纯骨干）';
-    } else if (viewPerspective === 'business') {
-      trackLabel = 'business 纯自建商务轨 8 大核心基准组（0 外部机场纯自建）';
-    }
-    if (!window.confirm(`确定将当前工作台（${viewPerspective.toUpperCase()}）的策略列表重置为官方 ${trackLabel}？\n重置仅作用于当前选中的 ${viewPerspective.toUpperCase()} 分轨，绝不影响其他分轨！检查满意后点击「保存全量策略并同步」生效。`)) {
-      return;
-    }
     setBusy(true);
     setError('');
     try {
       const res = await api.getPolicyGroupDefaults(viewPerspective);
       setGroups(res.groups || []);
       setIsDirty(true);
-      setNotice({
-        type: 'info',
-        text: `已将「${viewPerspective.toUpperCase()} 轨」策略列表重置为专属基准模板。您可以自由编辑、增删任意组，检查无误后点击「保存全量策略并同步」生效。`
-      });
+      const msg = `已将「${viewPerspective.toUpperCase()} 轨」策略列表重置为专属基准模板。请检查无误后点击「保存全量策略并同步」生效。`;
+      setNotice({ type: 'info', text: msg });
+      pushActivity({ level: 'info', source: '策略编排', title: `已重置 ${viewPerspective.toUpperCase()} 基准模板（待保存）` });
     } catch (e: any) {
       setError(`获取基准模板失败: ${e.message}`);
+      pushActivity({ level: 'error', source: '策略编排', title: '获取基准模板失败', detail: e.message });
     } finally {
       setBusy(false);
     }
   };
 
-  // 批量保存并同步所有策略组 (双轨联动同步)
+  // 批量保存并同步所有策略组 (三轨联动同步)
   const handleSaveAll = async () => {
-    if (groups.length === 0) {
-      if (!window.confirm(`当前「${viewPerspective.toUpperCase()} 轨」没有任何策略组，确认保存空策略？`)) return;
-    }
     setBusy(true);
     setError('');
     try {
       const res = await api.batchSavePolicyGroups(groups, viewPerspective);
       setJob({ id: res.job_id, revision: res.revision, status: 'queued' });
       setIsDirty(false);
-      setNotice({
-        type: 'success',
-        text: `「${viewPerspective.toUpperCase()} 轨」全量策略组已保存！发布任务 #${res.revision} 已排队，正在三轨联动编译同步至 Sub-Store。`
-      });
+      const msg = `「${viewPerspective.toUpperCase()} 轨」全量策略组已保存！发布任务 #${res.revision} 已排队，正在三轨联动编译同步至 Sub-Store。`;
+      setNotice({ type: 'success', text: msg });
+      pushActivity({ level: 'success', source: '策略编排', title: `全量策略发布排队 #${res.revision} (${viewPerspective.toUpperCase()})` });
       await load(viewPerspective);
     } catch (e: any) {
-      setError(e.message || '全量保存失败');
+      const errMsg = e.message || '全量保存失败';
+      setError(errMsg);
+      pushActivity({ level: 'error', source: '策略编排', title: '全量策略保存失败', detail: errMsg });
     } finally {
       setBusy(false);
     }
   };
 
   const remove = async (g: CustomGroupDef) => {
-    if (!window.confirm(`确定仅从「${viewPerspective.toUpperCase()} 轨」中删除策略组“${g.display_name}”？\n此操作仅作用于当前分轨，绝对不会删除或影响其他分轨！`)) return;
     if (isDirty) {
-      // 暂存模式直接在本地列表移除
       setGroups(groups.filter(x => x.name !== g.name));
+      pushActivity({ level: 'info', source: '策略编排', title: `已从暂存列表移除「${g.display_name}」` });
       return;
     }
     setBusy(true); setError('');
     try {
       const res = await api.removePolicyGroup(g.name, viewPerspective);
       setJob({ id: res.job_id, revision: res.revision, status: 'queued' });
-      setNotice({
-        type: 'info',
-        text: `已从「${viewPerspective.toUpperCase()} 轨」删除策略组“${g.display_name}”，发布任务 #${res.revision} 已排队同步！`
-      });
+      const msg = `已从「${viewPerspective.toUpperCase()} 轨」删除策略组“${g.display_name}”，发布任务 #${res.revision} 已排队同步！`;
+      setNotice({ type: 'info', text: msg });
+      pushActivity({ level: 'info', source: '策略编排', title: msg });
       await load(viewPerspective);
-    } catch (e: any) { setError(e.message || '删除失败'); }
-    finally { setBusy(false); }
+    } catch (e: any) {
+      setError(e.message || '删除失败');
+      pushActivity({ level: 'error', source: '策略编排', title: '删除策略组失败', detail: e.message });
+    } finally { setBusy(false); }
   };
 
   const doPreview = async () => {
@@ -346,15 +343,16 @@ export const PolicyGroupStudio: React.FC = () => {
 
         {/* Global Action Buttons */}
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={handleResetDefaults}
+          <ConfirmActionButton
+            onConfirm={handleResetDefaults}
+            confirmLabel={`重置 ${viewPerspective.toUpperCase()}?`}
             disabled={busy}
             className="text-xs font-semibold px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg flex items-center gap-1.5 transition border border-slate-200 shadow-2xs"
             title="一键将策略列表重置为官方 8 大基准组标准规范（默认自动测速 url-test）"
           >
             <RotateCcw size={14} className="text-slate-600" />
             <span>恢复默认核心基准组</span>
-          </button>
+          </ConfirmActionButton>
 
           <button
             onClick={() => edit()}
@@ -387,6 +385,30 @@ export const PolicyGroupStudio: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {pendingPerspective && (
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-amber-50 border border-amber-300 rounded-xl px-4 py-2.5 text-xs text-amber-950">
+          <span>
+            当前工作台（<b>{viewPerspective.toUpperCase()}</b>）有未保存更改，确认丢弃暂存修改并切换到 <b>{pendingPerspective.toUpperCase()}</b> 分轨？
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => switchPerspective(pendingPerspective, true)}
+              className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+            >
+              丢弃并切换
+            </button>
+            <button
+              type="button"
+              onClick={() => setPendingPerspective(null)}
+              className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-amber-900 hover:bg-amber-100"
+            >
+              留在当前
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 2. Target Perspective Switcher Pill (Q vs ashan vs business 独立工作台) */}
       <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
@@ -806,13 +828,14 @@ export const PolicyGroupStudio: React.FC = () => {
                   >
                     {g.enabled ? '停用' : '启用'}
                   </button>
-                  <button 
-                    onClick={() => remove(g)} 
+                  <ConfirmActionButton 
+                    onConfirm={() => remove(g)} 
+                    confirmLabel="删除?"
                     disabled={busy} 
                     className="text-xs text-rose-600 hover:text-rose-800 flex gap-1 items-center"
                   >
                     <Trash2 size={12}/>删除
-                  </button>
+                  </ConfirmActionButton>
                 </div>
               </div>
             </div>
@@ -822,13 +845,14 @@ export const PolicyGroupStudio: React.FC = () => {
         {groups.length === 0 && (
           <div className="col-span-full text-center text-xs text-slate-500 py-10 border border-dashed border-slate-300 rounded-xl space-y-3">
             <p>当前暂存策略列表为空</p>
-            <button
-              onClick={handleResetDefaults}
+            <ConfirmActionButton
+              onConfirm={handleResetDefaults}
+              confirmLabel="确定载入?"
               className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold text-xs shadow-2xs inline-flex items-center gap-1.5"
             >
               <RotateCcw size={14} />
               <span>一键载入官方 8 大基准组</span>
-            </button>
+            </ConfirmActionButton>
           </div>
         )}
       </div>

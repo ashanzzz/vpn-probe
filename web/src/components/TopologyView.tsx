@@ -15,6 +15,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { api } from '../api/client';
+import { useFeedback } from '../context/FeedbackContext';
 import type { 
   TopologyOverviewResponse, 
   TopologyTransitNode, 
@@ -29,6 +30,7 @@ interface TopologyViewProps {
 }
 
 export const TopologyView: React.FC<TopologyViewProps> = ({ onOpenReport }) => {
+  const { navigateTo, pushActivity } = useFeedback();
   const [data, setData] = useState<TopologyOverviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,13 +43,6 @@ export const TopologyView: React.FC<TopologyViewProps> = ({ onOpenReport }) => {
   const [selectedPort, setSelectedPort] = useState<number | null>(null);
   const [selectedLandingId, setSelectedLandingId] = useState<string | null>(null);
 
-  // Speedtest config modal
-  const [showSpeedConfig, setShowSpeedConfig] = useState(false);
-  const [speedURL10M, setSpeedURL10M] = useState('');
-  const [speedURL30M, setSpeedURL30M] = useState('');
-  const [savingSpeedConfig, setSavingSpeedConfig] = useState(false);
-  const [speedConfigMsg, setSpeedConfigMsg] = useState<string | null>(null);
-
   const fetchTopology = async () => {
     setLoading(true);
     setError(null);
@@ -55,39 +50,16 @@ export const TopologyView: React.FC<TopologyViewProps> = ({ onOpenReport }) => {
       const res = await api.getTopologyOverview();
       setData(res);
     } catch (err: any) {
-      setError(err.message || '获取网络拓扑数据失败');
+      const msg = err.message || '获取网络拓扑数据失败';
+      setError(msg);
+      pushActivity({ level: 'error', source: '拓扑', title: '加载四阶拓扑失败', detail: msg });
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchSpeedConfig = async () => {
-    try {
-      const res = await api.getSpeedTestConfig();
-      setSpeedURL10M(res.self_hosted_url_10m || '');
-      setSpeedURL30M(res.self_hosted_url_30m || '');
-    } catch (err) {
-      console.error('Failed to load speed config', err);
-    }
-  };
-
-  const handleSaveSpeedConfig = async () => {
-    setSavingSpeedConfig(true);
-    setSpeedConfigMsg(null);
-    try {
-      await api.setSpeedTestConfig(speedURL10M, speedURL30M);
-      setSpeedConfigMsg('自建测速配置已更新成功');
-      setTimeout(() => setSpeedConfigMsg(null), 3000);
-    } catch (err: any) {
-      setSpeedConfigMsg(`保存失败: ${err.message}`);
-    } finally {
-      setSavingSpeedConfig(false);
-    }
-  };
-
   useEffect(() => {
     fetchTopology();
-    fetchSpeedConfig();
   }, []);
 
   // Filtered NAT Relays by region (supports multi-region NAT host by filtering its port pool)
@@ -221,13 +193,15 @@ export const TopologyView: React.FC<TopologyViewProps> = ({ onOpenReport }) => {
 
           <div className="flex items-center space-x-3">
             <button
-              onClick={() => setShowSpeedConfig(true)}
+              type="button"
+              onClick={() => navigateTo('settings', 'speedtest')}
               className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
             >
               <Settings className="w-3.5 h-3.5 text-slate-500" />
-              <span>自建测速配置</span>
+              <span>配置测速源 ↗</span>
             </button>
             <button
+              type="button"
               onClick={fetchTopology}
               disabled={loading}
               className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 transition shadow-xs disabled:opacity-50"
@@ -612,83 +586,6 @@ export const TopologyView: React.FC<TopologyViewProps> = ({ onOpenReport }) => {
                 </span>
               </div>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* 4. Speedtest Configuration Modal */}
-      {showSpeedConfig && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl border border-slate-200 max-w-lg w-full p-6 shadow-xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center space-x-2">
-                <Settings className="w-5 h-5 text-blue-600" />
-                <h3 className="text-sm font-bold text-slate-900">自建文件测速源管理</h3>
-              </div>
-              <button
-                onClick={() => setShowSpeedConfig(false)}
-                className="text-slate-400 hover:text-slate-600 text-sm font-mono"
-              >
-                [关闭]
-              </button>
-            </div>
-
-            <div className="bg-amber-50 border border-amber-200 text-amber-800 text-xs p-3 rounded-xl space-y-1">
-              <div className="font-bold">铁律规范：严格禁止任何公网测速网站回退</div>
-              <div className="text-[11px] text-amber-700">
-                系统已彻底剔除 Cloudflare、Ookla、Fast 等第三方测速源。测速只允许拉取自建 VPS/NAS 的静态测试二进制文件，若端点失联将直接报错 [测速源不可达]。
-              </div>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-700 font-semibold mb-1">
-                  10MB 自建测速文件 URL (轻量常规测速):
-                </label>
-                <input
-                  type="text"
-                  value={speedURL10M}
-                  onChange={(e) => setSpeedURL10M(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                  placeholder="http://your-vps:port/speedtest-10m.bin"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-700 font-semibold mb-1">
-                  30MB 自建测速文件 URL (大吞吐流式测速):
-                </label>
-                <input
-                  type="text"
-                  value={speedURL30M}
-                  onChange={(e) => setSpeedURL30M(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                  placeholder="http://your-vps:port/speedtest-30m.bin"
-                />
-              </div>
-            </div>
-
-            {speedConfigMsg && (
-              <div className="text-xs p-2.5 rounded-lg bg-slate-100 text-slate-700 font-mono">
-                {speedConfigMsg}
-              </div>
-            )}
-
-            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
-              <button
-                onClick={() => setShowSpeedConfig(false)}
-                className="px-3.5 py-1.5 rounded-lg text-xs border border-slate-300 text-slate-600 hover:bg-slate-50 transition"
-              >
-                取消
-              </button>
-              <button
-                onClick={handleSaveSpeedConfig}
-                disabled={savingSpeedConfig}
-                className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 transition disabled:opacity-50"
-              >
-                {savingSpeedConfig ? '保存中...' : '保存自建配置'}
-              </button>
-            </div>
           </div>
         </div>
       )}

@@ -150,11 +150,22 @@ export const api = {
     return request('/api/speedtest/config');
   },
 
-  async setSpeedTestConfig(url10m: string, url30m: string): Promise<any> {
-    return request('/api/speedtest/config', {
+  async testSpeedTestConfig(url10m: string, url30m: string): Promise<{ ok: boolean; results: Array<{ slot: string; url: string; ok: boolean; status_code?: number; sampled_bytes?: number; error?: string }> }> {
+    return request('/api/speedtest/config/test', {
       method: 'POST',
       body: JSON.stringify({ self_hosted_url_10m: url10m, self_hosted_url_30m: url30m }),
     });
+  },
+
+  async setSpeedTestConfig(url10m: string, url30m: string, verify: boolean = true): Promise<any> {
+    return request('/api/speedtest/config', {
+      method: 'POST',
+      body: JSON.stringify({ self_hosted_url_10m: url10m, self_hosted_url_30m: url30m, verify }),
+    });
+  },
+
+  async getRecentLogs(source: 'runtime' | 'audit' = 'runtime', lines: number = 120): Promise<{ status: string; source: string; path: string; total?: number; lines: string[] }> {
+    return request(`/api/logs/recent?source=${encodeURIComponent(source)}&lines=${lines}`);
   },
 
   // 3.2 全局四阶网络拓扑看板

@@ -183,6 +183,12 @@ func NewAPIServer(
 
 	if cfg != nil && (cfg.SpeedTest.SelfHostedURL10M != "" || cfg.SpeedTest.SelfHostedURL30M != "") {
 		speedtest.SetSelfHostedSpeedURLs(cfg.SpeedTest.SelfHostedURL10M, cfg.SpeedTest.SelfHostedURL30M)
+	} else if u10, u30 := loadPersistedSpeedtestConfig(); u10 != "" || u30 != "" {
+		speedtest.SetSelfHostedSpeedURLsExact(u10, u30)
+		if cfg != nil {
+			cfg.SpeedTest.SelfHostedURL10M = u10
+			cfg.SpeedTest.SelfHostedURL30M = u30
+		}
 	}
 
 	server.initPublisher()
@@ -1262,23 +1268,9 @@ func (s *APIServer) setupRoutes() {
 		})
 	})
 
-	s.app.Post("/api/speedtest/config", func(c *fiber.Ctx) error {
-		var req struct {
-			SelfHostedURL10M string `json:"self_hosted_url_10m"`
-			SelfHostedURL30M string `json:"self_hosted_url_30m"`
-		}
-		if err := c.BodyParser(&req); err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
-		}
-		speedtest.SetSelfHostedSpeedURLs(req.SelfHostedURL10M, req.SelfHostedURL30M)
-		u10, u30 := speedtest.GetSelfHostedSpeedURLs()
-		return c.JSON(fiber.Map{
-			"status":              "success",
-			"self_hosted_url_10m": u10,
-			"self_hosted_url_30m": u30,
-			"message":             "自建测速端点已更新",
-		})
-	})
+	s.app.Post("/api/speedtest/config", s.handleSaveSpeedtestConfig)
+	s.app.Post("/api/speedtest/config/test", s.handleTestSpeedtestConfig)
+	s.app.Get("/api/logs/recent", s.handleGetRecentLogs)
 
 	// 5.3.2 全局四阶网络拓扑看板 API (客户端 ➔ 自建线路 ➔ 多区NAT端口 ➔ 家宽落地)
 	s.app.Get("/api/topology/overview", func(c *fiber.Ctx) error {

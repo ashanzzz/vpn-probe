@@ -18,6 +18,7 @@ import {
   FileText
 } from 'lucide-react';
 import { api } from '../api/client';
+import { useFeedback } from '../context/FeedbackContext';
 import type { 
   MonitorStatusMap, 
   NodeProbeResult, 
@@ -41,6 +42,7 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
   onOpenHealingWizard,
   isInspecting,
 }) => {
+  const { pushActivity } = useFeedback();
   // Real residential atoms & chain bindings from backend
   const [residentialAtoms, setResidentialAtoms] = useState<AtomNode[]>([]);
   const [customChains, setCustomChains] = useState<CustomChainBind[]>([]);
@@ -272,9 +274,19 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
       setNewResiURL('');
       setShowAddResiModal(false);
       await fetchResiData();
-      alert(`已成功添加家宽节点至 ${targetSubGroup}，并同步至 SubStore！`);
+      pushActivity({
+        level: 'success',
+        source: '家宽池',
+        title: `已添加家宽节点至 ${targetSubGroup}`,
+        detail: '已同步至 Sub-Store',
+      });
     } catch (err: any) {
-      alert(`添加家宽节点失败: ${err.message}`);
+      pushActivity({
+        level: 'error',
+        source: '家宽池',
+        title: '添加家宽节点失败',
+        detail: err.message,
+      });
     } finally {
       setIsSubmittingResi(false);
     }

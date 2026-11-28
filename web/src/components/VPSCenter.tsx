@@ -18,6 +18,8 @@ import {
   Play
 } from 'lucide-react';
 import { api } from '../api/client';
+import { ConfirmActionButton } from './ConfirmActionButton';
+import { useFeedback } from '../context/FeedbackContext';
 import {
   SoftwareInfo,
   BlockedAnalysisResult,
@@ -31,6 +33,7 @@ interface VPSCenterProps {
 }
 
 export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => {
+  const { pushActivity } = useFeedback();
   const [instances, setInstances] = useState<SoftwareInfo[]>([]);
   const [blockedAnalysis, setBlockedAnalysis] = useState<BlockedAnalysisResult[]>([]);
   const [loading, setLoading] = useState(true);
@@ -165,9 +168,6 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
   // 4. 从历史快照还原配置
   const handleRestore = async (snapshotId: string) => {
     if (!activeBackupVPS) return;
-    if (!window.confirm(`确定要从快照 ${snapshotId} 还原配置并平滑重启服务吗？`)) {
-      return;
-    }
     setRestoringSnapshotId(snapshotId);
     try {
       const res = await api.restoreVPSBackup(
@@ -177,10 +177,12 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
         activeBackupTarget.container_name,
       );
       setMessage({ type: 'success', text: `快照还原成功: ${res.message || 'OK'}` });
+      pushActivity({ level: 'success', source: 'VPS快照', title: `${activeBackupVPS.ip} 快照还原成功`, detail: snapshotId });
       await loadBackups(activeBackupVPS.ip, activeBackupTarget.software, activeBackupTarget.container_name);
       await fetchData();
     } catch (err: any) {
       setMessage({ type: 'error', text: `快照还原失败: ${err.message}` });
+      pushActivity({ level: 'error', source: 'VPS快照', title: `${activeBackupVPS.ip} 快照还原失败`, detail: err.message });
     } finally {
       setRestoringSnapshotId(null);
     }
@@ -957,8 +959,9 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => handleRestore(snap.id)}
+                      <ConfirmActionButton
+                        onConfirm={() => handleRestore(snap.id)}
+                        confirmLabel="确定还原?"
                         disabled={restoringSnapshotId === snap.id}
                         className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded text-amber-800 bg-amber-50 border border-amber-200 hover:bg-amber-100 disabled:opacity-50 transition shadow-2xs"
                       >
@@ -973,7 +976,7 @@ export const VPSCenter: React.FC<VPSCenterProps> = ({ onOpenHealingWizard }) => 
                             一键还原
                           </>
                         )}
-                      </button>
+                      </ConfirmActionButton>
                     </div>
                   ))}
                 </div>

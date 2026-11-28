@@ -25,6 +25,8 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { api } from '../api/client';
+import { ConfirmActionButton } from './ConfirmActionButton';
+import { useFeedback } from '../context/FeedbackContext';
 import type { 
   SubscriptionInspectResponse, 
   GroupInspectItem, 
@@ -48,6 +50,7 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
   onClose,
   onSelectSubscription
 }) => {
+  const { pushActivity } = useFeedback();
   const [currentSub, setCurrentSub] = useState<string>(subscriptionName || 'ashan');
   const [data, setData] = useState<SubscriptionInspectResponse | null>(null);
   const [verifyData, setVerifyData] = useState<VerifySubscriptionResponse | null>(null);
@@ -231,7 +234,7 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
   // Save updated nodes to custom group (preserving profile, type, order, add_to_entry, tags)
   const handleSavePickerNodes = async (group: GroupInspectItem) => {
     if (selectedNodeNames.length === 0) {
-      alert('手动模式至少需要保留或勾选 1 个节点');
+      pushActivity({ level: 'warn', source: '订阅拓扑', title: '手动模式至少需要保留或勾选 1 个节点' });
       return;
     }
     setSavingGroup(true);
@@ -253,8 +256,9 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
       await api.createPolicyGroup(def, profile);
       setPickerGroupId(null);
       await loadInspect(currentSub);
+      pushActivity({ level: 'success', source: '订阅拓扑', title: `已保存分组「${group.display_name}」节点列表` });
     } catch (err: any) {
-      alert(`保存分组节点失败: ${err.message || '未知错误'}`);
+      pushActivity({ level: 'error', source: '订阅拓扑', title: '保存分组节点失败', detail: err.message || '未知错误' });
     } finally {
       setSavingGroup(false);
     }
@@ -262,10 +266,14 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
 
   // Remove single node from group
   const handleRemoveNode = async (group: GroupInspectItem, proxyName: string) => {
-    if (!confirm(`确定从分组「${group.display_name}」中移除节点「${proxyName}」吗？`)) return;
     const remaining = group.proxies.map(p => p.name).filter(n => n !== proxyName);
     if (remaining.length === 0) {
-      alert('至少需保留 1 个节点；如需删除整个分组，请在策略编排工坊中停用或删除。');
+      pushActivity({
+        level: 'warn',
+        source: '订阅拓扑',
+        title: '至少需保留 1 个节点',
+        detail: '如需删除整个分组，请在「订阅与策略编排」中停用或删除。',
+      });
       return;
     }
     try {
@@ -285,8 +293,9 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
       };
       await api.createPolicyGroup(def, profile);
       await loadInspect(currentSub);
+      pushActivity({ level: 'info', source: '订阅拓扑', title: `已从「${group.display_name}」移除节点 ${proxyName}` });
     } catch (err: any) {
-      alert(`移除节点失败: ${err.message}`);
+      pushActivity({ level: 'error', source: '订阅拓扑', title: '移除节点失败', detail: err.message });
     }
   };
 
@@ -316,8 +325,9 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
       setTagInputGroupId(null);
       setNewTagText('');
       await loadInspect(currentSub);
+      pushActivity({ level: 'success', source: '订阅拓扑', title: `已为「${group.display_name}」添加标签 ${tagVal}` });
     } catch (err: any) {
-      alert(`保存便签失败: ${err.message || '未知错误'}`);
+      pushActivity({ level: 'error', source: '订阅拓扑', title: '保存便签失败', detail: err.message || '未知错误' });
     }
   };
 
@@ -822,13 +832,14 @@ export const SubscriptionTopologyDrawer: React.FC<SubscriptionTopologyDrawerProp
 
                                 {/* Remove button for self-hosted groups */}
                                 {!group.is_external && (
-                                  <button
-                                    onClick={() => handleRemoveNode(group, p.name)}
+                                  <ConfirmActionButton
+                                    onConfirm={() => handleRemoveNode(group, p.name)}
+                                    confirmLabel="移除?"
                                     title="从分组移除"
                                     className="p-1 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition"
                                   >
                                     <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+                                  </ConfirmActionButton>
                                 )}
                               </div>
                             ))}

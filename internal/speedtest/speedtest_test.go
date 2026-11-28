@@ -1,10 +1,44 @@
 package speedtest
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"vpn-probe/internal/model"
 )
+
+func TestValidateAndProbeSelfHostedEndpoint(t *testing.T) {
+	if err := ValidateSelfHostedURL("https://speed.cloudflare.com/__down"); err == nil {
+		t.Fatalf("expected public speedtest host to be blocked")
+	}
+	if err := ValidateSelfHostedURL("not-a-url"); err == nil {
+		t.Fatalf("expected invalid url to fail")
+	}
+
+	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("0123456789abcdef"))
+	}))
+	defer okSrv.Close()
+
+	code, n, err := ProbeSelfHostedEndpoint(context.Background(), okSrv.URL+"/10m.bin")
+	if err != nil || code != http.StatusPartialContent || n == 0 {
+		t.Fatalf("expected probe success, got code=%d n=%d err=%v", code, n, err)
+	}
+
+	authSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer authSrv.Close()
+
+	code, _, err = ProbeSelfHostedEndpoint(context.Background(), authSrv.URL+"/10m.bin")
+	if err == nil || code != http.StatusUnauthorized || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("expected HTTP 401 failure, got code=%d err=%v", code, err)
+	}
+}
 
 func TestCalculateScore(t *testing.T) {
 	res := &model.SpeedResult{

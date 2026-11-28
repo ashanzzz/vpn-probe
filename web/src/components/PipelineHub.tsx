@@ -34,6 +34,8 @@ import {
 import { api, getStoredToken } from '../api/client';
 import { PolicyGroupStudio } from './PolicyGroupStudio';
 import { SubscriptionTopologyDrawer } from './SubscriptionTopologyDrawer';
+import { ConfirmActionButton } from './ConfirmActionButton';
+import { useFeedback } from '../context/FeedbackContext';
 import type { 
   SubStoreMode,
   SubStoreModeInfo,
@@ -174,7 +176,6 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
 
   // Rebuild Full Mesh Chains
   const handleRebuildMesh = async () => {
-    if (!window.confirm('确定要全网重建网状中继链式代理池吗？')) return;
     setActionLoading('rebuild_mesh');
     try {
       const res = await api.rebuildFullMeshChains();
@@ -229,7 +230,6 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
 
   // Delete External Sub
   const handleDeleteExtSub = async (name: string) => {
-    if (!window.confirm(`确定要移除外部商业订阅【${name}】并从 SubStore 清除吗？`)) return;
     try {
       await api.deleteExternalSub(name, true);
       setNotice({ type: 'success', text: `已移除外部订阅: ${name}` });
@@ -470,13 +470,14 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
                     >
                       {sub.enabled ? '禁用' : '启用'}
                     </button>
-                    <button
-                      onClick={() => handleDeleteExtSub(sub.name)}
+                    <ConfirmActionButton
+                      onConfirm={() => handleDeleteExtSub(sub.name)}
+                      confirmLabel="确认删除?"
                       className="p-1 text-slate-400 hover:text-red-600 rounded transition"
                       title="彻底删除"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    </ConfirmActionButton>
                   </div>
                 </div>
               ))}
@@ -505,14 +506,15 @@ export const PipelineHub: React.FC<PipelineHubProps> = ({ onRefreshGlobal }) => 
           </div>
 
           <div className="flex items-center space-x-2">
-            <button
-              onClick={handleRebuildMesh}
+            <ConfirmActionButton
+              onConfirm={handleRebuildMesh}
+              confirmLabel="全网重建?"
               disabled={actionLoading === 'rebuild_mesh'}
               className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 transition shadow-2xs"
             >
               <RotateCw className={`w-3.5 h-3.5 mr-1.5 ${actionLoading === 'rebuild_mesh' ? 'animate-spin' : ''}`} />
               一键全网网状重建
-            </button>
+            </ConfirmActionButton>
             <button
               onClick={handleSyncFiveGroups}
               disabled={actionLoading === 'sync_five'}

@@ -8,7 +8,9 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,16 +33,24 @@ var (
 	customSpeedURL30M = DefaultVPS30MURL
 )
 
-// SetSelfHostedSpeedURLs 配置全局自建测速文件 URL
+// SetSelfHostedSpeedURLs 配置全局自建测速文件 URL（保留非空覆盖语义）
 func SetSelfHostedSpeedURLs(url10m, url30m string) {
 	speedURLMu.Lock()
 	defer speedURLMu.Unlock()
-	if url10m != "" {
-		customSpeedURL10M = url10m
+	if u10 := strings.TrimSpace(url10m); u10 != "" {
+		customSpeedURL10M = u10
 	}
-	if url30m != "" {
-		customSpeedURL30M = url30m
+	if u30 := strings.TrimSpace(url30m); u30 != "" {
+		customSpeedURL30M = u30
 	}
+}
+
+// SetSelfHostedSpeedURLsExact 精确设置或清空全局自建测速文件 URL
+func SetSelfHostedSpeedURLsExact(url10m, url30m string) {
+	speedURLMu.Lock()
+	defer speedURLMu.Unlock()
+	customSpeedURL10M = strings.TrimSpace(url10m)
+	customSpeedURL30M = strings.TrimSpace(url30m)
 }
 
 // GetSelfHostedSpeedURLs 获取当前全局自建测速文件 URL
@@ -48,6 +58,79 @@ func GetSelfHostedSpeedURLs() (string, string) {
 	speedURLMu.RLock()
 	defer speedURLMu.RUnlock()
 	return customSpeedURL10M, customSpeedURL30M
+}
+
+var blockedPublicSpeedDomains = []string{
+	"speedtest.net",
+	"ookla.com",
+	"fast.com",
+	"speed.cloudflare.com",
+	"librespeed.org",
+	"openspeedtest.com",
+	"cachefly.net",
+}
+
+// ValidateSelfHostedURL 校验自建测速端点格式并严格阻断公网测速站回退
+func ValidateSelfHostedURL(rawURL string) error {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return nil
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+		return fmt.Errorf("测速 URL 格式无效，仅支持 http:// 或 https:// 完整地址")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	for _, blocked := range blockedPublicSpeedDomains {
+		if host == blocked || strings.HasSuffix(host, "."+blocked) {
+			return fmt.Errorf("严格禁止使用公网测速网站 (%s)，仅允许自建 VPS/NAS 静态文件 URL", host)
+		}
+	}
+	return nil
+}
+
+// ProbeSelfHostedEndpoint 从服务端直连预检自建测速文件端点是否免鉴权可达（仅采样前 64KB）
+func ProbeSelfHostedEndpoint(ctx context.Context, rawURL string) (int, int64, error) {
+	if err := ValidateSelfHostedURL(rawURL); err != nil {
+		return 0, 0, err
+	}
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return 0, 0, fmt.Errorf("测速 URL 为空")
+	}
+
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, trimmed, nil)
+	if err != nil {
+		return 0, 0, fmt.Errorf("构造请求失败: %w", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	req.Header.Set("Range", "bytes=0-65535")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("%w: %v", ErrSelfSpeedSourceUnreachable, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return resp.StatusCode, 0, fmt.Errorf("%w: 目标端点返回 HTTP 401（已开启密码/Basic Auth 认证；代理测速沙箱不持有浏览器登录态，请改为免鉴权静态路径）", ErrSelfSpeedSourceUnreachable)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp.StatusCode, 0, fmt.Errorf("%w: 目标端点返回 HTTP %d", ErrSelfSpeedSourceUnreachable, resp.StatusCode)
+	}
+
+	n, rerr := io.CopyN(io.Discard, resp.Body, 65536)
+	if rerr != nil && rerr != io.EOF {
+		return resp.StatusCode, n, fmt.Errorf("读取测速响应体失败: %w", rerr)
+	}
+	if n == 0 {
+		return resp.StatusCode, 0, fmt.Errorf("%w: 目标端点返回空内容 (0 bytes)", ErrSelfSpeedSourceUnreachable)
+	}
+	return resp.StatusCode, n, nil
 }
 
 // MakeProxyHTTPClient 为测速创建 SOCKS5 HTTP Client
@@ -265,6 +348,9 @@ func TestStream30S(ctx context.Context, port int, streamURL string, durationSec 
 			streamURL = customSpeedURL10M
 		}
 		speedURLMu.RUnlock()
+	}
+	if streamURL == "" {
+		return nil, fmt.Errorf("%w: 30M/10M 流式测速 URL 未配置", ErrSelfSpeedSourceUnreachable)
 	}
 	if durationSec <= 0 {
 		durationSec = 30

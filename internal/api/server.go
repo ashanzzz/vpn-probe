@@ -1208,6 +1208,30 @@ func (s *APIServer) setupRoutes() {
 		})
 	})
 
+	// 5.2.5 节点 10MB 测速历史查询
+	s.app.Get("/api/speedtest/history", func(c *fiber.Ctx) error {
+		nodeName := strings.TrimSpace(c.Query("node"))
+		if nodeName == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "node query parameter required"})
+		}
+		if s.store == nil {
+			return c.JSON(fiber.Map{"status": "success", "count": 0, "history": []*store.SpeedHistoryItem{}})
+		}
+		limit := c.QueryInt("limit", 50)
+		history, err := s.store.GetSpeedHistory(c.Context(), nodeName, limit)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		if history == nil {
+			history = []*store.SpeedHistoryItem{}
+		}
+		return c.JSON(fiber.Map{
+			"status":  "success",
+			"count":   len(history),
+			"history": history,
+		})
+	})
+
 	// 5.3 测速与排名 API (支持指定单节点 node_name 或全量测速)
 	s.app.Post("/api/speedtest/run", func(c *fiber.Ctx) error {
 		if s.scheduler == nil {

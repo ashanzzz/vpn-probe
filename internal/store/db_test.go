@@ -125,3 +125,38 @@ func TestStore_SaveAndGetRecentResults(t *testing.T) {
 		t.Fatalf("expected 1 result with limit 1, got %d", len(limitedList))
 	}
 }
+
+func TestSaveAndGetSpeedHistory(t *testing.T) {
+	tmpDir := t.TempDir()
+	st, err := NewStore(filepath.Join(tmpDir, "speed.db"))
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+	defer st.Close()
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := st.SaveSpeedHistory(ctx, "HK-HKG3-NAT", "manual", &model.SpeedResult{
+		Method:      "vps_10m",
+		TestedAt:    now,
+		DurationSec: 3.35,
+		TotalBytes:  10485760,
+		SpeedMBps:   2.98,
+		SpeedMbps:   23.86,
+		TTFBMs:      422,
+		Score:       36.8,
+	}, 48); err != nil {
+		t.Fatalf("SaveSpeedHistory failed: %v", err)
+	}
+
+	items, err := st.GetSpeedHistory(ctx, "HK-HKG3-NAT", 10)
+	if err != nil {
+		t.Fatalf("GetSpeedHistory failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 speed history item, got %d", len(items))
+	}
+	if items[0].NodeName != "HK-HKG3-NAT" || items[0].SpeedMBs != 2.98 || items[0].TTFBMs != 422 || items[0].LatencyMs != 48 {
+		t.Fatalf("unexpected speed history item: %+v", items[0])
+	}
+}

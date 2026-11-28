@@ -71,6 +71,21 @@ func (s *Store) initSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_category_tested ON probe_history(category, tested_at);
 
+	CREATE TABLE IF NOT EXISTS speed_history (
+		id TEXT PRIMARY KEY,
+		node_name TEXT NOT NULL,
+		tested_at DATETIME NOT NULL,
+		type TEXT NOT NULL DEFAULT 'manual',
+		speed_mb_s REAL NOT NULL DEFAULT 0,
+		speed_mbps REAL NOT NULL DEFAULT 0,
+		ttfb_ms INTEGER NOT NULL DEFAULT 0,
+		latency_ms INTEGER NOT NULL DEFAULT 0,
+		relay_name TEXT,
+		file_size_mb INTEGER NOT NULL DEFAULT 10,
+		score REAL
+	);
+	CREATE INDEX IF NOT EXISTS idx_speed_history_node ON speed_history(node_name, tested_at DESC);
+
 	CREATE TABLE IF NOT EXISTS ip_geo_cache (
 		ip TEXT PRIMARY KEY,
 		city TEXT,
@@ -94,6 +109,7 @@ func (s *Store) initSchema() error {
 	_, _ = s.db.Exec("ALTER TABLE probe_history ADD COLUMN exit_city TEXT")
 	_, _ = s.db.Exec("ALTER TABLE probe_history ADD COLUMN exit_isp TEXT")
 	_, _ = s.db.Exec("ALTER TABLE probe_history ADD COLUMN exit_ip_type TEXT")
+	// speed_history 表通过 CREATE TABLE IF NOT EXISTS 确保存在
 
 	// 初始化动态多选选项卡与嵌套节点组数据表及默认预设
 	return s.InitTabTables()
@@ -312,6 +328,81 @@ func (s *Store) GetRecentResults(ctx context.Context, limit int) ([]*model.NodeP
 		}
 
 		list = append(list, &r)
+	}
+	return list, nil
+}
+
+// SpeedHistoryItem 单条测速历史记录 (用于前端展示)
+type SpeedHistoryItem struct {
+	ID         string  `json:"id"`
+	NodeName   string  `json:"node_name"`
+	TestedAt   string  `json:"tested_at"`
+	Type       string  `json:"type"`
+	SpeedMBs   float64 `json:"speed_mb_s"`
+	SpeedMbps  float64 `json:"speed_mbps"`
+	TTFBMs     int     `json:"ttfb_ms"`
+	LatencyMs  int     `json:"latency_ms"`
+	RelayName  string  `json:"relay_name,omitempty"`
+	FileSizeMB int     `json:"file_size_mb"`
+	Score      float64 `json:"score,omitempty"`
+}
+
+// SaveSpeedHistory 保存一条测速历史记录
+func (s *Store) SaveSpeedHistory(ctx context.Context, nodeName string, speedType string, speed *model.SpeedResult, latencyMs int) error {
+	if speed == nil {
+		return nil
+	}
+	id := fmt.Sprintf("%s-%d", nodeName, time.Now().UnixNano())
+	testedAt := speed.TestedAt
+	if testedAt.IsZero() {
+		testedAt = time.Now()
+	}
+	if speedType == "" {
+		speedType = "manual"
+	}
+	_, err := s.db.ExecContext(ctx, `
+	INSERT INTO speed_history (id, node_name, tested_at, type, speed_mb_s, speed_mbps, ttfb_ms, latency_ms, file_size_mb, score)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, 10, ?)`,
+		id,
+		nodeName,
+		testedAt.Format(time.RFC3339),
+		speedType,
+		speed.SpeedMBps,
+		speed.SpeedMbps,
+		speed.TTFBMs,
+		latencyMs,
+		speed.Score,
+	)
+	return err
+}
+
+// GetSpeedHistory 查询指定节点最近 N 条测速历史 (降序)
+func (s *Store) GetSpeedHistory(ctx context.Context, nodeName string, limit int) ([]*SpeedHistoryItem, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	rows, err := s.db.QueryContext(ctx, `
+	SELECT id, node_name, tested_at, type, speed_mb_s, speed_mbps, ttfb_ms, latency_ms, COALESCE(relay_name,''), file_size_mb, COALESCE(score, 0)
+	FROM speed_history
+	WHERE node_name = ?
+	ORDER BY tested_at DESC
+	LIMIT ?`, nodeName, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []*SpeedHistoryItem
+	for rows.Next() {
+		var item SpeedHistoryItem
+		if err := rows.Scan(
+			&item.ID, &item.NodeName, &item.TestedAt, &item.Type,
+			&item.SpeedMBs, &item.SpeedMbps, &item.TTFBMs, &item.LatencyMs,
+			&item.RelayName, &item.FileSizeMB, &item.Score,
+		); err != nil {
+			return nil, err
+		}
+		list = append(list, &item)
 	}
 	return list, nil
 }

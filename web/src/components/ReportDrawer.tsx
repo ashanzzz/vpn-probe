@@ -23,6 +23,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { NodeProbeResult, SpeedTestHistoryItem } from '../types';
+import { api } from '../api/client';
 
 interface ReportDrawerProps {
   node: NodeProbeResult | null;
@@ -46,12 +47,55 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
   const [copied, setCopied] = useState(false);
   const [copiedIP, setCopiedIP] = useState<string | null>(null);
   const [activeSubTab, setActiveSubTab] = useState<'overview' | 'history' | 'logs'>('overview');
+  const [remoteHistory, setRemoteHistory] = useState<SpeedTestHistoryItem[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isSpeedTestingLocal, setIsSpeedTestingLocal] = useState(false);
+
+  const nodeKey = node?.id || node?.name || '';
+  const latestSpeed = node?.speed ?? node?.speed_result;
+  const latestSpeedMBs = latestSpeed?.speed_mb_s ?? latestSpeed?.bandwidth_mb_s ?? 0;
+  const latestSpeedMbps = latestSpeed?.speed_mbps ?? latestSpeed?.bandwidth_mbps ?? (latestSpeedMBs * 8);
 
   useEffect(() => {
     if (initialTab) {
       setActiveSubTab(initialTab === 'ip_intelligence' ? 'overview' : (initialTab as 'overview' | 'history' | 'logs'));
     }
-  }, [initialTab, node]);
+  }, [initialTab, nodeKey]);
+
+  useEffect(() => {
+    const targetName = node?.name || node?.id;
+    if (!targetName) {
+      setRemoteHistory([]);
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingHistory(true);
+    api.getSpeedTestHistory(targetName, 50)
+      .then((res) => {
+        if (!cancelled && Array.isArray(res.history)) {
+          setRemoteHistory(res.history);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteHistory([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingHistory(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [node?.name, node?.id, latestSpeed?.tested_at]);
+
+  const handleRunSpeedTest = async () => {
+    if (!node || isSpeedTestingLocal) return;
+    setIsSpeedTestingLocal(true);
+    try {
+      await onSpeedTest(node);
+    } finally {
+      setIsSpeedTestingLocal(false);
+    }
+  };
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -143,23 +187,28 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
   };
 
   // 仅使用真实后端测速历史与当前实测结果（禁止任何 Mock 假数据）
-  const historyList: SpeedTestHistoryItem[] = node.speed_history && node.speed_history.length > 0
-    ? node.speed_history
-    : node.speed_result?.bandwidth_mb_s
+  const baseHistory: SpeedTestHistoryItem[] = remoteHistory.length > 0
+    ? remoteHistory
+    : (node.speed_history && node.speed_history.length > 0 ? node.speed_history : []);
+
+  const hasLatestInBase = !!(latestSpeed?.tested_at && baseHistory.some((h) => h.tested_at === latestSpeed.tested_at));
+  const historyList: SpeedTestHistoryItem[] =
+    latestSpeedMBs > 0 && !hasLatestInBase
       ? [
           {
             id: 'latest-real',
-            tested_at: node.speed_result.tested_at || node.tested_at || new Date().toISOString(),
+            tested_at: latestSpeed?.tested_at || node.tested_at || new Date().toISOString(),
             type: 'manual',
-            speed_mb_s: node.speed_result.bandwidth_mb_s,
-            speed_mbps: node.speed_result.bandwidth_mbps || node.speed_result.bandwidth_mb_s * 8,
-            ttfb_ms: node.speed_result.ttfb_ms || 0,
+            speed_mb_s: latestSpeedMBs,
+            speed_mbps: latestSpeedMbps,
+            ttfb_ms: latestSpeed?.ttfb_ms || 0,
             latency_ms: node.latency_ms || 0,
             file_size_mb: 10,
             relay_name: node.chain_info?.relay_node_name,
           },
+          ...baseHistory,
         ]
-      : [];
+      : baseHistory;
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-slate-900/40 backdrop-blur-2xs flex justify-end">
@@ -584,9 +633,9 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
                   <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl">
                     <div className="text-2xs text-slate-500 mb-1">自研 10M 吞吐</div>
                     <div className="font-mono font-bold text-sm text-blue-700">
-                      {node.speed_result?.bandwidth_mb_s ? (
+                      {latestSpeedMBs > 0 ? (
                         <span>
-                          {node.speed_result.bandwidth_mb_s.toFixed(1)}{' '}
+                          {latestSpeedMBs.toFixed(1)}{' '}
                           <span className="text-xs font-normal text-slate-500">MB/s</span>
                         </span>
                       ) : (
@@ -731,11 +780,12 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
                   </p>
                 </div>
                 <button
-                  onClick={() => onSpeedTest(node)}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium flex items-center transition shadow-2xs"
+                  onClick={handleRunSpeedTest}
+                  disabled={isSpeedTestingLocal}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-medium flex items-center transition shadow-2xs"
                 >
-                  <Zap className="w-3.5 h-3.5 mr-1" />
-                  即时单测 10M
+                  <Zap className={`w-3.5 h-3.5 mr-1 ${isSpeedTestingLocal ? 'animate-pulse' : ''}`} />
+                  {isSpeedTestingLocal ? '正在实测 10M...' : '即时单测 10M'}
                 </button>
               </div>
 
@@ -752,7 +802,13 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white">
-                    {historyList.length === 0 ? (
+                    {isLoadingHistory && historyList.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-8 text-center text-slate-400 font-sans text-xs">
+                          正在加载历史测速记录...
+                        </td>
+                      </tr>
+                    ) : historyList.length === 0 ? (
                       <tr>
                         <td colSpan={6} className="px-4 py-8 text-center text-slate-400 font-sans text-xs">
                           暂无真实 10MB 测速记录，可点击右上角「即时单测 10M」发起实测。
@@ -780,7 +836,7 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
                             )}
                           </td>
                           <td className="px-4 py-3 font-bold text-blue-600">
-                            {item.speed_mb_s.toFixed(1)} MB/s
+                            {(item.speed_mb_s ?? 0).toFixed(2)} MB/s
                           </td>
                           <td className="px-4 py-3 text-slate-600">
                             {item.ttfb_ms} ms
@@ -860,12 +916,13 @@ export const ReportDrawer: React.FC<ReportDrawerProps> = ({
             </button>
 
             <button
-              onClick={() => onSpeedTest(node)}
+              onClick={handleRunSpeedTest}
+              disabled={isSpeedTestingLocal}
               title="使用自建 10MB 测试文件测速 (严格禁止任何公网测速网站回退)"
-              className="inline-flex items-center px-3.5 py-2 text-xs font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition shadow-2xs"
+              className="inline-flex items-center px-3.5 py-2 text-xs font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 transition shadow-2xs"
             >
-              <Zap className="w-3.5 h-3.5 mr-1.5" />
-              自建 10M 文件测速
+              <Zap className={`w-3.5 h-3.5 mr-1.5 ${isSpeedTestingLocal ? 'animate-pulse' : ''}`} />
+              {isSpeedTestingLocal ? '测速中...' : '自建 10M 文件测速'}
             </button>
           </div>
         </div>

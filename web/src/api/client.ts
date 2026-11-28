@@ -145,6 +145,10 @@ export const api = {
     return request('/api/speedtest/ranking');
   },
 
+  async getSpeedTestHistory(nodeName: string, limit: number = 50): Promise<{ status: string; count: number; history: any[] }> {
+    return request(`/api/speedtest/history?node=${encodeURIComponent(nodeName)}&limit=${limit}`);
+  },
+
   // 3.1 自建测速文件端点配置 (严格阻断一切外部测速网)
   async getSpeedTestConfig(): Promise<{ status: string; self_hosted_url_10m: string; self_hosted_url_30m: string; prohibit_public: boolean }> {
     return request('/api/speedtest/config');

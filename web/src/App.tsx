@@ -171,16 +171,21 @@ const MainShell: React.FC<{
     const targetName = node.name || node.id;
     try {
       const resp = await api.runSpeedTest(false, 15, targetName);
-      if (resp.nodes && resp.nodes.length > 0) {
-        setSelectedReportNode(resp.nodes[0]);
+      const updated = resp.nodes && resp.nodes.length > 0 ? resp.nodes[0] : null;
+      if (updated) {
+        setSelectedReportNode(updated);
       }
       clearNodeError(targetName);
       await fetchStatus();
+      const sp = updated?.speed ?? updated?.speed_result;
+      const mbS = sp?.speed_mb_s ?? sp?.bandwidth_mb_s;
+      const mbps = sp?.speed_mbps ?? sp?.bandwidth_mbps;
       pushActivity({
         level: 'success',
         source: '单节点测速',
         nodeName: targetName,
         title: `${targetName} 10M 测速完成`,
+        detail: mbS ? `${mbS.toFixed(2)} MB/s (${(mbps ?? mbS * 8).toFixed(1)} Mbps) · TTFB ${sp?.ttfb_ms ?? 0}ms` : undefined,
       });
     } catch (err: any) {
       pushActivity({

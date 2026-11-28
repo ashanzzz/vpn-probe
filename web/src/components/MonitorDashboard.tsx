@@ -504,8 +504,8 @@ export const MonitorDashboard: React.FC<MonitorDashboardProps> = ({
                             RTT 时延: <span className="font-bold text-slate-900">{reality.latency_ms > 0 ? `${reality.latency_ms} ms` : (isInspecting ? '探测中...' : '待测')}</span>
                           </div>
                           <div className="text-blue-700 font-semibold">
-                            {reality.speed_result?.bandwidth_mb_s 
-                              ? `${reality.speed_result.bandwidth_mb_s.toFixed(1)} MB/s` 
+                            {(reality.speed?.speed_mb_s ?? reality.speed_result?.bandwidth_mb_s)
+                              ? `${(reality.speed?.speed_mb_s ?? reality.speed_result?.bandwidth_mb_s)!.toFixed(1)} MB/s`
                               : (reality.online ? '可用' : '离线')}
                           </div>
                         </div>

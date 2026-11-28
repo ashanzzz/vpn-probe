@@ -1078,6 +1078,9 @@ func (s *Scheduler) RunSpeedTestOne(ctx context.Context, nodeName string, isStre
 
 	if updated != nil && s.store != nil {
 		_ = s.store.SaveResult(ctx, updated)
+		if updated.Speed != nil {
+			_ = s.store.SaveSpeedHistory(ctx, updated.Name, "manual", updated.Speed, updated.LatencyMs)
+		}
 	}
 	return updated, nil
 }
@@ -1132,6 +1135,16 @@ func (s *Scheduler) RunSpeedTestAll(ctx context.Context, isStream bool, duration
 			s.mu.Unlock()
 			if toSave != nil && s.store != nil {
 				_ = s.store.SaveResult(ctx, toSave)
+				if toSave.Speed != nil {
+					speedType := "manual"
+					hr := time.Now().Hour()
+					if hr >= 19 && hr <= 22 {
+						speedType = "peak"
+					} else if hr >= 3 && hr <= 6 {
+						speedType = "idle"
+					}
+					_ = s.store.SaveSpeedHistory(ctx, toSave.Name, speedType, toSave.Speed, toSave.LatencyMs)
+				}
 			}
 		} else {
 			logger.Warnf("[SPEEDTEST] Speed test for %s failed: %v", t.name, err)

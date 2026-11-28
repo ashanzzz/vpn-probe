@@ -73,11 +73,15 @@ export interface SpeedTestHistoryItem {
 }
 
 export interface SpeedResult {
-  bandwidth_mbps: number;
-  bandwidth_mb_s: number;
+  speed_mbps?: number;
+  speed_mb_s?: number;
+  bandwidth_mbps?: number;
+  bandwidth_mb_s?: number;
   ttfb_ms: number;
   duration_sec: number;
-  bytes_transferred: number;
+  total_bytes?: number;
+  bytes_transferred?: number;
+  score?: number;
   speed_rank?: number;
   tested_at?: string;
   method?: string; // 'vps_10m' | 'vps_30m'
@@ -121,6 +125,7 @@ export interface NodeProbeResult {
   chain_info?: ChainInfo;
   split?: SplitResult;
   diagnostic?: NodeDiagnostic;
+  speed?: SpeedResult;
   speed_result?: SpeedResult;
   topology_trace?: TopologyHopTrace[];
   tested_at?: string;
